@@ -5,9 +5,6 @@ import subprocess
 import sys
 import os
 import logging
-import boto3
-from botocore.exceptions import ClientError
-from botocore.config import Config
 
 # Setup logging
 logging.basicConfig(
@@ -71,41 +68,6 @@ def run_registration_api_test():
         logger.error(f"❌ Test FAILED: Request exception: {str(e)}")
         return False
 
-def generate_presigned_url(bucket_name, folder_path, file_name, expires_in=3600):
-    """
-    Generate a pre-signed URL for uploading a file to S3
-    """
-    try:
-        # Create S3 client with signature version 4
-        s3_client = boto3.client('s3', config=Config(signature_version="s3v4"))
-
-        # Ensure folder path ends with a slash
-        if not folder_path.endswith('/'):
-            folder_path += '/'
-
-        # Generate a pre-signed URL for a dynamic file inside the folder
-        object_key = folder_path + file_name
-        logger.info(f"Generating presigned URL for:\nBucket: {bucket_name}\nKey: {object_key}")
-
-        response = s3_client.generate_presigned_url(
-            'put_object',
-            Params={'Bucket': bucket_name, 'Key': object_key},
-            ExpiresIn=expires_in
-        )
-
-        logger.info("\nSuccess! Presigned URL generated:")
-        logger.info(response)
-        return response
-    except ClientError as e:
-        logger.error(f"\nError generating presigned URL:")
-        logger.error(f"Error code: {e.response['Error']['Code']}")
-        logger.error(f"Error message: {e.response['Error']['Message']}")
-        return None
-    except Exception as e:
-        logger.error(f"\nUnexpected error occurred:")
-        logger.error(f"Error: {str(e)}")
-        return None
-
 def create_sample_file(file_name, content="This is a test file for S3 upload."):
     """
     Create a sample file for testing S3 upload
@@ -159,33 +121,30 @@ def upload_file_with_presigned_url(presigned_url, file_path):
         logger.error(f"Error: {str(e)}")
         return False
 
-def run_s3_upload_test(bucket_name=None, folder_path=None, file_name=None):
+def run_s3_upload_test(file_name=None):
     """
-    Step 2: Test S3 upload functionality using presigned URLs
+    Step 2: Test S3 upload functionality using hardcoded presigned URL
     """
     logger.info("Starting Step 2: Testing S3 presigned URL upload")
 
-    # Default values
-    default_bucket = "onelens-kubernetes-agent"
-    default_folder = "testtenant"
+    # Default filename
     default_filename = "ibs_test.txt"
 
-    # Use provided values or defaults
-    bucket_name = bucket_name or default_bucket
-    folder_path = folder_path or default_folder
+    # Use provided value or default
     file_name = file_name or default_filename
 
-    logger.info(f"Using values - Bucket: {bucket_name}, Folder: {folder_path}, Filename: {file_name}")
+    logger.info(f"Using filename: {file_name}")
 
     # Create sample file
     if not create_sample_file(file_name):
         return False
 
-    # Generate presigned URL
-    presigned_url = generate_presigned_url(bucket_name, folder_path, file_name)
-    if not presigned_url:
-        logger.error("\nTest failed during presigned URL generation.")
-        return False
+    # Hardcoded presigned URL (valid for 6 days)
+    presigned_url = "https://onelens-kubernetes-agent.s3.amazonaws.com/testtenant/ibs_test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAY4APA2CF7GZR6BWV%2F20250418%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20250418T065554Z&X-Amz-Expires=518400&X-Amz-SignedHeaders=host&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEOX%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCmFwLXNvdXRoLTEiRjBEAiAVwiWAYDO0HATWyI9CcF1jNt8QyIz9LSbsKe6jJaIF0AIgNpMPjqjd5z5yRK0wmNPvoMuYXxUb%2BbHNEvDZSUm0iX8qgQMIbxAAGgw2MDk5MTY4NjY2OTkiDHpII9TuI2hBRCxk%2BSreAgMP6fr4cEq1K1MWi3mHhuXSxKX%2Bjf9j0wKyKrxJmvripdBzUNq6pxeri0y%2BzPTiH6ZT466YCunU1tAoyLhjwFxAeX0y6o0tkUTFMpDOLzBQh9JHBPz6R6AGtFfNBcWplwSuGVB7rQfAfSYbnna2ojL5ryuqct%2FJe3NmKy5VYNf9BQrtMp1v09%2FwvSpo7iMEByHaoEs58UEzBMy3GYuWyBkcclbRY%2B1OSvgASBQcMzT7O0m1ZH0OUcFId32MuXPT%2Bkjt2Y6jLGOj7NacTjpiQVq%2B9VxCd%2BnrZuo9jfp%2BdtQIv0tZ%2FH77A7hBtBJbu1VBtmctz6n%2FYTXq0rUw5XS8kyeKk6dFRzfM5XAlSUOuX6wpbaNEA4pM6SOB7i2HL7Wpahzn18WFtTPAiLiyH0aZrP9EcnbPCEzhnnTiLNjKzOl3cJ%2BJns1QrpIEkBEIeNRk%2FfNNOlRRHS%2F2P0xEhfH%2FMKjEh8AGOqcBpKUIZdx7SUdMw9fvEibq7wlRyPM7LoXVXKGDBmzqMvoJJOYsm4EkUpzRCReRyUNKkjzMS%2Bfj%2B9XEWonVOIOICz1XikZqsc5doMToFXjq4zLak%2F6S7s%2FxIPjh7DHdJ2l0VtSjMAtyPrcQm1FItx2Ir0ea0sOhEuynzxMZ0EVwgQCoUEeHQGpM8QcxZQw2K7YizVId%2BxlWDy7S3jiKGDNUMnyNUJPFc6A%3D&X-Amz-Signature=445849effedd99385798af18031b83198e48f37c81a0e8d501a9c1a595edf815"
+
+    # Calculate validity in days (518400 seconds = 6 days)
+    validity_days = 518400 / (24 * 60 * 60)
+    logger.info(f"Using hardcoded presigned URL (valid for {validity_days:.1f} days)")
 
     # Upload file using presigned URL
     upload_success = upload_file_with_presigned_url(presigned_url, file_name)
@@ -193,7 +152,7 @@ def run_s3_upload_test(bucket_name=None, folder_path=None, file_name=None):
         logger.error("\nTest failed during upload step.")
         return False
 
-    logger.info(f"\nS3 upload test completed successfully! File '{file_name}' uploaded to s3://{bucket_name}/{folder_path}{file_name}")
+    logger.info(f"\nS3 upload test completed successfully! File '{file_name}' uploaded to S3.")
     return True
 
 def main():
@@ -201,19 +160,15 @@ def main():
     logger.info("Starting combined end-to-end test flow")
 
     # Process any command line arguments for S3 test
-    s3_args = {}
-    if len(sys.argv) == 4:
-        s3_args = {
-            "bucket_name": sys.argv[1],
-            "folder_path": sys.argv[2],
-            "file_name": sys.argv[3]
-        }
+    file_name = None
+    if len(sys.argv) == 2:
+        file_name = sys.argv[1]
 
     # Step 1: Run the registration API test
     registration_test_passed = run_registration_api_test()
 
-    # Step 2: Run the S3 upload test
-    s3_test_passed = run_s3_upload_test(**s3_args)
+    # Step 2: Run the S3 upload test with hardcoded URL
+    s3_test_passed = run_s3_upload_test(file_name)
 
     # Determine overall test result
     if registration_test_passed and s3_test_passed:
