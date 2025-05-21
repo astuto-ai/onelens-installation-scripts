@@ -103,9 +103,9 @@ IMAGES=(
   "public.ecr.aws/w7k6q5m9/onelens-deployer:latest|onelens-deployer:latest"
   "public.ecr.aws/w7k6q5m9/onelens-agent:v0.1.1-beta.2|onelens-agent:v0.1.1-beta.2"
   "quay.io/prometheus/prometheus:v3.1.0|prometheus:v3.1.0"
-  "quay.io/kubecost1/kubecost-cost-model:1.108.0|kubecost-cost-model:v1.108.0"
+  "quay.io/kubecost1/kubecost-cost-model:prod-1.108.0|kubecost-cost-model:prod-1.108.0"
   "quay.io/prometheus-operator/prometheus-config-reloader:v0.79.2|prometheus-config-reloader:v0.79.2"
-  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1|kube-state-metrics:v2.10.1"
+  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0|kube-state-metrics:v2.14.0"
   "quay.io/prometheus/pushgateway:v1.11.0|pushgateway:v1.11.0"
 )
 
