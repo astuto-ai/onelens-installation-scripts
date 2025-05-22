@@ -118,18 +118,25 @@ info "Preparing Helm installation command..."
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
     --version \"${RELEASE_VERSION}\" \
     -f $FILE \
-    --set onelens-agent.image.repository=$registry_url/onelens-agent \
-    --set onelens-agent.image.tag=v${RELEASE_VERSION} \
-    --set prometheus.configmapReload.prometheus.image.repository=$registry_url/prometheus-config-reloader \
-    --set prometheus.configmapReload.prometheus.image.tag=v0.79.2 \
-    --set prometheus.server.image.repository=$registry_url/prometheus \
-    --set prometheus.server.image.tag=v3.1.0 \
-    --set prometheus.kube-state-metrics.image.repository=$registry_url/kube-state-metrics \
-    --set prometheus.kube-state-metrics.image.tag=v2.10.1 \
-    --set prometheus.prometheus-pushgateway.image.repository=$registry_url/pushgateway \
-    --set prometheus.prometheus-pushgateway.image.tag=v1.11.0 \
-    --set prometheus-opencost-exporter.opencost.exporter.image.repository=$registry_url/kubecost-cost-model \
-    --set prometheus-opencost-exporter.opencost.exporter.image.tag=v1.108.0 \
+    --set job.env.imagePullSecrets="null" \
+    --set onelens-agent.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/onelens-agent" \
+    --set onelens-agent.image.tag="v0.1.1-beta.2" \
+    --set prometheus.server.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus" \
+    --set prometheus.server.image.tag="v3.1.0" \
+    --set prometheus.configmapReload.prometheus.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus-config-reloader" \
+    --set prometheus.configmapReload.prometheus.image.tag="v0.79.2" \
+    --set prometheus.kube-state-metrics.image.registry="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com" \
+    --set prometheus.kube-state-metrics.image.repository="kube-state-metrics" \
+    --set prometheus.kube-state-metrics.image.tag="v2.14.0" \
+    --set prometheus.prometheus-pushgateway.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/pushgateway" \
+    --set prometheus.prometheus-pushgateway.image.tag="v1.11.0" \
+    --set prometheus-opencost-exporter.opencost.exporter.image.registry="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com" \
+    --set prometheus-opencost-exporter.opencost.exporter.image.repository="kubecost-cost-model" \
+    --set "onelens-agent.imagePullSecrets[0].name=regcred" \
+    --set "prometheus.imagePullSecrets[0].name=regcred" \
+    --set "prometheus.kube-state-metrics.imagePullSecrets[0].name=regcred" \
+    --set "prometheus.prometheus-pushgateway.imagePullSecrets[0].name=regcred" \
+    --set "prometheus-opencost-exporter.imagePullSecrets[0].name=regcred"
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
     --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
