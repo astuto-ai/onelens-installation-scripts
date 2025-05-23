@@ -84,7 +84,10 @@ if aws sts get-caller-identity > /dev/null 2>&1; then
   if [[ -z "$use_detected" || "$use_detected" == "y" || "$use_detected" == "yes" ]]; then
     AWS_ACCOUNT_ID="$DETECTED_ACCOUNT_ID"
   else
-    AWS_ACCOUNT_ID=$(prompt_with_default "Enter your AWS Account ID" "$DETECTED_ACCOUNT_ID")
+    AWS_ACCOUNT_ID=$(prompt_with_default "Enter your AWS Account ID" "")
+    if [[ -z "$AWS_ACCOUNT_ID" ]]; then
+      error_exit "AWS Account ID cannot be empty. Please provide a valid account ID."
+    fi
   fi
 else
   echo "⚠️ AWS CLI is not configured or credentials are invalid."
@@ -94,6 +97,9 @@ fi
 
 # Ask for AWS region
 AWS_REGION=$(prompt_with_default "Enter your AWS Region" "$DEFAULT_AWS_REGION")
+if [[ -z "$AWS_REGION" ]]; then
+  error_exit "AWS Region cannot be empty. Please provide a valid region."
+fi
 
 # Set ECR URL
 ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
