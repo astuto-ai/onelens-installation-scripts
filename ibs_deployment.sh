@@ -19,7 +19,6 @@ error() {
 
 # Function to prompt for input with validation
 prompt_with_validation() {
-    local var_name=$1
     local prompt_text=$2
     local validation_msg=$3
     local value=""
@@ -41,28 +40,90 @@ info "This script will install the OneLens Agent on your Kubernetes cluster"
 echo ""
 
 # Set default values
-API_BASE_URL="${API_BASE_URL:=https://api-in.onelens.cloud}"
+API_BASE_URL="${API_BASE_URL:=https://dev-api.onelens.cloud}"
 PVC_ENABLED="${PVC_ENABLED:=true}"
 IMAGE_TAG="${IMAGE_TAG:=latest}"
-registry_url="376129875853.dkr.ecr.us-east-1.amazonaws.com"
+DEFAULT_REGISTRY_URL="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com"
+echo "Default registry URL is: $DEFAULT_REGISTRY_URL"
+read -p "Is this registry URL OK? (Y/n): " CONFIRM_REGISTRY
+echo ""
+if [[ "$CONFIRM_REGISTRY" =~ ^([nN][oO]?|[nN])$ ]]; then
+    registry_url=$(prompt_with_validation "REGISTRY_URL" "Enter registry URL" "Registry URL cannot be empty")
+    echo ""
+else
+    registry_url="$DEFAULT_REGISTRY_URL"
+fi
 
 # Take user input for required variables
 echo "Please provide the following information:"
-REGISTRATION_TOKEN=$(prompt_with_validation "REGISTRATION_TOKEN" "Enter registration token" "Registration token cannot be empty")
+# Extract ACCOUNT and REGION from registry_url if ECR pattern matches
+# Extract ACCOUNT and REGION from registry_url if ECR pattern matches
+
+if [[ "$registry_url" =~ ^([0-9]+)\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com$ ]]; then
+    ACCOUNT="${BASH_REMATCH[1]}"
+    REGION="${BASH_REMATCH[2]}"
+    info "Extracted ACCOUNT: $ACCOUNT"
+    info "Extracted REGION: $REGION"
+    read -p "Press Enter to keep region [$REGION] or type a new region: " REGION_INPUT
+    if [[ -n "$REGION_INPUT" ]]; then
+        REGION="$REGION_INPUT"
+    fi
+    echo ""
+else
+    ACCOUNT=$(prompt_with_validation "ACCOUNT" "Enter account ID" "Account ID cannot be empty")
+    echo ""
+    REGION=$(prompt_with_validation "REGION" "Enter region" "Region cannot be empty")
+    echo ""
+fi
+
+# Default registration token
+DEFAULT_REGISTRATION_TOKEN="c8573285-7f68-4b44-8a6f-68cb1f95ccbc"
+echo "Default registration token is: $DEFAULT_REGISTRATION_TOKEN"
+read -p "Press Enter to keep registration token or type a new one: " REGISTRATION_TOKEN_INPUT
+if [[ -n "$REGISTRATION_TOKEN_INPUT" ]]; then
+    REGISTRATION_TOKEN="$REGISTRATION_TOKEN_INPUT"
+else
+    REGISTRATION_TOKEN="$DEFAULT_REGISTRATION_TOKEN"
+fi
+echo ""
+
 CLUSTER_NAME=$(prompt_with_validation "CLUSTER_NAME" "Enter cluster name" "Cluster name cannot be empty")
-ACCOUNT=$(prompt_with_validation "ACCOUNT" "Enter account ID" "Account ID cannot be empty")
-REGION=$(prompt_with_validation "REGION" "Enter region" "Region cannot be empty")
-RELEASE_VERSION=$(prompt_with_validation "RELEASE_VERSION" "Enter release version" "Release version cannot be empty")
+echo ""
+
+# Default release version
+DEFAULT_RELEASE_VERSION="0.1.1-beta.4"
+echo "Default release version is: $DEFAULT_RELEASE_VERSION"
+read -p "Press Enter to keep release version or type a new one: " RELEASE_VERSION_INPUT
+if [[ -n "$RELEASE_VERSION_INPUT" ]]; then
+    RELEASE_VERSION="$RELEASE_VERSION_INPUT"
+else
+    RELEASE_VERSION="$DEFAULT_RELEASE_VERSION"
+fi
+echo ""
 
 # Optional parameters with defaults
 echo ""
-info "Optional Parameters (press Enter to use defaults):"
-read -p "Enter toleration key (optional): " TOLERATION_KEY
-read -p "Enter toleration value (optional): " TOLERATION_VALUE
-read -p "Enter toleration operator (optional): " TOLERATION_OPERATOR
-read -p "Enter toleration effect (optional): " TOLERATION_EFFECT
-read -p "Enter node selector key (optional): " NODE_SELECTOR_KEY
-read -p "Enter node selector value (optional): " NODE_SELECTOR_VALUE
+info "Optional Parameters (press Enter to skip toleration and node selector configuration):"
+
+read -p "Enter toleration key (press Enter to skip all toleration and node selector fields): " TOLERATION_KEY
+if [[ -n "$TOLERATION_KEY" ]]; then
+    read -p "Enter toleration value: " TOLERATION_VALUE
+    read -p "Enter toleration operator: " TOLERATION_OPERATOR
+    read -p "Enter toleration effect: " TOLERATION_EFFECT
+    read -p "Enter node selector key (press Enter to skip node selector): " NODE_SELECTOR_KEY
+    if [[ -n "$NODE_SELECTOR_KEY" ]]; then
+        read -p "Enter node selector value: " NODE_SELECTOR_VALUE
+    else
+        NODE_SELECTOR_VALUE=""
+    fi
+else
+    TOLERATION_VALUE=""
+    TOLERATION_OPERATOR=""
+    TOLERATION_EFFECT=""
+    NODE_SELECTOR_KEY=""
+    NODE_SELECTOR_VALUE=""
+fi
+echo ""
 
 # Check if kubectl is installed
 info "Checking if kubectl is installed..."
@@ -78,6 +139,17 @@ if ! command -v jq &> /dev/null; then
 fi
 
 # Phase 3: API Registration
+info "Registering with OneLens API..."
+
+echo "Registration payload:"
+echo "  registration_token: $REGISTRATION_TOKEN"
+echo "  cluster_name: $CLUSTER_NAME"
+echo "  account_id: $ACCOUNT"
+echo "  region: $REGION"
+echo "  agent_version: $RELEASE_VERSION"
+echo "  API URL: $API_BASE_URL"
+echo ""
+
 info "Registering with OneLens API..."
 response=$(curl -s -X POST \
   "$API_BASE_URL/v1/kubernetes/registration" \
@@ -118,25 +190,25 @@ info "Preparing Helm installation command..."
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
     --version \"${RELEASE_VERSION}\" \
     -f $FILE \
-    --set job.env.imagePullSecrets="null" \
-    --set onelens-agent.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/onelens-agent" \
-    --set onelens-agent.image.tag="v0.1.1-beta.2" \
-    --set prometheus.server.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus" \
-    --set prometheus.server.image.tag="v3.1.0" \
-    --set prometheus.configmapReload.prometheus.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus-config-reloader" \
-    --set prometheus.configmapReload.prometheus.image.tag="v0.79.2" \
-    --set prometheus.kube-state-metrics.image.registry="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com" \
-    --set prometheus.kube-state-metrics.image.repository="kube-state-metrics" \
-    --set prometheus.kube-state-metrics.image.tag="v2.14.0" \
-    --set prometheus.prometheus-pushgateway.image.repository="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/pushgateway" \
-    --set prometheus.prometheus-pushgateway.image.tag="v1.11.0" \
-    --set prometheus-opencost-exporter.opencost.exporter.image.registry="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com" \
-    --set prometheus-opencost-exporter.opencost.exporter.image.repository="kubecost-cost-model" \
-    --set "onelens-agent.imagePullSecrets[0].name=regcred" \
-    --set "prometheus.imagePullSecrets[0].name=regcred" \
-    --set "prometheus.kube-state-metrics.imagePullSecrets[0].name=regcred" \
-    --set "prometheus.prometheus-pushgateway.imagePullSecrets[0].name=regcred" \
-    --set "prometheus-opencost-exporter.imagePullSecrets[0].name=regcred"
+    --set job.env.imagePullSecrets=\"null\" \
+    --set onelens-agent.image.repository=\"$registry_url/onelens-agent\" \
+    --set onelens-agent.image.tag=\"v0.1.1-beta.2\" \
+    --set prometheus.server.image.repository=\"$registry_url/prometheus\" \
+    --set prometheus.server.image.tag=\"v3.1.0\" \
+    --set prometheus.configmapReload.prometheus.image.repository=\"$registry_url/prometheus-config-reloader\" \
+    --set prometheus.configmapReload.prometheus.image.tag=\"v0.79.2\" \
+    --set prometheus.kube-state-metrics.image.registry=\"$registry_url\" \
+    --set prometheus.kube-state-metrics.image.repository=\"kube-state-metrics\" \
+    --set prometheus.kube-state-metrics.image.tag=\"v2.14.0\" \
+    --set prometheus.prometheus-pushgateway.image.repository=\"$registry_url/pushgateway\" \
+    --set prometheus.prometheus-pushgateway.image.tag=\"v1.11.0\" \
+    --set prometheus-opencost-exporter.opencost.exporter.image.registry=\"$registry_url\" \
+    --set prometheus-opencost-exporter.opencost.exporter.image.repository=\"kubecost-cost-model\" \
+    --set \"onelens-agent.imagePullSecrets[0].name=regcred\" \
+    --set \"prometheus.imagePullSecrets[0].name=regcred\" \
+    --set \"prometheus.kube-state-metrics.imagePullSecrets[0].name=regcred\" \
+    --set \"prometheus.prometheus-pushgateway.imagePullSecrets[0].name=regcred\" \
+    --set \"prometheus-opencost-exporter.imagePullSecrets[0].name=regcred\" \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
     --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
@@ -171,7 +243,8 @@ if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
     onelens-agent.cronJob \
     prometheus.prometheus-pushgateway \
     prometheus.kube-state-metrics; do
-    CMD+=" --set $path.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
+    CMD+=" \
+      --set $path.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
   done
 fi
 
