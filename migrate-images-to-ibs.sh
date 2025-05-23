@@ -35,6 +35,32 @@ check_command aws
 check_command docker
 command -v jq >/dev/null 2>&1 || echo "⚠️ Warning: 'jq' not found. JSON output will not be formatted."
 
+# Check if docker buildx is installed
+check_buildx() {
+  if ! docker buildx version >/dev/null 2>&1; then
+    echo "⚠️ 'docker buildx' not found. Installing..."
+    mkdir -p ~/.docker/cli-plugins
+    curl -L https://github.com/docker/buildx/releases/download/v0.12.0/buildx-v0.12.0.$(uname -s | tr '[:upper:]' '[:lower:]')-amd64 \
+      -o ~/.docker/cli-plugins/docker-buildx
+    chmod +x ~/.docker/cli-plugins/docker-buildx
+    if ! docker buildx version >/dev/null 2>&1; then
+      error_exit "'docker buildx' installation failed. Please install it manually and try again."
+    fi
+    echo "✅ 'docker buildx' installed successfully."
+  fi
+}
+
+# Enable Docker CLI experimental features
+export DOCKER_CLI_EXPERIMENTAL=enabled
+
+# Check for docker buildx
+check_buildx
+
+# Enable Docker Buildx
+echo "🔧 Enabling Docker Buildx..."
+docker buildx create --use >/dev/null 2>&1 || true
+docker buildx inspect --bootstrap >/dev/null 2>&1 || true
+
 # Get default region from AWS configuration
 DEFAULT_AWS_REGION=$(get_aws_default_region)
 MAX_RETRIES=3
@@ -91,11 +117,48 @@ echo "🌐 Using AWS Account: $AWS_ACCOUNT_ID in region: $AWS_REGION"
 # Set ECR URL
 ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+# Function to authenticate Docker with Amazon ECR
+ecr_login() {
+  echo "🔄 Logging in to Amazon ECR..."
+  retry_count=0
+  while [ $retry_count -lt $MAX_RETRIES ]; do
+    if aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URL"; then
+      echo "✅ Successfully logged in to Amazon ECR for pushing private images"
+      return 0
+    else
+      retry_count=$((retry_count+1))
+      if [ $retry_count -lt $MAX_RETRIES ]; then
+        echo "⚠️ ECR login failed. Retrying ($retry_count/$MAX_RETRIES)..."
+        sleep 5
+      else
+        error_exit "❌ Failed to log in to Amazon ECR after $MAX_RETRIES attempts."
+      fi
+    fi
+  done
+}
+
+# Function to authenticate Docker with Amazon ECR
+ecr_login_default() {
+  echo "🔄 Logging in to Amazon ECR Public..."
+  retry_count=0
+  while [ $retry_count -lt $MAX_RETRIES ]; do
+    if aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws; then
+      echo "✅ Successfully logged in to Amazon ECR for pulling public images"
+      return 0
+    else
+      retry_count=$((retry_count+1))
+      if [ $retry_count -lt $MAX_RETRIES ]; then
+        echo "⚠️ ECR login failed. Retrying ($retry_count/$MAX_RETRIES)..."
+        sleep 5
+      else
+        error_exit "❌ Failed to log in to Amazon ECR after $MAX_RETRIES attempts."
+      fi
+    fi
+  done
+}
+
 # Authenticate Docker with ECR
-echo "🔄 Logging in to Amazon ECR..."
-if ! aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URL"; then
-  error_exit "Docker login to Amazon ECR failed. Check your IAM permissions and network access."
-fi
+ecr_login_default
 
 # Image mapping using arrays instead of associative array
 # Format: "source|target"
@@ -120,53 +183,41 @@ for IMAGE_PAIR in "${IMAGES[@]}"; do
   REPO_NAME=$(echo "${TARGET}" | cut -d':' -f1)
 
   echo -e "\n📦 Processing image: $SOURCE"
-  echo "⬇️ Pulling image from source..."
+  echo "⬇️ Pulling image using buildx for $SOURCE..."
   retry_count=0
   while [ $retry_count -lt $MAX_RETRIES ]; do
-    if docker pull "$SOURCE"; then
+    if docker buildx imagetools inspect "$SOURCE" >/dev/null 2>&1; then
       echo "✅ Successfully pulled: $SOURCE"
       break
     else
+      echo "❌ Failed to pull image: $SOURCE. Retrying..."
       retry_count=$((retry_count+1))
-      if [ $retry_count -lt $MAX_RETRIES ]; then
-        echo "⚠️ Pull failed. Retrying ($retry_count/$MAX_RETRIES)..."
-        sleep 5
-      else
-        echo "❌ Failed to pull image after $MAX_RETRIES attempts. Skipping."
-        continue 2 # Continue with the next image
+      if [ $retry_count -ge $MAX_RETRIES ]; then
+        error_exit "Failed to pull image after $MAX_RETRIES attempts. Skipping."
       fi
+      sleep 5
     fi
   done
 
-  echo "🏷️ Tagging image for ECR as: $ECR_IMAGE"
-  if ! docker tag "$SOURCE" "$ECR_IMAGE"; then
-    error_exit "Failed to tag image: $SOURCE. Verify Docker tag format and disk space."
-  fi
-
-  echo "🔍 Checking if ECR repository exists: $REPO_NAME"
-  if ! aws ecr describe-repositories --repository-names "$REPO_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-    echo "🆕 Repository '$REPO_NAME' not found. Creating..."
-    if ! aws ecr create-repository --repository-name "$REPO_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-      error_exit "Failed to create ECR repository: $REPO_NAME. Verify IAM permissions."
-    fi
-  fi
-
-  echo "⬆️ Pushing image to ECR..."
+  echo "🔧 Pushing multi-arch image to ECR using buildx..."
   retry_count=0
   while [ $retry_count -lt $MAX_RETRIES ]; do
-    # Renew ECR authentication token before each push attempt to ensure it's fresh
-    aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_URL" > /dev/null 2>&1
+    # Renew ECR authentication token before each push attempt
+    ecr_login
 
-    if docker push "$ECR_IMAGE"; then
-      echo "✅ Successfully pushed: $ECR_IMAGE"
+    # Use buildx imagetools to push multi-arch manifest
+    if docker buildx imagetools create \
+      --tag "$ECR_IMAGE" \
+      "$SOURCE"; then
+      echo "✅ Successfully pushed multi-arch image: $ECR_IMAGE"
       break
     else
       retry_count=$((retry_count+1))
       if [ $retry_count -lt $MAX_RETRIES ]; then
         echo "⚠️ Push failed. Retrying ($retry_count/$MAX_RETRIES)..."
-        sleep 10 # Longer sleep before retry for push operations
+        sleep 10
       else
-        echo "❌ Failed to push image after $MAX_RETRIES attempts. Skipping."
+        echo "❌ Failed to push multi-arch image after $MAX_RETRIES attempts. Skipping."
         continue 2 # Continue with the next image
       fi
     fi
