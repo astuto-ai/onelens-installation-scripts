@@ -40,7 +40,7 @@ info "This script will install the OneLens Agent on your Kubernetes cluster"
 echo ""
 
 # Set default values
-API_BASE_URL="${API_BASE_URL:=https://dev-api.onelens.cloud}"
+API_BASE_URL="${API_BASE_URL:=https://api-in.onelens.cloud}"
 PVC_ENABLED="${PVC_ENABLED:=true}"
 IMAGE_TAG="${IMAGE_TAG:=latest}"
 DEFAULT_REGISTRY_URL="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com"
