@@ -163,13 +163,29 @@ ecr_login_default() {
   done
 }
 
+# Function to create ECR repository if it doesn't exist
+create_ecr_repo() {
+  local repo_name="$1"
+  echo "🔍 Checking if ECR repository '$repo_name' exists..."
+  if ! aws ecr describe-repositories --repository-names "$repo_name" --region "$AWS_REGION" >/dev/null 2>&1; then
+    echo "📂 Repository '$repo_name' does not exist. Creating..."
+    if aws ecr create-repository --repository-name "$repo_name" --region "$AWS_REGION" >/dev/null 2>&1; then
+      echo "✅ Repository '$repo_name' created successfully."
+    else
+      error_exit "❌ Failed to create repository '$repo_name'. Please check your permissions."
+    fi
+  else
+    echo "✅ Repository '$repo_name' already exists."
+  fi
+}
+
 # Authenticate Docker with ECR
 ecr_login_default
 
 # Image mapping using arrays instead of associative array
 # Format: "source|target"
 IMAGES=(
-  "public.ecr.aws/w7k6q5m9/onelens-agent:v0.1.1-beta.2|onelens-agent:v0.1.1-beta.2"
+  "public.ecr.aws/w7k6q5m9/onelens-agent:v1.0.0|onelens-agent:v1.0.0"
   "quay.io/prometheus/prometheus:v3.1.0|prometheus:v3.1.0"
   "quay.io/kubecost1/kubecost-cost-model:prod-1.108.0|kubecost-cost-model:prod-1.108.0"
   "quay.io/prometheus-operator/prometheus-config-reloader:v0.79.2|prometheus-config-reloader:v0.79.2"
@@ -186,6 +202,9 @@ for IMAGE_PAIR in "${IMAGES[@]}"; do
 
   ECR_IMAGE="${ECR_URL}/${TARGET}"
   REPO_NAME=$(echo "${TARGET}" | cut -d':' -f1)
+
+  # Ensure the ECR repository exists
+  create_ecr_repo "$REPO_NAME"
 
   echo -e "\n📦 Processing image: $SOURCE"
   echo "⬇️ Pulling image using buildx for $SOURCE..."
