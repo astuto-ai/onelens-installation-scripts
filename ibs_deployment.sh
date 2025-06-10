@@ -69,6 +69,11 @@ if [[ "$registry_url" =~ ^([0-9]+)\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com$ ]]; 
         REGION="$REGION_INPUT"
     fi
     echo ""
+    read -p "Press Enter to keep account [$ACCOUNT] or type a new account: " ACCOUNT_INPUT
+    if [[ -n "$ACCOUNT_INPUT" ]]; then
+        ACCOUNT="$ACCOUNT_INPUT"
+    fi
+    echo ""
 else
     ACCOUNT=$(prompt_with_validation "ACCOUNT" "Enter account ID" "Account ID cannot be empty")
     echo ""
@@ -98,6 +103,17 @@ if [[ -n "$RELEASE_VERSION_INPUT" ]]; then
     RELEASE_VERSION="$RELEASE_VERSION_INPUT"
 else
     RELEASE_VERSION="$DEFAULT_RELEASE_VERSION"
+fi
+echo ""
+
+# Prompt for regcred input
+DEFAULT_REGCRED="regcred"
+echo "Default image pull secret is: $DEFAULT_REGCRED"
+read -p "Press Enter to keep image pull secret [$DEFAULT_REGCRED] or type a new one: " REGCRED_INPUT
+if [[ -n "$REGCRED_INPUT" ]]; then
+    REGCRED="$REGCRED_INPUT"
+else
+    REGCRED="$DEFAULT_REGCRED"
 fi
 echo ""
 
@@ -204,11 +220,6 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     --set prometheus.prometheus-pushgateway.image.tag=\"v1.11.0\" \
     --set prometheus-opencost-exporter.opencost.exporter.image.registry=\"$registry_url\" \
     --set prometheus-opencost-exporter.opencost.exporter.image.repository=\"kubecost-cost-model\" \
-    --set \"onelens-agent.imagePullSecrets[0].name=regcred\" \
-    --set \"prometheus.imagePullSecrets[0].name=regcred\" \
-    --set \"prometheus.kube-state-metrics.imagePullSecrets[0].name=regcred\" \
-    --set \"prometheus.prometheus-pushgateway.imagePullSecrets[0].name=regcred\" \
-    --set \"prometheus-opencost-exporter.imagePullSecrets[0].name=regcred\" \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
     --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
@@ -216,6 +227,18 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\" \
     --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$CLUSTER_NAME\" \
     --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\""
+
+# Append imagePullSecrets only if REGCRED is not null
+if [[ "$REGCRED" != "null" ]]; then
+  for path in \
+    onelens-agent \
+    prometheus \
+    prometheus.kube-state-metrics \
+    prometheus.prometheus-pushgateway \
+    prometheus-opencost-exporter; do
+    CMD+=" --set \"$path.imagePullSecrets[0].name=$REGCRED\""
+  done
+fi
 
 # Append tolerations only if set
 if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
