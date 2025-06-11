@@ -200,8 +200,8 @@ if ! curl -s -f -O "$URL"; then
 fi
 
 info "Downloaded $FILE successfully."
-
-# Prepare Helm command
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
+helm repo update
 info "Preparing Helm installation command..."
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
     --version \"${RELEASE_VERSION}\" \
