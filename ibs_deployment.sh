@@ -319,7 +319,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     -f $FILE \
     --set job.env.imagePullSecrets=\"null\" \
     --set onelens-agent.image.repository=\"$registry_url/onelens-agent\" \
-    --set onelens-agent.image.tag=\"v0.1.1-beta.2\" \
+    --set onelens-agent.image.tag=\"v1.0.0\" \
     --set prometheus.server.image.repository=\"$registry_url/prometheus\" \
     --set prometheus.server.image.tag=\"v3.1.0\" \
     --set prometheus.configmapReload.prometheus.image.repository=\"$registry_url/prometheus-config-reloader\" \
