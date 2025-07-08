@@ -52,7 +52,7 @@ fi
 
 echo "Total number of pods in the cluster: $TOTAL_PODS"
 
-if [ "$TOTAL_PODS" -lt 100 ]; then
+if [ "$TOTAL_PODS" -lt 5 ]; then
     echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="116m"
@@ -72,7 +72,7 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     ONELENS_CPU_LIMIT="414m"
     ONELENS_MEMORY_LIMIT="450Mi"
     
-elif [ "$TOTAL_PODS" -lt 500 ]; then
+elif [ "$TOTAL_PODS" -lt 50 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="230m"
@@ -158,28 +158,20 @@ echo "helm repo add onelens https://astuto-ai.github.io/onelens-installation-scr
 echo "helm repo update"
 echo "helm upgrade onelens-agent onelens/onelens-agent with dynamic resource allocation"
 
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
 helm repo update
-REVISION=$(helm history onelens-agent -n onelens-agent | grep -v '02:00' | tail -1 | awk '{print $1}')
-echo $REVISION
-helm rollback onelens-agent $REVISION -n onelens-agent
-
-# Perform the upgrade with dynamically calculated resource values
-helm upgrade onelens-agent onelens/onelens-agent \
-  --version=0.1.1-beta.4 \
-  --namespace onelens-agent \
-  --history-max 200 \
-  --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
-  --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
-  --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
-  --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
-  --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
-  --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
-  --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
-  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT"
-
-echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
+helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
+    --version \"${RELEASE_VERSION}\" \
+    --reuse-values \
+    --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
+    --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
+    --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
+    --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$OPENCOST_CPU_REQUEST\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$OPENCOST_MEMORY_REQUEST\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$OPENCOST_CPU_LIMIT\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$OPENCOST_MEMORY_LIMIT\" \
+    --set onelens-agent.resources.requests.cpu=\"$ONELENS_CPU_REQUEST\" \
+    --set onelens-agent.resources.requests.memory=\"$ONELENS_MEMORY_REQUEST\" \
+    --set onelens-agent.resources.limits.cpu=\"$ONELENS_CPU_LIMIT\" \
+    --set onelens-agent.resources.limits.memory=\"$ONELENS_MEMORY_LIMIT\"
