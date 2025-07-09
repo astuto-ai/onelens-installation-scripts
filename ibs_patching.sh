@@ -5,7 +5,7 @@ echo "Step 0: Checking prerequisites..."
 # Define versions
 HELM_VERSION="v3.13.2"
 KUBECTL_VERSION="v1.28.2"
-RELEASE_VERSION="0.1.1-beta.4"
+
 
 # Detect architecture
 ARCH=$(uname -m)
@@ -162,7 +162,7 @@ echo "helm upgrade onelens-agent onelens/onelens-agent with dynamic resource all
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
 helm repo update
 helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"${RELEASE_VERSION}\" \
+    --version 0.1.1-beta.4 \
     --reuse-values \
     --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
     --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
