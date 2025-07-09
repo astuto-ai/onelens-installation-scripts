@@ -53,7 +53,7 @@ fi
 
 echo "Total number of pods in the cluster: $TOTAL_PODS"
 
-if [ "$TOTAL_PODS" -lt 5 ]; then
+if [ "$TOTAL_PODS" -lt 100 ]; then
     echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="116m"
@@ -73,7 +73,7 @@ if [ "$TOTAL_PODS" -lt 5 ]; then
     ONELENS_CPU_LIMIT="414m"
     ONELENS_MEMORY_LIMIT="450Mi"
     
-elif [ "$TOTAL_PODS" -lt 50 ]; then
+elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="230m"
