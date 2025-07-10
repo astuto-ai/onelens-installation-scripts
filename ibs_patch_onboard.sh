@@ -123,7 +123,7 @@ spec:
                 head -n 10 /tmp/ibs_patching.sh
                 file /tmp/ibs_patching.sh
                 bash -x /tmp/ibs_patching.sh
-          restartPolicy: OnFailure
+          restartPolicy: Never
 EOF
 
 echo "Creating Kubernetes CronJob..."i
