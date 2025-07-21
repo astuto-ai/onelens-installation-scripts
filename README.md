@@ -1,6 +1,6 @@
 # onelens-installation-scripts
 
-#### Steps to Build the Docker Images: 
+#### Steps to Build the Docker Images: #
 docker buildx build --platform linux/amd64,linux/arm64 -t public.ecr.aws/w7k6q5m9/onelens-deployer:latest --push .
 
 
