@@ -12,7 +12,7 @@ RUN apk update && apk add --no-cache \
     python3 \
     py3-pip \
     aws-cli && \
-    echo "Dependencies installed successfully"
+    echo "Dependencies installed successfull"
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
