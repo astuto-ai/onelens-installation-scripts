@@ -3,7 +3,7 @@ onelens-agent:
 
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: 1.1.0
+    tag: 1.2.0
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"
@@ -166,6 +166,8 @@ prometheus:
 
     extraFlags:
       - web.enable-lifecycle
+      - storage.tsdb.max-block-duration=2h
+      - storage.tsdb.min-block-duration=30m
 
     configPath: /etc/config/prometheus.yml
 
