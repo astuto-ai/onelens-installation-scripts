@@ -56,8 +56,8 @@ send_logs() {
 trap 'send_logs; exit 1' ERR EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.2.0}"
-: "${IMAGE_TAG:=v1.2.0}"
+: "${RELEASE_VERSION:=1.3.0}"
+: "${IMAGE_TAG:=v1.3.0}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
@@ -293,21 +293,15 @@ fi
 
 PROMETHEUS_RETENTION="10d"
 
-if [ "$TOTAL_PODS" -lt 100 ]; then
-    PROMETHEUS_RETENTION_SIZE="6GB"
-    PROMETHEUS_VOLUME_SIZE="10Gi"
-elif [ "$TOTAL_PODS" -lt 500 ]; then
-    PROMETHEUS_RETENTION_SIZE="12GB"
-    PROMETHEUS_VOLUME_SIZE="20Gi"
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
-    PROMETHEUS_RETENTION_SIZE="20GB"
-    PROMETHEUS_VOLUME_SIZE="30Gi"
+if [ "$TOTAL_PODS" -lt 1000 ]; then
+    PROMETHEUS_RETENTION_SIZE="8GB"
+    PROMETHEUS_VOLUME_SIZE="12Gi"
 elif [ "$TOTAL_PODS" -lt 1500 ]; then
-    PROMETHEUS_RETENTION_SIZE="30GB"
-    PROMETHEUS_VOLUME_SIZE="40Gi"
+    PROMETHEUS_RETENTION_SIZE="15GB"
+    PROMETHEUS_VOLUME_SIZE="20Gi"
 else
-    PROMETHEUS_RETENTION_SIZE="35GB"
-    PROMETHEUS_VOLUME_SIZE="50Gi"
+    PROMETHEUS_RETENTION_SIZE="23GB"
+    PROMETHEUS_VOLUME_SIZE="30Gi"
 fi
 
 # Phase 10: Helm Deployment
@@ -358,7 +352,7 @@ fi
 echo "✅ Downloaded $FILE successfully."
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.2.0}\" \
+    --version \"\${RELEASE_VERSION:=1.3.0}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \

@@ -14,3 +14,4 @@
 | v1.5.0 | Versioning Changes | v1.5.0 |
 | v1.1.0 | Versioning Changes | v1.1.0 |
 | v1.2.0 | prometheus args changes | v1.2.0 |
+| v1.3.0 | prometheus storage changes | v1.3.0 |
