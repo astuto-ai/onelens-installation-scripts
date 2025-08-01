@@ -13,7 +13,7 @@ fi
 
 ## Define the URL of the new scripts
 rm -rf "/$SCRIPT_NAME"
-SCRIPT_URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/refs/heads/master/$SCRIPT_NAME"
+SCRIPT_URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/refs/heads/dev/$SCRIPT_NAME"
 ##
 echo "$SCRIPT_URL"
 # Download the new script
