@@ -27,7 +27,7 @@
 #
 # ==============================================================================
 
-set -eo pipefail
+set -e
 
 # Script version
 readonly SCRIPT_VERSION="1.0.0"
@@ -63,20 +63,20 @@ log() {
 }
 
 show_banner() {
-    cat << 'EOF'
+    cat << 'BANNER_EOF'
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                     EBS CSI Driver IAM Role Installer                       ║
 ║                                                                              ║
 ║  This script will create an IAM role for Amazon EBS CSI Driver with         ║
 ║  OIDC trust relationship for your EKS cluster.                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-EOF
+BANNER_EOF
     log "INFO" "Script version: $SCRIPT_VERSION"
     echo
 }
 
 show_usage() {
-    cat << EOF
+    cat << USAGE_EOF
 Usage: $0 CLUSTER_NAME REGION
 
 Arguments:
@@ -97,7 +97,7 @@ Environment Variables:
   CFT_TEMPLATE_URL=<url>  Override CloudFormation template URL
   
 For more information, visit: https://github.com/astuto-ai/onelens-installation-scripts/tree/feat/ebs-driver-cft
-EOF
+USAGE_EOF
 }
 
 check_prerequisites() {
