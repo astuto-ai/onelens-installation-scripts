@@ -33,14 +33,6 @@ set -eo pipefail
 readonly SCRIPT_VERSION="1.0.0"
 readonly SCRIPT_NAME="install-ebs-csi-driver"
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[0;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
-
 # CloudFormation template URL (can be overridden with environment variable)
 readonly CFT_TEMPLATE_URL="${CFT_TEMPLATE_URL:-https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/feat/ebs-driver-cft/scripts/ebs-driver-installation/ebs-driver-role.yaml}"
 
@@ -61,59 +53,16 @@ log() {
     shift
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Disable colors if not in a TTY or if NO_COLOR is set
-    local use_colors=true
-    if [[ ! -t 1 ]] || [[ "${NO_COLOR:-}" == "1" ]]; then
-        use_colors=false
-    fi
-    
     case "$level" in
-        "INFO")  
-            if [[ "$use_colors" == "true" ]]; then
-                echo -e "${CYAN}[INFO]${NC}  [$timestamp] $*"
-            else
-                echo "[INFO]  [$timestamp] $*"
-            fi ;;
-        "WARN")  
-            if [[ "$use_colors" == "true" ]]; then
-                echo -e "${YELLOW}[WARN]${NC}  [$timestamp] $*"
-            else
-                echo "[WARN]  [$timestamp] $*"
-            fi ;;
-        "ERROR") 
-            if [[ "$use_colors" == "true" ]]; then
-                echo -e "${RED}[ERROR]${NC} [$timestamp] $*" >&2
-            else
-                echo "[ERROR] [$timestamp] $*" >&2
-            fi ;;
-        "SUCCESS") 
-            if [[ "$use_colors" == "true" ]]; then
-                echo -e "${GREEN}[SUCCESS]${NC} [$timestamp] $*"
-            else
-                echo "[SUCCESS] [$timestamp] $*"
-            fi ;;
-        "DEBUG") 
-            [[ "${DEBUG:-}" == "true" ]] && {
-                if [[ "$use_colors" == "true" ]]; then
-                    echo -e "${BLUE}[DEBUG]${NC} [$timestamp] $*"
-                else
-                    echo "[DEBUG] [$timestamp] $*"
-                fi
-            } ;;
+        "INFO")  echo "[INFO]  [$timestamp] $*" ;;
+        "WARN")  echo "[WARN]  [$timestamp] $*" ;;
+        "ERROR") echo "[ERROR] [$timestamp] $*" >&2 ;;
+        "SUCCESS") echo "[SUCCESS] [$timestamp] $*" ;;
+        "DEBUG") [[ "${DEBUG:-}" == "true" ]] && echo "[DEBUG] [$timestamp] $*" ;;
     esac
 }
 
 show_banner() {
-    # Check if we should use colors
-    local use_colors=true
-    if [[ ! -t 1 ]] || [[ "${NO_COLOR:-}" == "1" ]]; then
-        use_colors=false
-    fi
-    
-    if [[ "$use_colors" == "true" ]]; then
-        echo -e "${CYAN}"
-    fi
-    
     cat << 'EOF'
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                     EBS CSI Driver IAM Role Installer                       ║
@@ -122,11 +71,6 @@ show_banner() {
 ║  OIDC trust relationship for your EKS cluster.                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 EOF
-    
-    if [[ "$use_colors" == "true" ]]; then
-        echo -e "${NC}"
-    fi
-    
     log "INFO" "Script version: $SCRIPT_VERSION"
     echo
 }
@@ -401,22 +345,9 @@ get_stack_outputs() {
     
     echo
     log "SUCCESS" "IAM Role created successfully!"
-    
-    # Check if we should use colors
-    local use_colors=true
-    if [[ ! -t 1 ]] || [[ "${NO_COLOR:-}" == "1" ]]; then
-        use_colors=false
-    fi
-    
-    if [[ "$use_colors" == "true" ]]; then
-        echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║                            DEPLOYMENT RESULTS                               ║${NC}"
-        echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    else
-        echo "╔══════════════════════════════════════════════════════════════════════════════╗"
-        echo "║                            DEPLOYMENT RESULTS                               ║"
-        echo "╚══════════════════════════════════════════════════════════════════════════════╝"
-    fi
+    echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                            DEPLOYMENT RESULTS                               ║"
+    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
     echo
     
     # Parse and display outputs using AWS CLI queries
@@ -425,35 +356,19 @@ get_stack_outputs() {
     role_arn=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Outputs[?OutputKey==`RoleArn`].OutputValue' --output text 2>/dev/null)
     
     if [[ -n "$role_name" ]]; then
-        if [[ "$use_colors" == "true" ]]; then
-            echo -e "${CYAN}IAM Role Name:${NC} $role_name"
-        else
-            echo "IAM Role Name: $role_name"
-        fi
+        echo "IAM Role Name: $role_name"
     fi
     
     if [[ -n "$role_arn" ]]; then
-        if [[ "$use_colors" == "true" ]]; then
-            echo -e "${CYAN}IAM Role ARN:${NC}  $role_arn"
-        else
-            echo "IAM Role ARN:  $role_arn"
-        fi
+        echo "IAM Role ARN:  $role_arn"
     fi
     
     echo
-    if [[ "$use_colors" == "true" ]]; then
-        echo -e "${YELLOW}Next Steps:${NC}"
-    else
-        echo "Next Steps:"
-    fi
+    echo "Next Steps:"
     echo "1. Install the EBS CSI driver add-on in your EKS cluster"
     echo "2. Use the IAM role ARN above when configuring the EBS CSI driver"
     echo
-    if [[ "$use_colors" == "true" ]]; then
-        echo -e "${YELLOW}Useful Commands:${NC}"
-    else
-        echo "Useful Commands:"
-    fi
+    echo "Useful Commands:"
     if [[ -n "$role_arn" ]]; then
         echo "# Install EBS CSI driver add-on (using AWS CLI):"
         echo "aws eks create-addon \\"
