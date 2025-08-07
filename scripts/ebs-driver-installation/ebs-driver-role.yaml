@@ -52,10 +52,16 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub 
-        - "AmazonEKS_EBS_CSI_DriverRole-${ClusterName}-${ShortId}"
-        - ShortId: !Select [4, !Split ["-", !Select [2, !Split ["/", !Ref "AWS::StackId"]]]]
-      # Role name format: AmazonEKS_EBS_CSI_DriverRole-{ClusterName}-{12-digit-unique-id}
-      # Example: AmazonEKS_EBS_CSI_DriverRole-my-cluster-123456789012 (55 chars, well under 64 limit)
+        - "AmazonEKS_EBS_CSI_DriverRole-${ClusterName}-${Region}"
+        - CleanOIDCURL: !If
+          - HasHttpsPrefix
+          - !Select [1, !Split ["://", !Ref OIDCIssuerURL]]
+          - !Ref OIDCIssuerURL
+          Region: !Select [2, !Split [".", !Ref OIDCIssuerURL]]
+      # Role name format: AmazonEKS_EBS_CSI_DriverRole-{ClusterName}-{Region}
+      # Example: AmazonEKS_EBS_CSI_DriverRole-my-cluster-us-east-1
+      # Region is extracted from OIDC URL by splitting on "." and taking 3rd element
+      # Works with: https://oidc.eks.us-east-1.amazonaws.com or oidc.eks.us-east-1.amazonaws.com
       AssumeRolePolicyDocument: !Sub
         - |
           {

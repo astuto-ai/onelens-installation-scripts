@@ -155,7 +155,7 @@ validate_inputs() {
     fi
     
     # Generate stack name
-    STACK_NAME="ebs-csi-driver-role-${CLUSTER_NAME}"
+    STACK_NAME="ebs-csi-driver-role-${CLUSTER_NAME}-${REGION}"
     
     log "INFO" "Cluster: $CLUSTER_NAME"
     log "INFO" "Region: $REGION"
@@ -361,10 +361,18 @@ get_stack_outputs() {
     fi
     
     echo
-    log "SUCCESS" "IAM Role created successfully!"
-    echo "╔══════════════════════════════════════════════════════════════════════════════╗"
-    echo "║                            DEPLOYMENT RESULTS                               ║"
-    echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    # Show appropriate success message based on whether deployment occurred
+    if [[ "${SKIP_WAIT:-}" == "true" ]]; then
+        log "SUCCESS" "IAM Role fetched from existing stack!"
+        echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+        echo "║                           EXISTING STACK RESULTS                            ║"
+        echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    else
+        log "SUCCESS" "IAM Role created successfully!"
+        echo "╔══════════════════════════════════════════════════════════════════════════════╗"
+        echo "║                            DEPLOYMENT RESULTS                               ║"
+        echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+    fi
     echo
     
     # Parse and display outputs using AWS CLI queries

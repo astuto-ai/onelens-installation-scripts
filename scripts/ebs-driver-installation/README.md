@@ -143,8 +143,8 @@ Upon successful completion, the script will display:
 ║                            DEPLOYMENT RESULTS                               ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-IAM Role Name: AmazonEKS_EBS_CSI_DriverRole-my-cluster-123456789012
-IAM Role ARN:  arn:aws:iam::123456789012:role/AmazonEKS_EBS_CSI_DriverRole-my-cluster-123456789012
+IAM Role Name: AmazonEKS_EBS_CSI_DriverRole-my-cluster-us-east-1
+IAM Role ARN:  arn:aws:iam::123456789012:role/AmazonEKS_EBS_CSI_DriverRole-my-cluster-us-east-1
 
 Next Steps:
 1. Install the EBS CSI driver add-on in your EKS cluster
@@ -160,7 +160,7 @@ The CloudFormation stack outputs an **IAM Role ARN** that must be used when inst
 aws eks create-addon \
   --cluster-name my-cluster \
   --addon-name aws-ebs-csi-driver \
-  --service-account-role-arn arn:aws:iam::123456789012:role/AmazonEKS_EBS_CSI_DriverRole-my-cluster-123456789012 \
+  --service-account-role-arn arn:aws:iam::123456789012:role/AmazonEKS_EBS_CSI_DriverRole-my-cluster-us-east-1 \
   --region us-east-1
 ```
 
@@ -221,7 +221,7 @@ DEBUG=true ./install-ebs-csi-driver.sh my-cluster us-east-1
 
 The script creates a CloudFormation stack named:
 ```
-ebs-csi-driver-role-{CLUSTER_NAME}
+ebs-csi-driver-role-{CLUSTER_NAME}-{REGION}
 ```
 
 With the following resources:
