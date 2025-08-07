@@ -27,7 +27,7 @@
 #
 # ==============================================================================
 
-set -e
+# Removed set -e as it causes silent failures with stderr logging
 
 # Script version
 readonly SCRIPT_VERSION="1.0.0"
