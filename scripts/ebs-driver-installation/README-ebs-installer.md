@@ -6,13 +6,13 @@ Enterprise-ready shell script that automatically creates an IAM role for Amazon 
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
 ```
 
 ### Method 2: Download and run locally
 ```bash
 # Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
 
 # Make it executable
 chmod +x install-ebs-csi-driver.sh
@@ -24,7 +24,7 @@ chmod +x install-ebs-csi-driver.sh
 ### Method 3: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/ebs-driver-role.yaml -o ebs-driver-role.yaml
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/ebs-driver-role.yaml -o ebs-driver-role.yaml
 
 # Then deploy via AWS Console:
 # 1. Go to AWS CloudFormation Console
@@ -246,6 +246,6 @@ For issues or questions:
 
 ---
 
-**Version:** 1.0.0  
+**Version:** 1.2.0  
 **Compatibility:** Bash 4.0+, AWS CLI 2.0+  
 **Dependencies:** Only AWS CLI and curl
