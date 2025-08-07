@@ -149,9 +149,7 @@ validate_inputs() {
     fi
     
     # Validate region format (basic check)
-    if [[ ! "$REGION" =~ ^[a-z]{2}-[a-z]+-[0-9]$ ]]; then
-        log "WARN" "Region format looks unusual: '$REGION'. Continuing anyway..."
-    fi
+    if [[ ! "$REGION" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]$ ]]; then
     
     # Generate stack name
     STACK_NAME="ebs-csi-driver-role-${CLUSTER_NAME}"
