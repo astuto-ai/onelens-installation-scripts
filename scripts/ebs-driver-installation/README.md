@@ -204,12 +204,18 @@ Enable debug logging to see detailed execution information:
 DEBUG=true ./install-ebs-csi-driver.sh my-cluster us-east-1
 ```
 
-### Stack Already Exists
+### Idempotency & Multiple Runs
 
-The script automatically handles existing stacks:
-- If stack exists and is complete → Updates the stack
-- If stack is in progress → Waits or errors appropriately  
-- If stack is in failed state → Provides guidance
+**✅ Safe to re-run when:**
+- No stack exists → Creates new stack
+- Stack exists with `CREATE_COMPLETE` or `UPDATE_COMPLETE` status → Updates stack
+
+**❌ Will fail when:**
+- Stack is in progress (`*_IN_PROGRESS`) → Exits with error
+- Stack in failed state → Exits with error  
+- **No changes needed** → CloudFormation update fails (script limitation)
+
+**Note:** Running twice with identical parameters will fail on the second run due to "No updates to perform" error.
 
 ## 📁 Files Created
 

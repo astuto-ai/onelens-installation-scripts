@@ -43,6 +43,7 @@ STACK_NAME=""
 TEMP_DIR=""
 OIDC_URL=""
 START_TIME=""
+SKIP_WAIT=""
 
 # ==============================================================================
 # Utility Functions
@@ -250,7 +251,9 @@ deploy_cloudformation() {
         deploy_cmd=(aws cloudformation update-stack)
     fi
     
-    "${deploy_cmd[@]}" \
+    # Capture command output to handle errors properly
+    local cf_output cf_exit_code
+    if cf_output=$("${deploy_cmd[@]}" \
         --stack-name "$STACK_NAME" \
         --template-body "file://$template_file" \
         --parameters \
@@ -262,12 +265,26 @@ deploy_cloudformation() {
             "Key=CreatedBy,Value=$SCRIPT_NAME" \
             "Key=Version,Value=$SCRIPT_VERSION" \
             "Key=EKSCluster,Value=$CLUSTER_NAME" \
-        > /dev/null
-    
-    if [[ "$deploy_action" == "create" ]]; then
-        log "SUCCESS" "CloudFormation stack creation initiated"
+        2>&1); then
+        
+        # Success case
+        if [[ "$deploy_action" == "create" ]]; then
+            log "SUCCESS" "CloudFormation stack creation initiated"
+        else
+            log "SUCCESS" "CloudFormation stack update initiated"
+        fi
     else
-        log "SUCCESS" "CloudFormation stack update initiated"
+        # Handle specific error cases
+        if [[ "$deploy_action" == "update" && "$cf_output" == *"No updates are to be performed"* ]]; then
+            log "INFO" "No changes detected - stack is already up to date"
+            log "SUCCESS" "CloudFormation stack is current"
+            # Set flag to skip waiting
+            SKIP_WAIT=true
+        else
+            log "ERROR" "CloudFormation deployment failed:"
+            log "ERROR" "$cf_output"
+            exit 1
+        fi
     fi
 }
 
@@ -439,7 +456,12 @@ main() {
     template_file=$(download_template)
     
     deploy_cloudformation "$template_file"
-    wait_for_stack_completion
+    
+    # Only wait for completion if an actual deployment occurred
+    if [[ "${SKIP_WAIT:-}" != "true" ]]; then
+        wait_for_stack_completion
+    fi
+    
     get_stack_outputs
 }
 
