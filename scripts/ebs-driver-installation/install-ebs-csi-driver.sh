@@ -9,10 +9,10 @@
 #
 # USAGE:
 #   # Run directly from internet:
-#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/feat/ebs-driver-cft/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- CLUSTER_NAME REGION
+#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- CLUSTER_NAME REGION
 #
 #   # Or download and run:
-#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/feat/ebs-driver-cft/scripts/ebs-driver-installation/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
+#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
 #   chmod +x install-ebs-csi-driver.sh
 #   ./install-ebs-csi-driver.sh CLUSTER_NAME REGION
 #
@@ -34,7 +34,7 @@ readonly SCRIPT_VERSION="1.0.0"
 readonly SCRIPT_NAME="install-ebs-csi-driver"
 
 # CloudFormation template URL (can be overridden with environment variable)
-readonly CFT_TEMPLATE_URL="${CFT_TEMPLATE_URL:-https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/feat/ebs-driver-cft/scripts/ebs-driver-installation/ebs-driver-role.yaml}"
+readonly CFT_TEMPLATE_URL="${CFT_TEMPLATE_URL:-https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/ebs-driver-role.yaml}"
 
 # Global variables
 CLUSTER_NAME=""
@@ -96,7 +96,7 @@ Environment Variables:
   DEBUG=true              Enable debug logging
   CFT_TEMPLATE_URL=<url>  Override CloudFormation template URL
   
-For more information, visit: https://github.com/astuto-ai/onelens-installation-scripts/tree/feat/ebs-driver-cft
+For more information, visit: https://github.com/astuto-ai/onelens-installation-scripts/tree/master
 USAGE_EOF
 }
 

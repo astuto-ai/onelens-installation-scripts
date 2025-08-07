@@ -6,19 +6,34 @@ Enterprise-ready shell script that automatically creates an IAM role for Amazon 
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
 ```
 
 ### Method 2: Download and run locally
 ```bash
 # Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/install-ebs-csi-driver.sh -o install-ebs-csi-driver.sh
 
 # Make it executable
 chmod +x install-ebs-csi-driver.sh
 
 # Run it
 ./install-ebs-csi-driver.sh my-cluster us-east-1
+```
+
+### Method 3: Deploy CloudFormation template manually via AWS Console
+```bash
+# Download the CloudFormation template
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/ebs-driver-installation/ebs-driver-role.yaml -o ebs-driver-role.yaml
+
+# Then deploy via AWS Console:
+# 1. Go to AWS CloudFormation Console
+# 2. Create Stack → Upload a template file → Select ebs-driver-role.yaml
+# 3. Provide parameters:
+#    - ClusterName: your-cluster-name
+#    - OIDCIssuerURL: From the console
+# 4. Review and create stack
+# 5. Copy the IAM Role ARN from the stack outputs
 ```
 
 ## 📋 Prerequisites
@@ -119,29 +134,6 @@ DEBUG=true ./install-ebs-csi-driver.sh my-cluster us-east-1
 CFT_TEMPLATE_URL=https://my-bucket.s3.amazonaws.com/template.yaml ./install-ebs-csi-driver.sh my-cluster us-east-1
 ```
 
-## ✨ Features
-
-### Enterprise-Ready
-- ✅ Comprehensive error handling and validation
-- ✅ Detailed logging with timestamps
-- ✅ Progress indicators during CloudFormation deployment
-- ✅ Automatic cleanup of temporary files
-- ✅ Graceful handling of interrupts (Ctrl+C)
-
-### User Experience
-- 🎨 Beautiful colored output and banners
-- 📊 Real-time progress dots during stack deployment
-- 🔍 Clear error messages with troubleshooting hints
-- ⏱️ Execution time tracking
-- 📋 Formatted results with next steps
-
-### Robustness
-- 🔒 Input validation and sanitization
-- 🌐 Automatic OIDC URL extraction and cleaning
-- 🔄 Support for both stack creation and updates
-- 📝 CloudFormation template validation
-- 🏷️ Automatic resource tagging
-
 ## 📤 Output
 
 Upon successful completion, the script will display:
@@ -156,10 +148,15 @@ IAM Role ARN:  arn:aws:iam::123456789012:role/AmazonEKS_EBS_CSI_DriverRole-my-cl
 
 Next Steps:
 1. Install the EBS CSI driver add-on in your EKS cluster
-2. Use the IAM role ARN above when configuring the EBS CSI driver
+2. Use the IAM Role ARN above as the **IAM Role for IRSA** when configuring the EBS CSI driver add-on
 
-Useful Commands:
-# Install EBS CSI driver add-on (using AWS CLI):
+## Using the IAM Role ARN
+
+The CloudFormation stack outputs an **IAM Role ARN** that must be used when installing the EBS CSI driver add-on. This role enables **IRSA (IAM Roles for Service Accounts)** which allows the EBS CSI driver pods to assume the IAM role and access AWS EBS APIs.
+
+### Via AWS CLI:
+```bash
+# Install EBS CSI driver add-on with the IAM Role ARN for IRSA:
 aws eks create-addon \
   --cluster-name my-cluster \
   --addon-name aws-ebs-csi-driver \
@@ -169,7 +166,7 @@ aws eks create-addon \
 
 ## 🔍 What the Script Does
 
-1. **Validates prerequisites** - Checks for AWS CLI, jq, and proper configuration
+1. **Validates prerequisites** - Checks for AWS CLI, curl, and proper configuration
 2. **Verifies EKS cluster** - Ensures the cluster exists and has OIDC enabled  
 3. **Downloads CloudFormation template** - Gets the latest IAM role template
 4. **Deploys/Updates stack** - Creates or updates the CloudFormation stack
@@ -251,4 +248,4 @@ For issues or questions:
 
 **Version:** 1.0.0  
 **Compatibility:** Bash 4.0+, AWS CLI 2.0+  
-**Dependencies:** Only AWS CLI and curl (no jq required!) 
+**Dependencies:** Only AWS CLI and curl
