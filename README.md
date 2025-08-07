@@ -32,7 +32,7 @@ The core monitoring agent that collects cost and resource utilization data from 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Kubernetes cluster (1.19+)
+- Kubernetes cluster (1.25+)
 - Helm 3.0+
 - kubectl configured for your cluster
 
