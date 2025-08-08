@@ -122,37 +122,37 @@ else
     kubectl create namespace onelens-agent || { echo "Error: Failed to create namespace 'onelens-agent'."; exit 1; }
 fi
 
-# Phase 8: EBS CSI Driver Check and Installation
-check_ebs_driver() {
-    local retries=1
-    local count=0
+# # Phase 8: EBS CSI Driver Check and Installation
+# check_ebs_driver() {
+#     local retries=1
+#     local count=0
 
-    while [ $count -le $retries ]; do
-        echo "Checking if EBS CSI driver is installed (Attempt $((count+1))/$((retries+1)))..."
+#     while [ $count -le $retries ]; do
+#         echo "Checking if EBS CSI driver is installed (Attempt $((count+1))/$((retries+1)))..."
         
-        if kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver --ignore-not-found | grep -q "ebs-csi"; then
-            echo "EBS CSI driver is installed."
-            return 0
-        fi
+#         if kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver --ignore-not-found | grep -q "ebs-csi"; then
+#             echo "EBS CSI driver is installed."
+#             return 0
+#         fi
 
-        if [ $count -eq 0 ]; then
-            echo "EBS CSI driver is not installed. Installing..."
-            helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
-            helm install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --namespace kube-system --set controller.serviceAccount.create=true
-        fi
+#         if [ $count -eq 0 ]; then
+#             echo "EBS CSI driver is not installed. Installing..."
+#             helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+#             helm install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --namespace kube-system --set controller.serviceAccount.create=true
+#         fi
 
-        if [ $count -lt $retries ]; then
-            echo "Retrying in 10 seconds..."
-            sleep 10
-        fi
-        count=$((count+1))
-    done
+#         if [ $count -lt $retries ]; then
+#             echo "Retrying in 10 seconds..."
+#             sleep 10
+#         fi
+#         count=$((count+1))
+#     done
 
-    echo "EBS CSI driver installation failed after $((retries+1)) attempts."
-    return 1
-}
+#     echo "EBS CSI driver installation failed after $((retries+1)) attempts."
+#     return 1
+# }
 
-check_ebs_driver 
+# check_ebs_driver 
 
 echo "Persistent storage for Prometheus is ENABLED."
 
