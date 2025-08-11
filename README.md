@@ -80,6 +80,8 @@ The core monitoring agent that collects cost and resource utilization data from 
 
 ## 📚 Documentation
 
+- [🏗️ CI/CD Architecture](docs/ci-cd-architecture.md) - Complete CI/CD pipeline documentation
+- [⚡ Quick Reference](docs/quick-reference.md) - Fast commands and troubleshooting
 - [📖 Release Process](docs/release-process.md) - How to create new releases
 - [🔄 CI/CD Flow](docs/ci-cd-flow.md) - Understanding the automation pipeline
 - [⚙️ Configuration Guide](docs/configuration.md) - Detailed configuration options

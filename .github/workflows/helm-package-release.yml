@@ -1,0 +1,218 @@
+name: Package and Release Helm Charts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  
+  release:
+    types: [published]
+  
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Helm chart tag (e.g., v1.2.3)'
+        required: true
+        type: string
+
+env:
+  # Repository Configuration
+  GITHUB_PAGES_URL: "https://astuto-ai.github.io/onelens-installation-scripts/"
+  GITHUB_REPO_URL: "https://github.com/astuto-ai/onelens-installation-scripts"
+  
+  # AWS Configuration
+  AWS_ECR_ROLE_ARN: "arn:aws:iam::609916866699:role/onelens-agent-github-actions-ecr-role"
+  AWS_ECR_REGION: "ap-south-1"
+  AWS_ECR_REGISTRY: "609916866699.dkr.ecr.ap-south-1.amazonaws.com"
+  
+  # Chart Configuration
+  CHART_ONELENS_AGENT: "onelens-agent"
+  CHART_ONELENSDEPLOYER: "onelensdeployer"
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  actions: read
+
+jobs:
+  validate-and-determine-version:
+    runs-on: ubuntu-latest
+    outputs:
+      chart_version: ${{ steps.version.outputs.version }}
+      tag_version: ${{ steps.version.outputs.tag_version }}
+      is_release: ${{ steps.version.outputs.is_release }}
+      branch_name: ${{ steps.version.outputs.branch_name }}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Determine version and validate
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG_VERSION="${{ github.event.release.tag_name }}"
+            TAG_VERSION="${TAG_VERSION#v}"  # Remove 'v' prefix
+            CHART_VERSION="$TAG_VERSION"
+            IS_RELEASE="true"
+            BRANCH_NAME="helm-release-${TAG_VERSION}"
+            echo "Release trigger - using version: $TAG_VERSION"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_VERSION="${{ github.event.inputs.tag }}"
+            TAG_VERSION="${TAG_VERSION#v}"  # Remove 'v' prefix
+            CHART_VERSION="${TAG_VERSION}-rc"  # Add 'rc' suffix for manual trigger
+            IS_RELEASE="false"
+            BRANCH_NAME="helm-manual-${TAG_VERSION}"
+            echo "Manual trigger - using version: $TAG_VERSION, chart version: $CHART_VERSION"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            TAG_VERSION="${TAG#v}"  # Remove 'v' prefix
+            CHART_VERSION="${TAG_VERSION}-rc"  # Add 'rc' suffix for tag trigger
+            IS_RELEASE="false"
+            BRANCH_NAME="helm-rc-${TAG_VERSION}"
+            echo "Tag trigger - using version: $TAG_VERSION, chart version: $CHART_VERSION"
+          fi
+          
+          # Validate that tag version matches chart versions
+          ONELENS_AGENT_VERSION=$(yq e '.version' charts/${CHART_ONELENS_AGENT}/Chart.yaml)
+          ONELENSDEPLOYER_VERSION=$(yq e '.version' charts/${CHART_ONELENSDEPLOYER}/Chart.yaml)
+          
+          echo "Version comparison:"
+          echo "Tag version: $TAG_VERSION"
+          echo "${CHART_ONELENS_AGENT} chart version: $ONELENS_AGENT_VERSION"
+          echo "${CHART_ONELENSDEPLOYER} chart version: $ONELENSDEPLOYER_VERSION"
+          
+          if [[ "$TAG_VERSION" != "$ONELENS_AGENT_VERSION" ]]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match ${CHART_ONELENS_AGENT} chart version ($ONELENS_AGENT_VERSION)"
+            echo "Please ensure tag version and Chart.yaml versions are the same"
+            exit 1
+          fi
+          
+          if [[ "$TAG_VERSION" != "$ONELENSDEPLOYER_VERSION" ]]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match ${CHART_ONELENSDEPLOYER} chart version ($ONELENSDEPLOYER_VERSION)"
+            echo "Please ensure tag version and Chart.yaml versions are the same"
+            exit 1
+          fi
+          
+          echo "Version validation passed"
+          
+          echo "version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+  package-charts:
+    needs: [validate-and-determine-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ECR_ROLE_ARN }}
+          aws-region: ${{ env.AWS_ECR_REGION }}
+          role-session-name: GitHubActionsSession
+
+      - name: Authenticate Helm with AWS ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_ECR_REGION }} | helm registry login --username AWS --password-stdin ${{ env.AWS_ECR_REGISTRY }}
+
+      - name: Update chart dependencies
+        run: |
+          echo "Updating ${{ env.CHART_ONELENS_AGENT }} dependencies..."
+          helm dependency update charts/${{ env.CHART_ONELENS_AGENT }}
+          
+          echo "Updating ${{ env.CHART_ONELENSDEPLOYER }} dependencies..."
+          helm dependency update charts/${{ env.CHART_ONELENSDEPLOYER }}
+
+      - name: Package Helm charts with version override
+        run: |
+          VERSION="${{ needs.validate-and-determine-version.outputs.chart_version }}"
+          mkdir -p packaged-charts
+          
+          echo "Packaging ${{ env.CHART_ONELENS_AGENT }} chart with version: $VERSION"
+          helm package charts/${{ env.CHART_ONELENS_AGENT }} --version "$VERSION" -d packaged-charts
+          
+          echo "Packaging ${{ env.CHART_ONELENSDEPLOYER }} chart with version: $VERSION"
+          helm package charts/${{ env.CHART_ONELENSDEPLOYER }} --version "$VERSION" -d packaged-charts
+          
+          echo "Packaged charts:"
+          ls -la packaged-charts/
+
+      - name: Checkout gh-pages branch to separate directory
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages-repo
+          clean: true
+
+      - name: Copy packaged charts to gh-pages
+        run: |
+          cp packaged-charts/*.tgz gh-pages-repo/
+          echo "Charts in gh-pages:"
+          ls -la gh-pages-repo/*.tgz
+
+      - name: Update Helm repository index
+        run: |
+          cd gh-pages-repo
+          echo "Updating Helm repository index..."
+          # Use --merge to preserve existing entries and their timestamps
+          helm repo index . --url ${{ env.GITHUB_PAGES_URL }} --merge index.yaml
+          echo "Updated index.yaml"
+
+      - name: Create Pull Request to gh-pages
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: gh-pages-repo
+          commit-message: |
+            ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && 'Release' || 'Release Candidate' }} Helm charts v${{ needs.validate-and-determine-version.outputs.chart_version }}
+            
+            Published charts:
+            - ${{ env.CHART_ONELENS_AGENT }}: ${{ needs.validate-and-determine-version.outputs.chart_version }}
+            - ${{ env.CHART_ONELENSDEPLOYER }}: ${{ needs.validate-and-determine-version.outputs.chart_version }}
+            
+            ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && format('Production release from {0}', github.event.release.tag_name) || (github.event_name == 'workflow_dispatch' && format('Manual RC from {0}', github.event.inputs.tag) || format('Release candidate from tag {0}', github.ref_name)) }}
+          branch: ${{ needs.validate-and-determine-version.outputs.branch_name }}
+          base: gh-pages
+          title: |
+            ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && 'Release' || 'Release Candidate' }} Helm Charts v${{ needs.validate-and-determine-version.outputs.chart_version }}
+          body: |
+            ## ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && 'Production Release' || 'Release Candidate' }}
+            
+            **Version:** `${{ needs.validate-and-determine-version.outputs.chart_version }}`
+            **Source:** ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && format('Release `{0}`', github.event.release.tag_name) || (github.event_name == 'workflow_dispatch' && format('Manual `{0}`', github.event.inputs.tag) || format('Tag `{0}`', github.ref_name)) }}
+            
+            ### Charts Updated
+            - **${{ env.CHART_ONELENS_AGENT }}**: `${{ needs.validate-and-determine-version.outputs.chart_version }}`
+            - **${{ env.CHART_ONELENSDEPLOYER }}**: `${{ needs.validate-and-determine-version.outputs.chart_version }}`
+            
+            ### ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && 'Ready for Production' || 'Testing Required' }}
+            ${{ needs.validate-and-determine-version.outputs.is_release == 'true' && 'This release has been validated and is ready for production use.' || 'This is a release candidate. Please test thoroughly before promoting to production.' }}
+            
+            ### Quick Install
+            ```bash
+            # Add repository
+            helm repo add onelens ${{ env.GITHUB_PAGES_URL }}
+            helm repo update
+            
+            # Install latest version
+            helm install ${{ env.CHART_ONELENS_AGENT }} onelens/${{ env.CHART_ONELENS_AGENT }} --version ${{ needs.validate-and-determine-version.outputs.chart_version }}
+            ```
+            
+            **Repository:** ${{ env.GITHUB_PAGES_URL }}
+            **Source Code:** ${{ env.GITHUB_REPO_URL }}
+            
+            **Merge this PR to publish to GitHub Pages Helm repository.**
+          assignees: ${{ github.actor }}
+          draft: false
+          delete-branch: true
