@@ -7,7 +7,7 @@ This is the official Helm repository for OneLens installation scripts.
 ### Add Repository
 
 ```bash
-helm repo add onelens https://dipanshu-astuto.github.io/onelens-installation-scripts/
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
 helm repo update
 ```
 
@@ -36,8 +36,8 @@ helm install onelens-deployer onelens/onelensdeployer --namespace onelens-deploy
 
 ## Repository Information
 
-- **Repository URL**: https://dipanshu-astuto.github.io/onelens-installation-scripts/
-- **Source Code**: https://github.com/dipanshu-astuto/onelens-installation-scripts
+- **Repository URL**: https://astuto-ai.github.io/onelens-installation-scripts/
+- **Source Code**: https://github.com/astuto-ai/onelens-installation-scripts
 - **Documentation**: See individual chart README files
 
 ## Versions
