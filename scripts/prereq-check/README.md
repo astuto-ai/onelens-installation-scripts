@@ -10,8 +10,6 @@ The OneLens Agent Pre-requisite Checker is an interactive script that validates 
 
 ### Method 1: Run directly from the internet
 ```bash
-
-# Simple piped execution
 curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
 ```
 
@@ -40,7 +38,7 @@ cd scripts/prereq-check
 
 The script will automatically check for required tools before starting. If any tools are missing, it will exit with an error message listing what needs to be installed:
 
-- `bash` (version 4.0 or later)
+- `bash`
 - `curl` 
 - `ping`
 - `nslookup`
