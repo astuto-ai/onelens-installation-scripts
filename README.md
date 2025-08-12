@@ -66,54 +66,6 @@ The core monitoring agent that collects cost and resource utilization data from 
 helm search repo onelens
 ```
 
-### Configuration
-
-#### OneLens Deployer Configuration
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `job.env.CLUSTER_NAME` | Your Kubernetes cluster name | `""` |
-| `job.env.REGION` | AWS region where cluster is located | `""` |
-| `job.env.ACCOUNT` | AWS account ID | `""` |
-| `job.env.REGISTRATION_TOKEN` | OneLens registration token | `""` |
-
-#### OneLens Agent Configuration
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `onelens-agent.enabled` | Enable OneLens agent | `true` |
-| `prometheus.enabled` | Enable Prometheus monitoring | `true` |
-| `prometheus-opencost-exporter.enabled` | Enable cost metrics | `true` |
-| `onelens-agent.cronJob.cronSchedule` | Data collection schedule | `"0 * * * *"` |
-
-## Available Charts
-
-| Chart | Latest Version | Description |
-|-------|----------------|-------------|
-| onelens-agent | 1.2.0-rc | Production-ready monitoring agent with Prometheus and OpenCost |
-| onelensdeployer | 1.2.0-rc | Latest deployment management tools for job orchestration |
-
-## Architecture
-
-```mermaid
-graph TB
-    subgraph "OneLens Installation"
-        A[OneLens Deployer] --> B[Cluster Setup]
-        B --> C[OneLens Agent Deployment]
-    end
-    
-    subgraph "Monitoring Stack"
-        C --> D[OneLens Agent]
-        D --> E[Prometheus]
-        D --> F[OpenCost Exporter]
-        E --> G[Metrics Storage]
-        F --> G
-    end
-    
-    subgraph "Data Flow"
-        G --> H[Cost Analysis]
-        H --> I[OneLens Platform]
-    end
-```
-
 ## Creating New Releases
 
 ### Prerequisites
