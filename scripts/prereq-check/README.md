@@ -47,6 +47,9 @@ The script will automatically check for required tools before starting. If any t
 - `kubectl`
 - `helm`
 
+> **📦 Need Help Installing Tools?**  
+> If any of these tools are missing from your system, follow our [Tools Installation Guide](tools-installation.md) for step-by-step installation instructions on Linux/Ubuntu systems.
+
 ## What This Script Checks
 
 ### 1. Internet Connectivity
