@@ -61,7 +61,11 @@ The script will automatically check for required tools before starting. If any t
 
 ### Method 1: Run directly from the internet
 ```bash
+# Interactive mode (will ask for confirmations)
 curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
+
+# Auto mode (no confirmations, assumes 'yes' to all prompts)
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash -s -- --auto
 ```
 
 ### Method 2: Download and run locally
@@ -72,8 +76,11 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 # Make it executable
 chmod +x onelens-prereq-check.sh
 
-# Run it
+# Run it (interactive mode)
 ./onelens-prereq-check.sh
+
+# Or run in auto mode (no confirmations)
+./onelens-prereq-check.sh --auto
 ```
 
 ### Method 3: Run from local repository
@@ -81,9 +88,16 @@ chmod +x onelens-prereq-check.sh
 # Navigate to the script directory
 cd scripts/prereq-check
 
-# Run the pre-requisite checker
+# Run the pre-requisite checker (interactive mode)
 ./onelens-prereq-check.sh
+
+# Or run in auto mode (no confirmations)
+./onelens-prereq-check.sh --auto
 ```
+
+### Command Line Options
+
+- `--auto`, `--yes`, `-y`: Run in automatic mode without user prompts (assumes 'yes' to all confirmations)
 
 ### Interactive Flow
 

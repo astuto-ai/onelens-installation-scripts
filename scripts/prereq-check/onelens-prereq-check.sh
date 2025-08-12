@@ -55,6 +55,12 @@ add_failed_check() {
 }
 
 ask_confirmation() {
+    # If running in auto mode, automatically confirm
+    if [ "${AUTO_MODE:-false}" = true ]; then
+        echo "$1 (y/n): y [auto]"
+        return 0
+    fi
+    
     while true; do
         read -p "$1 (y/n): " yn
         case $yn in
@@ -379,6 +385,18 @@ check_ebs_driver() {
 
 # Main execution
 main() {
+    local auto_mode=false
+    
+    # Check for auto flag
+    for arg in "$@"; do
+        case $arg in
+            --auto|--yes|-y)
+                auto_mode=true
+                shift
+                ;;
+        esac
+    done
+    
     # Silent check for required tools first
     check_required_tools
     
@@ -387,9 +405,14 @@ main() {
     echo "Please ensure you have the necessary permissions to access AWS and Kubernetes resources."
     echo ""
     
-    if ! ask_confirmation "Do you want to proceed with the pre-requisite check?"; then
-        echo "Pre-requisite check cancelled."
-        exit 0
+    if [ "$auto_mode" = false ]; then
+        if ! ask_confirmation "Do you want to proceed with the pre-requisite check?"; then
+            echo "Pre-requisite check cancelled."
+            exit 0
+        fi
+    else
+        echo "Auto mode enabled - proceeding with pre-requisite check..."
+        export AUTO_MODE=true
     fi
     
     local checks_passed=0
