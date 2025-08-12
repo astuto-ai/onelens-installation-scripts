@@ -1,3 +1,7 @@
+# Tools Installation Guide
+
+This guide provides step-by-step instructions for installing all required command-line tools needed for OneLens Agent deployment.
+
 Here is how you can install the listed tools on a Linux system, primarily focusing on Ubuntu/Debian distributions:
 
 1. **curl**  
