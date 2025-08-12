@@ -87,6 +87,11 @@ The core monitoring agent that collects cost and resource utilization data from 
 - [⚙️ Configuration Guide](docs/configuration.md) - Detailed configuration options
 - [🔧 Development Guide](docs/development.md) - Contributing and development setup
 
+## 🛠️ Scripts & Tools
+
+- [🔍 Pre-requisite Checker](scripts/prereq-check/README.md) - Automated environment validation script
+- [📦 Tools Installation Guide](scripts/prereq-check/tools-installation.md) - Step-by-step installation for required tools
+
 ## 🔄 Architecture
 
 ```mermaid
