@@ -25,6 +25,9 @@ MIN_EKS_VERSION="1.27"
 # Global array to track failed checks
 FAILED_CHECKS=()
 
+# Global array to track confirmed details
+CONFIRMED_DETAILS=()
+
 # Utility functions
 print_header() {
     echo ""
@@ -54,22 +57,11 @@ add_failed_check() {
     FAILED_CHECKS+=("$1")
 }
 
-ask_confirmation() {
-    # If running in auto mode, automatically confirm
-    if [ "${AUTO_MODE:-false}" = true ]; then
-        echo "$1 (y/n): y [auto]"
-        return 0
-    fi
-    
-    while true; do
-        read -p "$1 (y/n): " yn
-        case $yn in
-            [Yy]* ) return 0;;
-            [Nn]* ) return 1;;
-            * ) echo "Please answer yes or no.";;
-        esac
-    done
+add_confirmed_detail() {
+    CONFIRMED_DETAILS+=("$1")
 }
+
+
 
 version_greater_equal() {
     [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
@@ -102,6 +94,61 @@ check_required_tools() {
         echo "Required tools: curl, ping, nslookup, jq, aws, kubectl, helm"
         exit 1
     fi
+}
+
+# Function to get actual EKS cluster name and region
+get_eks_cluster_info() {
+    local cluster_endpoint="$1"
+    local context_name="$2"
+    
+    # Method 1: Try to get from AWS CLI if available and configured
+    if check_command aws && aws sts get-caller-identity &> /dev/null; then
+        
+        # Extract region from endpoint if it's an EKS endpoint
+        local region=""
+        if [[ "$cluster_endpoint" =~ \.([a-z0-9-]+)\.eks\.amazonaws\.com ]]; then
+            region="${BASH_REMATCH[1]}"
+        fi
+        
+        if [ -n "$region" ]; then
+            # List clusters and try to match by endpoint
+            local clusters
+            clusters=$(aws eks list-clusters --region "$region" --query 'clusters[]' --output text 2>/dev/null || echo "")
+            
+            for cluster in $clusters; do
+                local cluster_endpoint_aws
+                cluster_endpoint_aws=$(aws eks describe-cluster --name "$cluster" --region "$region" --query 'cluster.endpoint' --output text 2>/dev/null || echo "")
+                if [ "$cluster_endpoint_aws" = "$cluster_endpoint" ]; then
+                    echo "$cluster|$region"
+                    return 0
+                fi
+            done
+        fi
+    fi
+    
+    # Method 2: Parse from EKS endpoint URL
+    if [[ "$cluster_endpoint" =~ https://([A-Za-z0-9]+)\.gr[0-9]+\.([a-z0-9-]+)\.eks\.amazonaws\.com ]]; then
+        local cluster_id="${BASH_REMATCH[1]}"
+        local region="${BASH_REMATCH[2]}"
+        
+        # Try to get actual cluster name using the cluster ID
+        if check_command aws && aws sts get-caller-identity &> /dev/null; then
+            local cluster_name
+            cluster_name=$(aws eks describe-cluster --name "$cluster_id" --region "$region" --query 'cluster.name' --output text 2>/dev/null || echo "")
+            if [ -n "$cluster_name" ] && [ "$cluster_name" != "None" ]; then
+                echo "$cluster_name|$region"
+                return 0
+            fi
+        fi
+        
+        # Fallback: use cluster ID from URL
+        echo "$cluster_id (parsed from endpoint)|$region"
+        return 0
+    fi
+    
+    # Method 3: Fallback to context name
+    echo "$context_name (context name)|unknown"
+    return 0
 }
 
 # Internet connectivity checks
@@ -184,13 +231,9 @@ check_aws_cli() {
     echo "  User/Role ARN: $user_arn"
     echo "  User ID: $user_id"
     
-    if ! ask_confirmation "Is this the correct AWS account and user/role?"; then
-        print_error "Please configure AWS CLI with the correct credentials"
-        add_failed_check "AWS CLI: User rejected AWS account/role confirmation"
-        return 1
-    fi
-    
-    print_success "AWS configuration confirmed"
+    # Store AWS details for final confirmation
+    add_confirmed_detail "AWS Account: $account_id"
+    add_confirmed_detail "AWS User/Role: $user_arn"
     return 0
 }
 
@@ -213,24 +256,29 @@ check_kubectl_cluster() {
     fi
     
     # Get cluster information
-    local cluster_info
-    cluster_info=$(kubectl config current-context)
+    local cluster_context
+    cluster_context=$(kubectl config current-context)
     local cluster_endpoint
     cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}')
     
+    # Try to get actual EKS cluster name and region
+    local cluster_info
+    cluster_info=$(get_eks_cluster_info "$cluster_endpoint" "$cluster_context")
+    local actual_cluster_name="${cluster_info%|*}"
+    local cluster_region="${cluster_info#*|}"
+    
     print_success "kubectl is configured and connected"
     echo "Cluster Details:"
-    echo "  Current Context: $cluster_info"
+    echo "  Current Context: $cluster_context"
     echo "  Cluster Endpoint: $cluster_endpoint"
+    echo "  EKS Cluster Name: $actual_cluster_name"
+    echo "  AWS Region: $cluster_region"
     
-    if ! ask_confirmation "Is this the correct cluster for OneLens Agent installation?"; then
-        print_error "Please switch to the correct cluster context"
-        print_error "Use 'kubectl config use-context <context-name>' to switch contexts"
-        add_failed_check "Kubectl: User rejected cluster context confirmation"
-        return 1
-    fi
-    
-    print_success "Cluster configuration confirmed"
+    # Store cluster details for final confirmation
+    add_confirmed_detail "EKS Cluster Name: $actual_cluster_name"
+    add_confirmed_detail "AWS Region: $cluster_region"
+    add_confirmed_detail "Kubectl Context: $cluster_context"
+    add_confirmed_detail "Cluster Endpoint: $cluster_endpoint"
     return 0
 }
 
@@ -250,6 +298,7 @@ check_helm_version() {
     
     if version_greater_equal "$helm_version" "$MIN_HELM_VERSION"; then
         print_success "Helm version $helm_version is compatible (>= $MIN_HELM_VERSION)"
+        add_confirmed_detail "Helm Version: $helm_version"
         return 0
     else
         print_error "Helm version $helm_version is too old (minimum required: $MIN_HELM_VERSION)"
@@ -266,7 +315,7 @@ check_eks_version() {
     local k8s_version
     k8s_version=$(kubectl version --output=json | jq -r '.serverVersion.gitVersion' | sed 's/v//')
     
-    if [ -z "$k8s_version" ]; then
+    if [ -z "$k8s_version" ] || [ "$k8s_version" = "null" ]; then
         print_error "Could not determine Kubernetes version"
         add_failed_check "EKS Version: Could not determine Kubernetes version"
         return 1
@@ -278,6 +327,7 @@ check_eks_version() {
     
     if version_greater_equal "$version_major_minor" "$MIN_EKS_VERSION"; then
         print_success "EKS version $k8s_version is compatible (>= $MIN_EKS_VERSION)"
+        add_confirmed_detail "EKS Version: $k8s_version"
         return 0
     else
         print_error "EKS version $k8s_version is too old (minimum required: $MIN_EKS_VERSION)"
@@ -331,12 +381,10 @@ check_ebs_driver() {
         echo "- Resource constraints (CPU/Memory)"
         echo "- Image pull issues"
         echo "- Configuration errors"
-        if ! ask_confirmation "Continue anyway? (EBS driver controller issues may affect storage)"; then
-            add_failed_check "EBS CSI Driver: Controller pods are not ready and user chose not to continue"
-            return 1
-        fi
+        add_confirmed_detail "EBS CSI Driver: Controller pods have issues (see warnings above)"
     else
         print_success "EBS CSI driver controller pods are running and ready"
+        add_confirmed_detail "EBS CSI Driver: Controller pods are healthy"
     fi
     
     # Check EBS CSI driver node pods
@@ -350,10 +398,7 @@ check_ebs_driver() {
         echo "- EBS CSI driver is not fully installed"
         echo "- DaemonSet is not deployed"
         echo "- Node selector issues"
-        if ! ask_confirmation "Continue anyway? (Missing node pods may affect EBS volume mounting)"; then
-            add_failed_check "EBS CSI Driver: No node pods found and user chose not to continue"
-            return 1
-        fi
+        add_confirmed_detail "EBS CSI Driver: No node pods found (may affect volume mounting)"
     else
         # Check if all node pods are ready
         local node_not_ready
@@ -369,12 +414,10 @@ check_ebs_driver() {
             echo "- Node resource constraints"
             echo "- Privileged access issues"
             echo "- Host path mount issues"
-            if ! ask_confirmation "Continue anyway? (Node pod issues may affect EBS volume operations)"; then
-                add_failed_check "EBS CSI Driver: Node pods are not ready and user chose not to continue"
-                return 1
-            fi
+            add_confirmed_detail "EBS CSI Driver: Node pods have issues (see warnings above)"
         else
             print_success "EBS CSI driver node pods are running and ready"
+            add_confirmed_detail "EBS CSI Driver: Node pods are healthy"
         fi
     fi
     
@@ -385,18 +428,6 @@ check_ebs_driver() {
 
 # Main execution
 main() {
-    local auto_mode=false
-    
-    # Check for auto flag
-    for arg in "$@"; do
-        case $arg in
-            --auto|--yes|-y)
-                auto_mode=true
-                shift
-                ;;
-        esac
-    done
-    
     # Silent check for required tools first
     check_required_tools
     
@@ -404,16 +435,7 @@ main() {
     echo "This script will validate all prerequisites for OneLens Agent installation."
     echo "Please ensure you have the necessary permissions to access AWS and Kubernetes resources."
     echo ""
-    
-    if [ "$auto_mode" = false ]; then
-        if ! ask_confirmation "Do you want to proceed with the pre-requisite check?"; then
-            echo "Pre-requisite check cancelled."
-            exit 0
-        fi
-    else
-        echo "Auto mode enabled - proceeding with pre-requisite check..."
-        export AUTO_MODE=true
-    fi
+    echo "Running prerequisite checks..."
     
     local checks_passed=0
     local total_checks=6
@@ -459,34 +481,98 @@ main() {
     echo ""
     print_header "Pre-requisite Check Summary"
     
+    # Always show both passed and failed summary
+    echo ""
+    echo "PREREQUISITE CHECK RESULTS:"
+    echo "============================"
+    echo "Status: $checks_passed/$total_checks checks passed"
+    echo ""
+    
+    # Show successful configuration details
+    if [ ${#CONFIRMED_DETAILS[@]} -gt 0 ]; then
+        echo ""
+        echo "⚠️  PLEASE REVIEW THE DETECTED CONFIGURATION BELOW BEFORE PROCEEDING ⚠️"
+        echo ""
+        echo "PASSED CHECKS - DETECTED CONFIGURATION:"
+        echo "======================================="
+        
+        # Group details by category for better readability
+        echo ""
+        echo "AWS CONFIGURATION:"
+        echo "------------------"
+        for detail in "${CONFIRMED_DETAILS[@]}"; do
+            if [[ "$detail" =~ ^AWS ]] && [[ ! "$detail" =~ ^AWS\ Region ]]; then
+                echo "  $detail"
+            fi
+        done
+        
+        echo ""
+        echo "KUBERNETES CLUSTER:"
+        echo "-------------------"
+        for detail in "${CONFIRMED_DETAILS[@]}"; do
+            if [[ "$detail" =~ ^EKS|^Kubectl|^Cluster|^AWS\ Region ]] && [[ ! "$detail" =~ ^EKS\ Version ]]; then
+                echo "  $detail"
+            fi
+        done
+        
+        echo ""
+        echo "TOOLS & VERSIONS:"
+        echo "-----------------"
+        for detail in "${CONFIRMED_DETAILS[@]}"; do
+            if [[ "$detail" =~ ^Helm|^EKS\ Version ]]; then
+                echo "  $detail"
+            fi
+        done
+        
+        echo ""
+        echo "STORAGE:"
+        echo "--------"
+        for detail in "${CONFIRMED_DETAILS[@]}"; do
+            if [[ "$detail" =~ ^EBS ]]; then
+                echo "  $detail"
+            fi
+        done
+        
+        echo ""
+    fi
+    
+    # Show failed checks if any
+    if [ ${#FAILED_CHECKS[@]} -gt 0 ]; then
+        echo "FAILED CHECKS:"
+        echo "=============="
+        local count=1
+        for failure in "${FAILED_CHECKS[@]}"; do
+            echo "$count. $failure"
+            ((count++))
+        done
+        echo ""
+    fi
+    
+    # Final status and next steps
     if [ $checks_passed -eq $total_checks ]; then
-        print_success "All pre-requisites passed! ($checks_passed/$total_checks)"
-        print_success "Your environment is ready for OneLens Agent installation."
+        print_success "All pre-requisites passed! Your environment is ready for OneLens Agent installation."
         echo ""
-        echo "Next steps:"
-        echo "1. Run the OneLens Agent installation script"
-        echo "2. Follow the installation guide for configuration"
+        echo "IMPORTANT: Please carefully review the detected configuration sections above"
+        echo "to ensure OneLens Agent will be installed on the correct AWS account and cluster."
+        echo ""
+        echo "NEXT STEPS:"
+        echo "1. Verify the AWS account, region, and cluster details above are correct"
+        echo "2. Run the OneLens Agent installation script"
+        echo "3. Follow the installation guide for configuration"
     else
-        print_error "Some pre-requisites failed! ($checks_passed/$total_checks passed)"
+        print_error "Some pre-requisites failed! Please address the failed checks above before proceeding."
         echo ""
-        echo "FAILED CHECKS SUMMARY:"
-        echo "========================"
-        if [ ${#FAILED_CHECKS[@]} -eq 0 ]; then
-            echo "No specific failure details collected."
-        else
-            local count=1
-            for failure in "${FAILED_CHECKS[@]}"; do
-                echo "$count. $failure"
-                ((count++))
-            done
-        fi
-        echo ""
-        print_error "Please address the failed checks above before proceeding with installation."
+        echo "NEXT STEPS:"
+        echo "1. Review the failed checks above"
+        echo "2. Fix the issues listed in the failed checks"
+        echo "3. Re-run this script to verify fixes"
+        echo "4. Proceed with OneLens Agent installation once all checks pass"
         exit 1
     fi
 }
 
 # Script entry point
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Handle both direct execution and piped execution (curl | bash)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ "${BASH_SOURCE[0]}" == "" ]]; then
     main "$@"
 fi

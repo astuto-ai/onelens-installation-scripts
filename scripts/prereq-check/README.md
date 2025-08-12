@@ -6,6 +6,36 @@ This script validates all prerequisites required for OneLens Agent installation 
 
 The OneLens Agent Pre-requisite Checker is an interactive script that validates your environment against all requirements needed for a successful OneLens Agent deployment. It performs comprehensive checks and provides clear feedback on what needs to be addressed.
 
+## Usage
+
+### Method 1: Run directly from the internet
+```bash
+
+# Simple piped execution
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
+```
+
+### Method 2: Download and run locally
+```bash
+# Download the script
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh -o onelens-prereq-check.sh
+
+# Make it executable
+chmod +x onelens-prereq-check.sh
+
+# Run it
+./onelens-prereq-check.sh
+```
+
+### Method 3: Run from local repository
+```bash
+# Navigate to the script directory
+cd scripts/prereq-check
+
+# Run the pre-requisite checker
+./onelens-prereq-check.sh
+```
+
 ## Prerequisites for Running This Script
 
 The script will automatically check for required tools before starting. If any tools are missing, it will exit with an error message listing what needs to be installed:
@@ -41,7 +71,11 @@ The script will automatically check for required tools before starting. If any t
 - Verifies kubectl is installed and configured
 - Checks cluster connectivity
 - Displays current cluster context and endpoint
-- Asks for user confirmation of the correct cluster
+- **Detects actual EKS cluster name and AWS region** using multiple methods:
+  - AWS CLI (if configured): Matches cluster endpoint to get real cluster name and region
+  - URL parsing: Extracts cluster ID and region from EKS endpoint URL
+  - Fallback: Uses kubectl context name
+- Displays comprehensive cluster information including name, region, context, and endpoint
 
 ### 4. Helm Version
 - Checks that Helm version 3.0.0 or later is installed
@@ -57,56 +91,15 @@ The script will automatically check for required tools before starting. If any t
 - Verifies EBS CSI driver node pods (DaemonSet) are running and ready
 - Provides detailed diagnostics and possible solutions for pod failures
 
-## Usage
+### Script Flow
 
-### Method 1: Run directly from the internet
-```bash
-# Interactive mode (will ask for confirmations)
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
-
-# Auto mode (no confirmations, assumes 'yes' to all prompts)
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash -s -- --auto
-```
-
-### Method 2: Download and run locally
-```bash
-# Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh -o onelens-prereq-check.sh
-
-# Make it executable
-chmod +x onelens-prereq-check.sh
-
-# Run it (interactive mode)
-./onelens-prereq-check.sh
-
-# Or run in auto mode (no confirmations)
-./onelens-prereq-check.sh --auto
-```
-
-### Method 3: Run from local repository
-```bash
-# Navigate to the script directory
-cd scripts/prereq-check
-
-# Run the pre-requisite checker (interactive mode)
-./onelens-prereq-check.sh
-
-# Or run in auto mode (no confirmations)
-./onelens-prereq-check.sh --auto
-```
-
-### Command Line Options
-
-- `--auto`, `--yes`, `-y`: Run in automatic mode without user prompts (assumes 'yes' to all confirmations)
-
-### Interactive Flow
-
-The script is interactive and will:
-1. Ask for confirmation before starting
+The script will:
+1. Run all prerequisite checks automatically
 2. Display progress for each check
 3. Show detailed information about your AWS account and cluster
-4. Ask for confirmation of critical details
-5. Provide a comprehensive summary at the end
+4. Collect all configuration details during checks
+5. Present a comprehensive summary of both passed and failed checks
+6. Provide clear next steps based on results
 
 ### Example Output
 
@@ -115,7 +108,10 @@ The script is interactive and will:
 OneLens Agent Pre-requisite Checker
 ================================================================
 
-Do you want to proceed with the pre-requisite check? (y/n): y
+This script will validate all prerequisites for OneLens Agent installation.
+Please ensure you have the necessary permissions to access AWS and Kubernetes resources.
+
+Running prerequisite checks...
 
 ================================================================
 1/6 - Internet Connectivity Check
@@ -123,22 +119,52 @@ Do you want to proceed with the pre-requisite check? (y/n): y
 
 Checking: internet connectivity
 PASS: Basic internet connectivity verified
-Checking: access to required URLs
-PASS: https://onelens-kubernetes-agent.s3.amazonaws.com accessible
-PASS: https://api-in.onelens.cloud accessible
-PASS: https://astuto-ai.github.io accessible
 ...
 
 ================================================================
 Pre-requisite Check Summary
 ================================================================
 
-PASS: All pre-requisites passed! (6/6)
-PASS: Your environment is ready for OneLens Agent installation.
+PREREQUISITE CHECK RESULTS:
+============================
+Status: 6/6 checks passed
 
-Next steps:
-1. Run the OneLens Agent installation script
-2. Follow the installation guide for configuration
+⚠️  PLEASE REVIEW THE DETECTED CONFIGURATION BELOW BEFORE PROCEEDING ⚠️
+
+PASSED CHECKS - DETECTED CONFIGURATION:
+=======================================
+
+AWS CONFIGURATION:
+------------------
+  AWS Account: 123456789012
+  AWS User/Role: arn:aws:iam::123456789012:user/admin
+
+KUBERNETES CLUSTER:
+-------------------
+  EKS Cluster Name: my-production-cluster
+  AWS Region: us-east-1
+  Kubectl Context: arn:aws:eks:us-east-1:123456789012:cluster/my-production-cluster
+  Cluster Endpoint: https://ABC123.gr7.us-east-1.eks.amazonaws.com
+
+TOOLS & VERSIONS:
+-----------------
+  Helm Version: 3.17.0
+  EKS Version: 1.29.3
+
+STORAGE:
+--------
+  EBS CSI Driver: Controller pods are healthy
+  EBS CSI Driver: Node pods are healthy
+
+PASS: All pre-requisites passed! Your environment is ready for OneLens Agent installation.
+
+IMPORTANT: Please carefully review the detected configuration sections above
+to ensure OneLens Agent will be installed on the correct AWS account and cluster.
+
+NEXT STEPS:
+1. Verify the AWS account, region, and cluster details above are correct
+2. Run the OneLens Agent installation script
+3. Follow the installation guide for configuration
 ```
 
 ### Example Output (Missing Tools)
@@ -154,24 +180,54 @@ Please install the missing tools and try again.
 Required tools: curl, ping, nslookup, jq, aws, kubectl, helm
 ```
 
-### Example Output (Failed Checks)
+### Example Output (Partial Failure)
 
-If some checks fail, the script will show a detailed summary:
+If some checks fail, the script shows both passed and failed checks:
 
 ```
 ================================================================
 Pre-requisite Check Summary
 ================================================================
 
-FAIL: Some pre-requisites failed! (3/6 passed)
+PREREQUISITE CHECK RESULTS:
+============================
+Status: 3/6 checks passed
 
-FAILED CHECKS SUMMARY:
-========================
+⚠️  PLEASE REVIEW THE DETECTED CONFIGURATION BELOW BEFORE PROCEEDING ⚠️
+
+PASSED CHECKS - DETECTED CONFIGURATION:
+=======================================
+
+AWS CONFIGURATION:
+------------------
+
+KUBERNETES CLUSTER:
+-------------------
+  EKS Cluster Name: my-production-cluster
+  AWS Region: us-east-1
+  Kubectl Context: arn:aws:eks:us-east-1:123456789012:cluster/my-production-cluster
+  Cluster Endpoint: https://ABC123.gr7.us-east-1.eks.amazonaws.com
+
+TOOLS & VERSIONS:
+-----------------
+  EKS Version: 1.29.3
+
+STORAGE:
+--------
+
+FAILED CHECKS:
+==============
 1. Internet Connectivity: Cannot access required URL: https://onelens-kubernetes-agent.s3.amazonaws.com
 2. AWS CLI: AWS CLI is not configured or credentials are invalid
 3. Helm: Version 2.14.3 is too old (minimum required: 3.0.0)
 
-FAIL: Please address the failed checks above before proceeding with installation.
+FAIL: Some pre-requisites failed! Please address the failed checks above before proceeding.
+
+NEXT STEPS:
+1. Review the failed checks above
+2. Fix the issues listed in the failed checks
+3. Re-run this script to verify fixes
+4. Proceed with OneLens Agent installation once all checks pass
 ```
 
 ### Example Output (EBS Driver Not Installed)
