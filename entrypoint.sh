@@ -25,7 +25,14 @@ if [ "$deployment_type" = "job" ]; then
   if [ -f "./$SCRIPT_NAME" ]; then
     echo "Using local $SCRIPT_NAME from image"
     chmod +x "./$SCRIPT_NAME"
-    exec "./$SCRIPT_NAME"
+    if  "./$SCRIPT_NAME"; then
+      echo "Script executed successfully"
+      exit 0
+    else
+      echo "Script execution failed"
+      exit 1
+    fi
+    
   else
     echo "Error: Local $SCRIPT_NAME not found in image"
     exit 1
@@ -72,6 +79,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
       if ./"$SCRIPT_NAME"; then
         # Report successful patching
         update_cluster_logs "Patching script executed successfully"
+        exit 0
       else
         # Report failed patching
         update_cluster_logs "Patching script execution failed"
