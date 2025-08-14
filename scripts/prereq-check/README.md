@@ -10,13 +10,13 @@ The OneLens Agent Pre-requisite Checker is an interactive script that validates 
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh | bash
 ```
 
 ### Method 2: Download and run locally
 ```bash
 # Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh -o onelens-prereq-check.sh
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-prereq-check/scripts/prereq-check/onelens-prereq-check.sh -o onelens-prereq-check.sh
 
 # Make it executable
 chmod +x onelens-prereq-check.sh
@@ -240,7 +240,7 @@ Checking: Checking EBS CSI driver installation...
 FAIL: EBS CSI driver is not installed
 
 To install the EBS CSI driver, run the following command:
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
 
 Replace 'my-cluster' with your actual cluster name and 'us-east-1' with your region
 Alternative: Use the script in scripts/ebs-driver-installation/
@@ -276,7 +276,7 @@ Alternative: Use the script in scripts/ebs-driver-installation/
 - **Problem**: EBS CSI driver is not installed or not working
 - **Solution**: The script will provide a direct installation command:
   ```bash
-  curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
+  curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1
   ```
   Replace `my-cluster` with your actual cluster name and `us-east-1` with your region
 - **Alternative**: Use the EBS driver installation script in `../ebs-driver-installation/`

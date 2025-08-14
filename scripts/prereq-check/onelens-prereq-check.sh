@@ -17,6 +17,7 @@ REQUIRED_CONTAINER_REGISTRIES=(
     "public.ecr.aws"
     "quay.io"
     "registry.k8s.io"
+    "pkg.dev"
 )
 
 MIN_HELM_VERSION="3.0.0"
@@ -78,7 +79,7 @@ check_command() {
 # Silent check for required tools before starting
 check_required_tools() {
     local missing_tools=()
-    local required_tools=("curl" "ping" "nslookup" "jq" "aws" "kubectl" "helm")
+    local required_tools=("curl" "ping" "nslookup" "aws" "kubectl" "helm")
     
     for tool in "${required_tools[@]}"; do
         if ! check_command "$tool"; then
@@ -91,7 +92,7 @@ check_required_tools() {
         printf '  - %s\n' "${missing_tools[@]}"
         echo ""
         echo "Please install the missing tools and try again."
-        echo "Required tools: curl, ping, nslookup, jq, aws, kubectl, helm"
+        echo "Required tools: curl, ping, nslookup, aws, kubectl, helm"
         exit 1
     fi
 }
@@ -153,19 +154,7 @@ get_eks_cluster_info() {
 
 # Internet connectivity checks
 check_internet_access() {
-    print_step "Checking internet connectivity..."
-    
-    # Check basic internet connectivity
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        print_error "No internet connectivity detected"
-        add_failed_check "Internet Connectivity: No basic internet access (ping to 8.8.8.8 failed)"
-        return 1
-    fi
-    
-    print_success "Basic internet connectivity verified"
-    
-    # Check required URLs
-    print_step "Checking access to required URLs..."
+    print_step "Checking connectivity and access to required URLs..."
     local has_url_failures=false
     
     for url in "${REQUIRED_URLS[@]}"; do
@@ -219,11 +208,10 @@ check_aws_cli() {
     fi
     
     # Get AWS account information
-    local aws_info
-    aws_info=$(aws sts get-caller-identity --output json)
-    local account_id=$(echo "$aws_info" | jq -r '.Account')
-    local user_arn=$(echo "$aws_info" | jq -r '.Arn')
-    local user_id=$(echo "$aws_info" | jq -r '.UserId')
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text)
+    user_arn=$(aws sts get-caller-identity --query 'Arn' --output text)
+    user_id=$(aws sts get-caller-identity --query 'UserId' --output text)
+
     
     print_success "AWS CLI is configured"
     echo "AWS Account Details:"
@@ -313,7 +301,12 @@ check_eks_version() {
     print_step "Checking EKS cluster version..."
     
     local k8s_version
-    k8s_version=$(kubectl version --output=json | jq -r '.serverVersion.gitVersion' | sed 's/v//')
+    k8s_version=$(
+        kubectl version -o json | \
+            grep -o '"gitVersion": *"v[^"]*"' | \
+            cut -d'"' -f4 | \
+            sed 's/^v//'
+    )
     
     if [ -z "$k8s_version" ] || [ "$k8s_version" = "null" ]; then
         print_error "Could not determine Kubernetes version"
@@ -346,7 +339,7 @@ check_ebs_driver() {
         print_error "EBS CSI driver is not installed"
         echo ""
         echo "To install the EBS CSI driver, run the following command:"
-        echo "curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.2.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1"
+        echo "curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-ebs-driver-installer/scripts/ebs-driver-installation/install-ebs-csi-driver.sh | bash -s -- my-cluster us-east-1"
         echo ""
         echo "Replace 'my-cluster' with your actual cluster name and 'us-east-1' with your region"
         echo "Alternative: Use the script in scripts/ebs-driver-installation/"
