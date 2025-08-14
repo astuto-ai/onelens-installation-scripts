@@ -27,6 +27,7 @@ if [ "$deployment_type" = "job" ]; then
     chmod +x "./$SCRIPT_NAME"
     if ./"$SCRIPT_NAME"; then
       update_cluster_logs "Installation script executed successfully"
+      exit 0
     else
       update_cluster_logs "Installation script execution failed"
       exit 1
@@ -99,3 +100,6 @@ else
   echo "Valid values are 'job' or 'cronjob'"
   exit 1
 fi
+
+# Ensure script exits if we reach here (shouldn't happen)
+exit 0
