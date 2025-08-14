@@ -614,15 +614,6 @@ prometheus:
   kube-state-metrics:
     enabled: true
 
-  prometheus-node-exporter:
-    enabled: true
-
-    rbac:
-      pspEnabled: false
-
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-
   prometheus-pushgateway:
     enabled: true
 
@@ -631,8 +622,6 @@ prometheus:
 
   alertmanager:
     enabled: false
-
-
 
   kube-state-metrics:
     enabled: true
@@ -1042,15 +1031,6 @@ prometheus:
     extraManifests: []
 
     lifecycle: {}
-
-
-
-
-
-
-
-
-
 
   prometheus-node-exporter:
     enabled: false
