@@ -26,9 +26,9 @@ if [ "$deployment_type" = "job" ]; then
     echo "Using local $SCRIPT_NAME from image"
     chmod +x "./$SCRIPT_NAME"
     if ./"$SCRIPT_NAME"; then
-      update_cluster_logs "Patching script executed successfully"
+      update_cluster_logs "Installation script executed successfully"
     else
-      update_cluster_logs "Patching script execution failed"
+      update_cluster_logs "Installation script execution failed"
       exit 1
     fi
   else
