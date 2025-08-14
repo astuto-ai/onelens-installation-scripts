@@ -25,7 +25,12 @@ if [ "$deployment_type" = "job" ]; then
   if [ -f "./$SCRIPT_NAME" ]; then
     echo "Using local $SCRIPT_NAME from image"
     chmod +x "./$SCRIPT_NAME"
-    exec "./$SCRIPT_NAME"
+    if ./"$SCRIPT_NAME"; then
+      update_cluster_logs "Patching script executed successfully"
+    else
+      update_cluster_logs "Patching script execution failed"
+      exit 1
+    fi
   else
     echo "Error: Local $SCRIPT_NAME not found in image"
     exit 1
