@@ -3,7 +3,7 @@ onelens-agent:
 
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.1.0
+    tag: v1.3.0
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"
@@ -18,10 +18,21 @@ onelens-agent:
     enabled: true  
     name: onelens-sc
     provisioner: ebs.csi.aws.com
-    reclaimPolicy: Retain
+    reclaimPolicy: Delete
     volumeBindingMode: WaitForFirstConsumer
     volumeType: gp3
     allowVolumeExpansion: true
+    encryption:
+      enabled: false
+      kmsKeyId: ""
+    volumeTags:
+      enabled: true
+      tags:
+        Application_Name: "OnelensAgent"
+        Application_Owner: "Astuto"
+    labels:
+      Application_Name: "OnelensAgent"
+      Application_Owner: "Astuto"
 
   resources:
     requests:
