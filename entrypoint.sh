@@ -46,7 +46,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
   echo "Fetching $SCRIPT_NAME from OneLens API..."
   
   # Call the API to get the patching script
-  API_RESPONSE=$(curl --location --request GET 'https://api-in.onelens.cloud/v1/kubernetes/patching-script' \
+  API_RESPONSE=$(curl --location --request GET 'https://api-in.onelens.cloud/v1/kubernetes/cluster-version' \
     --header 'Content-Type: application/json' \
     --data '{
       "registration_id": "'"$REGISTRATION_ID"'",
@@ -58,6 +58,12 @@ elif [ "$deployment_type" = "cronjob" ]; then
   if [ $? -eq 0 ]; then
     # first check {"data":{"patching_enabled":true
     patching_enabled=$(echo "$API_RESPONSE" | jq -r '.data.patching_enabled')
+    current_version=$(echo "$API_RESPONSE" | jq -r '.data.current_version')
+    patching_version=$(echo "$API_RESPONSE" | jq -r '.data.patching_version')
+
+    echo "current_version: $current_version"
+    echo "patching_version: $patching_version"
+
     echo "Patching enabled: $patching_enabled"
     if [ "$patching_enabled" == "true" ]; then
       echo "Patching is enabled"
@@ -68,18 +74,40 @@ elif [ "$deployment_type" = "cronjob" ]; then
       exit 0
     fi
 
+    API_RESPONSE_SCRIPT=$(curl --location --request GET 'https://api-in.onelens.cloud/v1/kubernetes/patching-script' \
+    --header 'Content-Type: application/json' \
+    --data '{
+      "registration_id": "'"$REGISTRATION_ID"'",
+      "cluster_token": "'"$CLUSTER_TOKEN"'"
+    }')
+
+    echo "API_RESPONSE_SCRIPT: $API_RESPONSE_SCRIPT"
     # Extract script content from API response and save to file
-    echo "$API_RESPONSE" | jq -e -r '.data.script_content' > "./$SCRIPT_NAME"
+    echo "$API_RESPONSE_SCRIPT" | jq -e -r '.data.script_content' > "./$SCRIPT_NAME"
     
     if [ $? -eq 0 ]; then
       echo "Successfully downloaded $SCRIPT_NAME from API"
       chmod +x "./$SCRIPT_NAME"
       
       # Execute the patching script and capture the result
-      if ./"$SCRIPT_NAME"; then
-        # Report successful patching
-        update_cluster_logs "Patching script executed successfully"
-        exit 0
+        if ./"$SCRIPT_NAME"; then
+          # Report successful patching
+          current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl --location --request PUT 'https://api-in.onelens.cloud/v1/kubernetes/cluster-version' \
+          --header 'Content-Type: application/json' \
+          --data '{
+              "registration_id": "'"$REGISTRATION_ID"'",
+              "cluster_token": "'"$CLUSTER_TOKEN"'",
+              "update_data": {
+                  "logs": "Patching success",
+                  "patching_enabled": false,
+                  "prev_version": "'"$current_version"'",
+                  "current_version": "'"$patching_version"'",
+                  "patch_status": "SUCCESS",
+                  "last_patched": "'"$current_timestamp"'"
+              }
+          }'
+          exit 0
       else
         # Report failed patching
         update_cluster_logs "Patching script execution failed"
