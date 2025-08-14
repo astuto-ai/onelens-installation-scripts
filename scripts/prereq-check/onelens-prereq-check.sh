@@ -17,6 +17,7 @@ REQUIRED_CONTAINER_REGISTRIES=(
     "public.ecr.aws"
     "quay.io"
     "registry.k8s.io"
+    "pkg.dev"
 )
 
 MIN_HELM_VERSION="3.0.0"
@@ -153,19 +154,7 @@ get_eks_cluster_info() {
 
 # Internet connectivity checks
 check_internet_access() {
-    print_step "Checking internet connectivity..."
-    
-    # Check basic internet connectivity
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        print_error "No internet connectivity detected"
-        add_failed_check "Internet Connectivity: No basic internet access (ping to 8.8.8.8 failed)"
-        return 1
-    fi
-    
-    print_success "Basic internet connectivity verified"
-    
-    # Check required URLs
-    print_step "Checking access to required URLs..."
+    print_step "Checking connectivity and access to required URLs..."
     local has_url_failures=false
     
     for url in "${REQUIRED_URLS[@]}"; do
