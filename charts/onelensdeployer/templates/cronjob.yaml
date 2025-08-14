@@ -32,5 +32,16 @@ spec:
                 - name: {{ $key }}
                   value: {{ $value | quote }}
                 {{- end }}
+                - name: REGISTRATION_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: onelens-agent-secrets
+                      key: REGISTRATION_ID
+                - name: CLUSTER_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: onelens-agent-secrets
+                      key: CLUSTER_TOKEN
+                
           restartPolicy: {{ .Values.cronjob.restartPolicy }}
 {{- end }}
