@@ -14,6 +14,9 @@ RUN apk update && apk add --no-cache \
     aws-cli && \
     echo "Dependencies installed successful"
 
+
+COPY install.sh /install.sh
+COPY globalvalues.yaml /globalvalues.yaml
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
