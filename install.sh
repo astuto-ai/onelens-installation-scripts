@@ -322,18 +322,16 @@ export NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:=}"
 export NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:=}"
 export IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:=}"
 
-URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/refs/heads/master/globalvalues.yaml"
 FILE="globalvalues.yaml"
 
-echo "Downloading $FILE from $URL..."
+echo "using $FILE"
 
-# Use -f to fail silently on server errors and -O to save with original name
-if ! curl -f -O "$URL"; then
-  echo "❌ Failed to download $FILE from $URL"
-  exit 1
+if [ -f "$FILE" ]; then
+    echo "File $FILE exists"
+else
+    echo "File $FILE does not exist"
+    exit 1
 fi
-
-echo "✅ Downloaded $FILE successfully."
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=1.1.0}\" \

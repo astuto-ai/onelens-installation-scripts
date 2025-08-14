@@ -16,6 +16,7 @@ RUN apk update && apk add --no-cache \
 
 
 COPY install.sh /install.sh
+COPY globalvalues.yaml /globalvalues.yaml
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
