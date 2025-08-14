@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "Running main installation steps here..."
 
-set -ex
+set -e
 trap -p
 
 # Phase 1: Logging Setup
@@ -30,12 +30,12 @@ send_logs() {
         }"
 }
 
-# Ensure send_logs runs before exit
-trap 'send_logs; exit 1' ERR EXIT
+# Ensure we send logs on error, and preserve the original exit code
+trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.1.0}"
-: "${IMAGE_TAG:=v1.1.0}"
+: "${RELEASE_VERSION:=1.3.0}"
+: "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
@@ -74,45 +74,45 @@ sleep 2
 # Phase 4: Prerequisite Checks
 echo "Step 0: Checking prerequisites..."
 
-# Define versions
-HELM_VERSION="v3.13.2"
-KUBECTL_VERSION="v1.28.2"
+# # Define versions
+# HELM_VERSION="v3.13.2"
+# KUBECTL_VERSION="v1.28.2"
 
-# Detect architecture
-ARCH=$(uname -m)
+# # Detect architecture
+# ARCH=$(uname -m)
 
-if [[ "$ARCH" == "x86_64" ]]; then
-    ARCH_TYPE="amd64"
-elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-    ARCH_TYPE="arm64"
-else
-    echo "Unsupported architecture: $ARCH"
-    exit 1
-fi
+# if [[ "$ARCH" == "x86_64" ]]; then
+#     ARCH_TYPE="amd64"
+# elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+#     ARCH_TYPE="arm64"
+# else
+#     echo "Unsupported architecture: $ARCH"
+#     exit 1
+# fi
 
-echo "Detected architecture: $ARCH_TYPE"
+# echo "Detected architecture: $ARCH_TYPE"
 
-# Phase 5: Install Helm
-echo "Installing Helm for $ARCH_TYPE..."
-curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
-    tar -xzvf helm.tar.gz && \
-    mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
-    rm -rf linux-${ARCH_TYPE} helm.tar.gz
+# # Phase 5: Install Helm
+# echo "Installing Helm for $ARCH_TYPE..."
+# curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
+#     tar -xzvf helm.tar.gz && \
+#     mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
+#     rm -rf linux-${ARCH_TYPE} helm.tar.gz
 
-helm version
+# helm version
 
-# Phase 6: Install kubectl
-echo "Installing kubectl for $ARCH_TYPE..."
-curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+# # Phase 6: Install kubectl
+# echo "Installing kubectl for $ARCH_TYPE..."
+# curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
+#     chmod +x kubectl && \
+#     mv kubectl /usr/local/bin/kubectl
 
-kubectl version --client
+# kubectl version --client
 
-if ! command -v kubectl &> /dev/null; then
-    echo "Error: kubectl not found. Please install kubectl."
-    exit 1
-fi
+# if ! command -v kubectl &> /dev/null; then
+#     echo "Error: kubectl not found. Please install kubectl."
+#     exit 1
+# fi
 
 # Phase 7: Namespace Validation
 if kubectl get namespace onelens-agent &> /dev/null; then
@@ -167,6 +167,7 @@ fi
 echo "Total number of pods in the cluster: $TOTAL_PODS"
 
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
+
 if [ "$TOTAL_PODS" -lt 100 ]; then
     echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
@@ -299,21 +300,6 @@ check_var() {
 check_var CLUSTER_TOKEN
 check_var REGISTRATION_ID
 
-# # Check if an older version of onelens-agent is already running
-# if helm list -n onelens-agent | grep -q "onelens-agent"; then
-#     echo "An older version of onelens-agent is already running."
-#     CURRENT_VERSION=$(helm get values onelens-agent -n onelens-agent -o json | jq '.["onelens-agent"].image.tag // "unknown"')
-#     echo "Current version of onelens-agent: $CURRENT_VERSION"
-
-#     if [ "$CURRENT_VERSION" != "$IMAGE_TAG" ]; then
-#         echo "Patching onelens-agent to version $IMAGE_TAG..."
-#     else
-#         echo "onelens-agent is already at the desired version ($IMAGE_TAG)."
-#         exit 1
-#     fi
-# else
-#     echo "No existing onelens-agent release found. Proceeding with installation."
-# fi
 export TOLERATION_KEY="${TOLERATION_KEY:=}"
 export TOLERATION_VALUE="${TOLERATION_VALUE:=}"
 export TOLERATION_OPERATOR="${TOLERATION_OPERATOR:=}"
@@ -321,6 +307,12 @@ export TOLERATION_EFFECT="${TOLERATION_EFFECT:=}"
 export NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:=}"
 export NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:=}"
 export IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:=}"
+
+## EBS Driver custom tag and custom encryption
+export EBS_TAGS_ENABLED="${EBS_TAGS_ENABLED:=false}"
+export EBS_TAGS="${EBS_TAGS:=}"
+export EBS_ENCRYPTION_ENABLED="${EBS_ENCRYPTION_ENABLED:=false}"
+export EBS_ENCRYPTION_KEY="${EBS_ENCRYPTION_KEY:=}"
 
 FILE="globalvalues.yaml"
 
@@ -334,7 +326,7 @@ else
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.1.0}\" \
+    --version \"\${RELEASE_VERSION:=1.3.0}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -400,6 +392,39 @@ if [[ -n "$IMAGE_PULL_SECRET" ]]; then
   done
 fi
 
+# Append custom EBS tags only if set
+if [[ "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TAGS" ]]; then
+  echo "Processing EBS tags: $EBS_TAGS"
+  # Enable volume tags
+  CMD+=" --set onelens-agent.storageClass.volumeTags.enabled=true"
+  
+  # Parse comma-separated key=value pairs
+  IFS=',' read -ra TAG_PAIRS <<< "$EBS_TAGS"
+  for tag_pair in "${TAG_PAIRS[@]}"; do
+    # Trim whitespace
+    tag_pair=$(echo "$tag_pair" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    # Split on first '=' to handle values that might contain '='
+    tag_key=$(echo "$tag_pair" | cut -d'=' -f1)
+    tag_value=$(echo "$tag_pair" | cut -d'=' -f2-)
+    
+    if [[ -n "$tag_key" && -n "$tag_value" ]]; then
+      echo "Adding EBS tag: $tag_key=$tag_value"
+      CMD+=" --set onelens-agent.storageClass.volumeTags.tags.$tag_key=\"$tag_value\""
+    else
+      echo "Warning: Skipping invalid tag format: $tag_pair (expected key=value)"
+    fi
+  done
+fi
+
+# Append encryption only if set
+if [[ "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
+  CMD+=" --set onelens-agent.storageClass.encryption.enabled=true"
+  if [[ -n "$EBS_ENCRYPTION_KEY" ]]; then
+    CMD+=" --set onelens-agent.storageClass.encryption.kmsKeyId=\"$EBS_ENCRYPTION_KEY\""
+  fi
+fi
+
 # Final execution
 CMD+=" --wait || { echo \"Error: Helm deployment failed.\"; exit 1; }"
 
@@ -426,7 +451,8 @@ curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
     }"
 echo "To verify deployment: kubectl get pods -n onelens-agent"
 sleep 60
-kubectl delete job onelensdeployerjob -n onelens-agent
-kubectl delete clusterrole onelensdeployerjob-clusterrole
-kubectl delete clusterrolebinding onelensdeployerjob-clusterrolebinding
-kubectl delete sa onelensdeployerjob-sa
+kubectl delete job onelensdeployerjob -n onelens-agent || true
+kubectl delete clusterrole onelensdeployerjob-clusterrole || true
+kubectl delete clusterrolebinding onelensdeployerjob-clusterrolebinding || true
+kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
+

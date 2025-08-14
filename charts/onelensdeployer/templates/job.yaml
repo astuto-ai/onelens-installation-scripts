@@ -11,7 +11,7 @@ spec:
       serviceAccountName: {{ .Values.job.serviceAccount.name }}
       containers:
         - name: {{ .Values.job.name }}
-          image: {{ .Values.job.image }}:{{ .Values.job.image.tag }}
+          image: {{ .Values.job.image }}:{{ .Values.job.imageTag }}
           imagePullPolicy: {{ .Values.job.imagePullPolicy }}
           env:
             {{- range $key, $value := .Values.job.env }}

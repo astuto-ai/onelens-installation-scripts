@@ -25,7 +25,7 @@ spec:
           {{- end }}
           containers:
             - name: {{ .Values.cronjob.name }}
-              image: {{ .Values.cronjob.image }}:{{ .Values.cronjob.image.tag }}
+              image: {{ .Values.cronjob.image }}:{{ .Values.cronjob.imageTag }}
               imagePullPolicy: {{ .Values.cronjob.imagePullPolicy }}
               env:
                 {{- range $key, $value := .Values.cronjob.env }}
