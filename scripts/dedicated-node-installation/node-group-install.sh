@@ -29,7 +29,11 @@ TRUST_POLICY=$(cat <<EOF
 EOF
 )
 
+echo "Creating role $ROLE_NAME"
+
 aws iam create-role --role-name "$ROLE_NAME" --assume-role-policy-document "$TRUST_POLICY" || echo "Role may already exist"
+
+echo "Attaching policies to role $ROLE_NAME"
 
 # Attach AWS managed policies
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
@@ -41,7 +45,6 @@ ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$ROLE_NAME"
 
 # Fetch cluster VPC config
 VPC_ID=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.vpcId" --output text)
-SG_ID=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.securityGroupIds[0]" --output text)
 SUBNET_IDS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.subnetIds" --output text)
 
 # Pick a unique public subnet if available, else fallback to first subnet
@@ -58,6 +61,8 @@ if [ -z "$SELECTED_SUBNET" ]; then
   echo "No public subnet found, using first available subnet"
   SELECTED_SUBNET=$(echo $SUBNET_IDS | awk '{print $1}')
 fi
+
+echo "Using subnet $SELECTED_SUBNET"
 
 # Fetch number of pods in the cluster automatically
 NUM_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
@@ -77,7 +82,9 @@ else
   exit 1
 fi
 
-# Create nodegroup in single AZ
+echo "Using instance type $INSTANCE_TYPE"
+
+# Create nodegroup in single AZ using custom SG
 aws eks create-nodegroup \
   --cluster-name "$CLUSTER_NAME" \
   --nodegroup-name "$NODEGROUP_NAME" \
@@ -87,6 +94,7 @@ aws eks create-nodegroup \
   --scaling-config minSize=1,maxSize=1,desiredSize=1 \
   --taints '[{"key":"onelens-workload","value":"agent","effect":"NO_SCHEDULE"}]' \
   --labels '{"onelens-workload":"agent"}' \
-  --region "$REGION"
+  --region "$REGION" \
+  --nodegroup-name "$NODEGROUP_NAME" 
 
-echo "Nodegroup $NODEGROUP_NAME creation started in subnet $SELECTED_SUBNET with instance type $INSTANCE_TYPE."
+echo "Nodegroup $NODEGROUP_NAME creation started in subnet $SELECTED_SUBNET with instance type $INSTANCE_TYPE"
