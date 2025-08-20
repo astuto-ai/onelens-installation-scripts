@@ -44,7 +44,6 @@ aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "arn:aws:iam::a
 ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/$ROLE_NAME"
 
 # Fetch cluster VPC config
-VPC_ID=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.vpcId" --output text)
 SUBNET_IDS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.subnetIds" --output text)
 
 # Pick a unique public subnet if available, else fallback to first subnet
