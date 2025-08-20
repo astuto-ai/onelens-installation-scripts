@@ -31,7 +31,8 @@ send_logs() {
 }
 
 # Ensure we send logs on error, and preserve the original exit code
-trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
+# trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
+
 
 # Phase 2: Environment Variable Setup
 : "${RELEASE_VERSION:=1.3.0}"
@@ -49,19 +50,21 @@ else
 fi
 
 # Phase 3: API Registration
-response=$(curl -X POST \
-  "$API_BASE_URL/v1/kubernetes/registration" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"registration_token\": \"$REGISTRATION_TOKEN\",
-    \"cluster_name\": \"$CLUSTER_NAME\",
-    \"account_id\": \"$ACCOUNT\",
-    \"region\": \"$REGION\",
-    \"agent_version\": \"$RELEASE_VERSION\"
-  }")
+# response=$(curl -X POST \
+#   "$API_BASE_URL/v1/kubernetes/registration" \
+#   -H "Content-Type: application/json" \
+#   -d "{
+#     \"registration_token\": \"$REGISTRATION_TOKEN\",
+#     \"cluster_name\": \"$CLUSTER_NAME\",
+#     \"account_id\": \"$ACCOUNT\",
+#     \"region\": \"$REGION\",
+#     \"agent_version\": \"$RELEASE_VERSION\"
+#   }")
 
-REGISTRATION_ID=$(echo $response | jq -r '.data.registration_id')
-CLUSTER_TOKEN=$(echo $response | jq -r '.data.cluster_token')
+# REGISTRATION_ID=$(echo $response | jq -r '.data.registration_id')
+REGISTRATION_ID="d3e1f212-1242-4259-ba8a-d4d328a29933"
+# CLUSTER_TOKEN=$(echo $response | jq -r '.data.cluster_token')
+CLUSTER_TOKEN="19ff67539ce936f4ffc369b5076158d795ff0e228b9ad54dd72e21b5a68d0b2f"
 
 if [[ -n "$REGISTRATION_ID" && "$REGISTRATION_ID" != "null" && -n "$CLUSTER_TOKEN" && "$CLUSTER_TOKEN" != "null" ]]; then
     echo "Both REGISTRATION_ID and CLUSTER_TOKEN have values."
@@ -93,26 +96,26 @@ fi
 echo "Detected architecture: $ARCH_TYPE"
 
 # Phase 5: Install Helm
-echo "Installing Helm for $ARCH_TYPE..."
-curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
-    tar -xzvf helm.tar.gz && \
-    mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
-    rm -rf linux-${ARCH_TYPE} helm.tar.gz
+# echo "Installing Helm for $ARCH_TYPE..."
+# curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
+#     tar -xzvf helm.tar.gz && \
+#     mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
+#     rm -rf linux-${ARCH_TYPE} helm.tar.gz
 
-helm version
+# helm version
 
-# Phase 6: Install kubectl
-echo "Installing kubectl for $ARCH_TYPE..."
-curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+# # Phase 6: Install kubectl
+# echo "Installing kubectl for $ARCH_TYPE..."
+# curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
+#     chmod +x kubectl && \
+#     mv kubectl /usr/local/bin/kubectl
 
-kubectl version --client
+# kubectl version --client
 
-if ! command -v kubectl &> /dev/null; then
-    echo "Error: kubectl not found. Please install kubectl."
-    exit 1
-fi
+# if ! command -v kubectl &> /dev/null; then
+#     echo "Error: kubectl not found. Please install kubectl."
+#     exit 1
+# fi
 
 # Phase 7: Namespace Validation
 if kubectl get namespace onelens-agent &> /dev/null; then
@@ -300,10 +303,10 @@ check_var() {
 check_var CLUSTER_TOKEN
 check_var REGISTRATION_ID
 
-export TOLERATION_KEY="${TOLERATION_KEY:=}"
-export TOLERATION_VALUE="${TOLERATION_VALUE:=}"
-export TOLERATION_OPERATOR="${TOLERATION_OPERATOR:=}"
-export TOLERATION_EFFECT="${TOLERATION_EFFECT:=}"
+export TOLERATION_KEY="onelens-workload"
+export TOLERATION_VALUE="agent"
+export TOLERATION_OPERATOR="Exists"
+export TOLERATION_EFFECT="NO_SCHEDULE"
 export NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:=}"
 export NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:=}"
 export IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:=}"
@@ -442,13 +445,13 @@ echo "Installation complete."
 
 echo " Printing $REGISTRATION_ID"
 echo "Printing $CLUSTER_TOKEN"
-curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"registration_id\": \"$REGISTRATION_ID\",
-        \"cluster_token\": \"$CLUSTER_TOKEN\",
-        \"status\": \"CONNECTED\"
-    }"
+# curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
+#     -H "Content-Type: application/json" \
+#     -d "{
+#         \"registration_id\": \"$REGISTRATION_ID\",
+#         \"cluster_token\": \"$CLUSTER_TOKEN\",
+#         \"status\": \"CONNECTED\"
+#     }"
 echo "To verify deployment: kubectl get pods -n onelens-agent"
 sleep 60
 kubectl delete job onelensdeployerjob -n onelens-agent || true

@@ -64,18 +64,18 @@ fi
 echo "Using subnet $SELECTED_SUBNET"
 
 # Fetch number of pods in the cluster automatically
-NUM_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+NUM_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running --no-headers | wc -l)
 echo "Detected $NUM_PODS running pods"
 
 # Determine instance type based on pod count
 if [ "$NUM_PODS" -lt 100 ]; then
-  INSTANCE_TYPE="t2.small"
+  INSTANCE_TYPE="t4g.small"
 elif [ "$NUM_PODS" -lt 500 ]; then
-  INSTANCE_TYPE="t2.medium"
+  INSTANCE_TYPE="t4g.medium"
 elif [ "$NUM_PODS" -lt 1500 ]; then
-  INSTANCE_TYPE="t2.large"
+  INSTANCE_TYPE="t4g.large"
 elif [ "$NUM_PODS" -le 2000 ]; then
-  INSTANCE_TYPE="t2.xlarge"
+  INSTANCE_TYPE="t4g.xlarge"
 else
   echo "Pod count too high, adjust instance selection logic"
   exit 1
@@ -94,6 +94,6 @@ aws eks create-nodegroup \
   --taints '[{"key":"onelens-workload","value":"agent","effect":"NO_SCHEDULE"}]' \
   --labels '{"onelens-workload":"agent"}' \
   --region "$REGION" \
-  --nodegroup-name "$NODEGROUP_NAME" 
+  --ami-type AL2023_ARM_64_STANDARD 
 
 echo "Nodegroup $NODEGROUP_NAME creation started in subnet $SELECTED_SUBNET with instance type $INSTANCE_TYPE"
