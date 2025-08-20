@@ -8,11 +8,11 @@ fi
 
 CLUSTER_NAME=$1
 REGION=$2
-NODEGROUP_NAME="onelens-nodegroup-single-az"
+NODEGROUP_NAME="onelens-nodegroup-single-az1"
 
 # Fetch AWS account ID dynamically
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-ROLE_NAME="Onelens-AmazonEKSNodegroupRole"
+ROLE_NAME="Onelens-AmazonEKSNodegroupRole-$CLUSTER_NAME"
 
 # Create IAM role with trust policy
 TRUST_POLICY=$(cat <<EOF
