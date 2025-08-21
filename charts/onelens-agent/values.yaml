@@ -36,11 +36,6 @@ onelens-agent:
     limits:
       cpu: "500m"
       memory: "256Mi"
-  tolerations:
-    - key: "onelens-workload"
-      operator: "Equal"
-      value: "agent"
-      effect: "NoSchedule"
   # CronJob configuration
   cronJob:
     cronSchedule: "0 * * * *" # Run once an hour at the top of the hour
@@ -51,11 +46,11 @@ onelens-agent:
     restartPolicy: "Never" # Restart the job on failure
     healthCheck: false # Set to true to enable health check for cronjob pod
     # Tolerations allow the agent to be scheduled on nodes with matching taints
-    tolerations: 
-    - key: "onelens-workload"
-      operator: "Equal"
-      value: "agent"
-      effect: "NoSchedule"
+    tolerations: []
+    # - key: "key"
+    #   operator: "Equal"
+    #   value: "value"
+    #   effect: "NoSchedule"
     nodeSelector: {}
     # kubernetes.io/os: linux
   # Environment variables
