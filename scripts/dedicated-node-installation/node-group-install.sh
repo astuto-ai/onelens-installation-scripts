@@ -64,7 +64,7 @@ fi
 echo "Using subnet $SELECTED_SUBNET"
 
 # Fetch number of pods in the cluster automatically
-NUM_PODS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running --no-headers | wc -l)
+NUM_PODS=$(kubectl get pods --all-namespaces --no-headers | wc -l)
 echo "Detected $NUM_PODS running pods"
 
 # Determine instance type based on pod count
