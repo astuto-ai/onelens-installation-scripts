@@ -29,9 +29,9 @@ We follow [Semantic Versioning](https://semver.org/) (SemVer):
 
 2. **Create and Push Version Tag**
    ```bash
-   # For version 1.3.0
-   git tag v1.3.0
-   git push origin v1.3.0
+   # For version 1.4.0
+   git tag v1.4.0
+   git push origin v1.4.0
    ```
 
 3. **Automatic Process**
@@ -47,7 +47,7 @@ We follow [Semantic Versioning](https://semver.org/) (SemVer):
 
 2. **Run Workflow**
    - Click "Run workflow"
-   - Enter version number (e.g., `1.3.0`)
+   - Enter version number (e.g., `1.4.0`)
    - Click "Run workflow"
 
 ## 📋 What Happens During Release

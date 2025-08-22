@@ -2,7 +2,7 @@ onelens-agent:
   enabled: true
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.3.0
+    tag: v1.4.0
     pullPolicy: IfNotPresent
   nameOverride: "onelens-agent"
   fullnameOverride: "onelens-agent"
