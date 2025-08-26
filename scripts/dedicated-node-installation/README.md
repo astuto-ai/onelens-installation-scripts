@@ -15,22 +15,10 @@ The OneLens Dedicated Node Installation creates EKS nodegroups with specific con
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh | bash -s -- my-cluster us-east-1
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
-### Method 2: Download and run locally
-```bash
-# Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh -o node-group-install.sh
-
-# Make it executable
-chmod +x node-group-install.sh
-
-# Run it
-./node-group-install.sh my-cluster us-east-1
-```
-
-### Method 3: Deploy CloudFormation template manually via AWS Console
+### Method 2: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
 curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
@@ -43,6 +31,7 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 #    - SubnetId: your-subnet-id
 #    - InstanceType: t4g.small (or choose based on pod count)
 #    - NodeGroupName: your-nodegroup-name
+#    - AMIType: your-ami
 # 4. Review and create stack
 ```
 
