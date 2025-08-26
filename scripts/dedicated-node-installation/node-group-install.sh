@@ -263,20 +263,20 @@ helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
 helm repo update
 
 helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=$CLUSTER_NAME \
-  --set job.env.REGION=$REGION \
-  --set-string job.env.ACCOUNT=$ACCOUNT_ID \
-  --set job.env.REGISTRATION_TOKEN=<registration-token> \
-  --set job.env.NODE_SELECTOR_KEY=onelens-workload \
-  --set job.env.NODE_SELECTOR_VALUE=agent \
-  --set job.env.TOLERATION_KEY=onelens-workload \
-  --set job.env.TOLERATION_VALUE=agent \
-  --set job.env.TOLERATION_OPERATOR=Equal \
-  --set job.env.TOLERATION_EFFECT=NoSchedule \
-  --set job.nodeSelector.onelens-workload=agent \
-  --set 'job.tolerations[0].key=onelens-workload' \
-  --set 'job.tolerations[0].operator=Equal' \
-  --set 'job.tolerations[0].value=agent' \
+  --set job.env.CLUSTER_NAME=$CLUSTER_NAME \\
+  --set job.env.REGION=$REGION \\
+  --set-string job.env.ACCOUNT=$ACCOUNT_ID \\
+  --set job.env.REGISTRATION_TOKEN=<registration-token>   
+  --set job.env.NODE_SELECTOR_KEY=onelens-workload \\
+  --set job.env.NODE_SELECTOR_VALUE=agent \\
+  --set job.env.TOLERATION_KEY=onelens-workload \\
+  --set job.env.TOLERATION_VALUE=agent \\
+  --set job.env.TOLERATION_OPERATOR=Equal \\
+  --set job.env.TOLERATION_EFFECT=NoSchedule \\
+  --set job.nodeSelector.onelens-workload=agent \\
+  --set 'job.tolerations[0].key=onelens-workload' \\
+  --set 'job.tolerations[0].operator=Equal' \\
+  --set 'job.tolerations[0].value=agent' \\
   --set 'job.tolerations[0].effect=NoSchedule'
 EOF
 echo "======================================================================"
