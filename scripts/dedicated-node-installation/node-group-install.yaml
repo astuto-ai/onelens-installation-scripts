@@ -13,13 +13,8 @@ Parameters:
   InstanceType:
     Type: String
     Default: t4g.small
-    AllowedValues:
-      - t4g.small
-      - t4g.medium
-      - t4g.large
-      - t4g.xlarge
     Description: |
-      EC2 instance type for the nodegroup. Choose based on Pod count:
+      EC2 Recommended instance type for the nodegroup. Choose based on Pod count:
         - t4g.small   → < 100 pods
         - t4g.medium  → 100–499 pods
         - t4g.large   → 500–1499 pods
@@ -27,14 +22,19 @@ Parameters:
 
   NodeGroupName:
     Type: String
-    Default: onelens-nodegroup-single-az1
+    Default: onelens-nodegroup
     Description: Name for the nodegroup
+
+  AMIType:
+    Type: String
+    Default: AL2023_ARM_64_STANDARD
+    Description: AMI type for the nodegroup
 
 Resources:
   EksNodeRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub Onelens-AmazonEKSNodegroupRole-${ClusterName}
+      RoleName: !Sub Onelens-${ClusterName}-${AWS::Region}
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -62,7 +62,7 @@ Resources:
         MinSize: 1
         MaxSize: 1
         DesiredSize: 1
-      AmiType: AL2023_ARM_64_STANDARD
+      AmiType: !Ref AMIType
       Taints:
         - Key: onelens-workload
           Value: agent
