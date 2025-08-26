@@ -253,3 +253,30 @@ echo "    ID:   $SELECTED_SUBNET_ID"
 echo "    Name: $SELECTED_SUBNET_NAME"
 echo "    CIDR: $SELECTED_SUBNET_CIDR"
 echo "    AZ:   $SELECTED_SUBNET_AZ"
+
+
+echo ""
+echo "✅ Your agent can now be installed with the following Helm commands:"
+echo "======================================================================"
+cat <<EOF
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
+helm repo update
+
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=$CLUSTER_NAME \
+  --set job.env.REGION=$REGION \
+  --set-string job.env.ACCOUNT=$ACCOUNT_ID \
+  --set job.env.REGISTRATION_TOKEN=<registration-token> \
+  --set job.env.NODE_SELECTOR_KEY=onelens-workload \
+  --set job.env.NODE_SELECTOR_VALUE=agent \
+  --set job.env.TOLERATION_KEY=onelens-workload \
+  --set job.env.TOLERATION_VALUE=agent \
+  --set job.env.TOLERATION_OPERATOR=Equal \
+  --set job.env.TOLERATION_EFFECT=NoSchedule \
+  --set job.nodeSelector.onelens-workload=agent \
+  --set 'job.tolerations[0].key=onelens-workload' \
+  --set 'job.tolerations[0].operator=Equal' \
+  --set 'job.tolerations[0].value=agent' \
+  --set 'job.tolerations[0].effect=NoSchedule'
+EOF
+echo "======================================================================"
