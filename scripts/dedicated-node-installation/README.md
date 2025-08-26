@@ -133,7 +133,6 @@ The CloudFormation template accepts the following parameters:
 | `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMIType for instance |
 | `NodeGroupName` | String | `onelens-nodegroup` | Name for the nodegroup |
 | `RoleName` | String | `onelens-{clustername}-{region}` | Name for the noderole |
-| 
 
 ## 🔧 Instance Type Selection
 
@@ -145,7 +144,7 @@ The script automatically determines the optimal instance type based on your curr
 | `t4g.medium` | 100–499 pods | Small production |
 | `t4g.large` | 500–1499 pods | Medium production |
 | `t4g.xlarge` | 1500–2000 pods | Large production |
-| `t4g.2xlarge` | 2000> pods | Large production |
+| `t4g.2xlarge` | 2000 > pods | Large production |
 
 
 
