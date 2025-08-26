@@ -30,11 +30,23 @@ Parameters:
     Default: AL2023_ARM_64_STANDARD
     Description: AMI type for the nodegroup
 
+  RoleName:
+    Type: String
+    Default: ""
+    MaxLength: 64
+    Description: Name for the IAM role. If left empty, it will default to Onelens-{ClusterName}-{Region} format
+
+Conditions:
+  UseDefaultRoleName: !Equals [ !Ref RoleName, "" ]
+
 Resources:
   EksNodeRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub Onelens-${ClusterName}-${AWS::Region}
+      RoleName: !If 
+        - UseDefaultRoleName
+        - !Sub Onelens-${ClusterName}-${AWS::Region}
+        - !Ref RoleName
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
