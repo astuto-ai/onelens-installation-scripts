@@ -39,7 +39,7 @@ MAX_ROLE_LEN=64
 # ---------- IAM Role Name (trim if needed) ----------
 ROLE_BASE="${ROLE_PREFIX}-${CLUSTER_NAME}-${REGION}"
 if [ ${#ROLE_BASE} -gt $MAX_ROLE_LEN ]; then
-  EXTRA_LEN=$((MAX_ROLE_LEN - ${#ROLE_PREFIX} - 1 - ${#REGION}))
+  EXTRA_LEN=$((MAX_ROLE_LEN - ${#ROLE_PREFIX} - 2 - ${#REGION}))
   TRIMMED_CLUSTER=$(echo "$CLUSTER_NAME" | cut -c1-$EXTRA_LEN)
   ROLE_NAME="${ROLE_PREFIX}-${TRIMMED_CLUSTER}-${REGION}"
 else
@@ -51,11 +51,10 @@ echo "Computed IAM Role Name: $ROLE_NAME"
 SUBNET_TYPE="public"
 AMI_TYPE="AL2023_ARM_64_STANDARD"
 
-
-
 # ---------- Fetch and display subnet table ----------
 echo "Fetching VPC subnets for cluster $CLUSTER_NAME..."
-SUBNET_IDS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" --query "cluster.resourcesVpcConfig.subnetIds" --output text)
+SUBNET_IDS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" \
+  --query "cluster.resourcesVpcConfig.subnetIds" --output text)
 
 echo ""
 echo "Available Subnets:"
@@ -65,37 +64,35 @@ echo "==========================================================================
 
 SUBNET_INDEX=1
 SUBNET_ARRAY=()
-for SUBNET_ID in $SUBNET_IDS; do
-  # Get subnet info separately to avoid parsing issues
-  SUBNET_NAME=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query "Subnets[0].Tags[?Key=='Name'].Value|[0]" --output text)
-  CIDR_RANGE=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query "Subnets[0].CidrBlock" --output text)
-  IS_PUBLIC=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query "Subnets[0].MapPublicIpOnLaunch" --output text)
-  AZ=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --region "$REGION" --query "Subnets[0].AvailabilityZone" --output text)
-  
-  # Set subnet type
+
+# Fetch all subnet details in one call
+SUBNET_DETAILS=$(aws ec2 describe-subnets \
+  --subnet-ids $SUBNET_IDS \
+  --region "$REGION" \
+  --query 'Subnets[*].[SubnetId,Tags[?Key==`Name`].Value | [0],CidrBlock,MapPublicIpOnLaunch,AvailabilityZone]' \
+  --output text)
+
+while IFS=$'\t' read -r SUBNET_ID SUBNET_NAME CIDR_RANGE IS_PUBLIC AZ; do
+  # Handle cases where subnet name might be empty
+  if [[ -z "$SUBNET_NAME" || "$SUBNET_NAME" == "None" ]]; then
+    SUBNET_NAME="$SUBNET_ID"
+  fi
+
+  # Determine subnet type
   if [[ "$IS_PUBLIC" == "True" ]]; then
     SUBNET_TYPE_DISPLAY="Public"
   else
     SUBNET_TYPE_DISPLAY="Private"
   fi
-  
-  # Handle cases where subnet name might be empty
-  if [[ -z "$SUBNET_NAME" || "$SUBNET_NAME" == "None" ]]; then
-    SUBNET_NAME="$SUBNET_ID"
-  fi
-  
-  # Clean up any extra whitespace and ensure proper formatting
-  SUBNET_NAME=$(echo "$SUBNET_NAME" | xargs)
-  CIDR_RANGE=$(echo "$CIDR_RANGE" | xargs)
-  AZ=$(echo "$AZ" | xargs)
-  
+
   printf "%-6s %-40s %-20s %-10s %-15s\n" "$SUBNET_INDEX" "$SUBNET_NAME" "$CIDR_RANGE" "$SUBNET_TYPE_DISPLAY" "$AZ"
-  
+
   # Store subnet info in array for later use
-  SUBNET_ARRAY+=("$SUBNET_ID:$SUBNET_TYPE_DISPLAY:$CIDR_RANGE:$AZ")
-  
+  SUBNET_ARRAY+=("$SUBNET_ID:$SUBNET_TYPE_DISPLAY:$CIDR_RANGE:$AZ:$SUBNET_NAME")
+
   SUBNET_INDEX=$((SUBNET_INDEX + 1))
-done
+done <<< "$SUBNET_DETAILS"
+
 echo "================================================================================================================"
 
 # ---------- Subnet selection ----------
@@ -115,14 +112,15 @@ SELECTED_SUBNET_ID=$(echo "$SELECTED_SUBNET_INFO" | cut -d: -f1)
 SELECTED_SUBNET_TYPE=$(echo "$SELECTED_SUBNET_INFO" | cut -d: -f2)
 SELECTED_SUBNET_CIDR=$(echo "$SELECTED_SUBNET_INFO" | cut -d: -f3)
 SELECTED_SUBNET_AZ=$(echo "$SELECTED_SUBNET_INFO" | cut -d: -f4)
+SELECTED_SUBNET_NAME=$(echo "$SELECTED_SUBNET_INFO" | cut -d: -f5)
 
 echo ""
 echo "Selected Subnet Details:"
-echo "  ID: $SELECTED_SUBNET_ID"
-echo "  Name: $(aws ec2 describe-subnets --subnet-ids "$SELECTED_SUBNET_ID" --region "$REGION" --query "Subnets[0].Tags[?Key=='Name'].Value|[0]" --output text | sed 's/None//' | sed 's/^[[:space:]]*//')"
+echo "  ID:   $SELECTED_SUBNET_ID"
+echo "  Name: $SELECTED_SUBNET_NAME"
 echo "  CIDR: $SELECTED_SUBNET_CIDR"
 echo "  Type: $SELECTED_SUBNET_TYPE"
-echo "  AZ: $SELECTED_SUBNET_AZ"
+echo "  AZ:   $SELECTED_SUBNET_AZ"
 
 # Update SUBNET_TYPE variable based on selection
 if [[ "$SELECTED_SUBNET_TYPE" == "Public" ]]; then
@@ -130,10 +128,6 @@ if [[ "$SELECTED_SUBNET_TYPE" == "Public" ]]; then
 else
   SUBNET_TYPE="private"
 fi
-
-echo ""
-echo "Updated configuration:"
-echo "  Subnet Type: $SUBNET_TYPE (based on selection)"
 
 # ---------- Compute Configuration ----------
 echo ""
@@ -181,7 +175,7 @@ fi
 echo ""
 echo "Final Compute Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE"
-echo "  AMI Type: $AMI_TYPE"
+echo "  AMI Type:      $AMI_TYPE"
 
 # ---------- Show detected config ----------
 echo "================================================="
@@ -255,6 +249,7 @@ aws eks wait nodegroup-active \
 
 echo "✅ Nodegroup $NODEGROUP_NAME is now ACTIVE in $SUBNET_TYPE subnet $SELECTED_SUBNET_ID with instance type $INSTANCE_TYPE and AMI type $AMI_TYPE."
 echo "  Subnet Details:"
-echo "    ID: $SELECTED_SUBNET_ID"
+echo "    ID:   $SELECTED_SUBNET_ID"
+echo "    Name: $SELECTED_SUBNET_NAME"
 echo "    CIDR: $SELECTED_SUBNET_CIDR"
-echo "    AZ: $SELECTED_SUBNET_AZ"
+echo "    AZ:   $SELECTED_SUBNET_AZ"
