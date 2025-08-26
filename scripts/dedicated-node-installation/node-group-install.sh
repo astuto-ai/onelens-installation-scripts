@@ -33,7 +33,7 @@ fi
 
 echo "Proceeding with subnet discovery..."
 
-ROLE_PREFIX="Onelens"
+ROLE_PREFIX="onelens"
 MAX_ROLE_LEN=64
 
 # ---------- IAM Role Name (trim if needed) ----------
@@ -248,11 +248,6 @@ aws eks wait nodegroup-active \
   --region "$REGION"
 
 echo "✅ Nodegroup $NODEGROUP_NAME is now ACTIVE in $SUBNET_TYPE subnet $SELECTED_SUBNET_ID with instance type $INSTANCE_TYPE and AMI type $AMI_TYPE."
-echo "  Subnet Details:"
-echo "    ID:   $SELECTED_SUBNET_ID"
-echo "    Name: $SELECTED_SUBNET_NAME"
-echo "    CIDR: $SELECTED_SUBNET_CIDR"
-echo "    AZ:   $SELECTED_SUBNET_AZ"
 
 
 echo ""

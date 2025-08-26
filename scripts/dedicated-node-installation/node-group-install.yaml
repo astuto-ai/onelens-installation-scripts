@@ -29,7 +29,7 @@ Parameters:
     Type: String
     Default: ""
     MaxLength: 64
-    Description: Name for the IAM role. If left empty, it will default to Onelens-{ClusterName}-{Region} format
+    Description: Name for the IAM role. If left empty, it will default to onelens-{ClusterName}-{Region} format
 
 Conditions:
   UseDefaultRoleName: !Equals [ !Ref RoleName, "" ]
@@ -40,7 +40,7 @@ Resources:
     Properties:
       RoleName: !If 
         - UseDefaultRoleName
-        - !Sub Onelens-${ClusterName}-${AWS::Region}
+        - !Sub onelens-${ClusterName}-${AWS::Region}
         - !Ref RoleName
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
