@@ -15,3 +15,4 @@
 | v1.1.0 | Versioning Changes | v1.1.0 |
 | v1.2.0 | Skipped | v1.2.0 |
 | v1.3.0 | Skipped | v1.3.0 |
+| v1.4.0 | Skipped | v1.4.0 |

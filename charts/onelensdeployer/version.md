@@ -4,3 +4,4 @@
 #1.1.0 - Versioning bumpup for consistency
 #1.2.0 - Skipped
 #1.3.0 - EBS tags and Encryption
+#1.4.0 - change prometheus memory requests

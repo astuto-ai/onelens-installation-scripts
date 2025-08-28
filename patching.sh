@@ -56,7 +56,7 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="116m"
-    PROMETHEUS_MEMORY_REQUEST="1188Mi"
+    PROMETHEUS_MEMORY_REQUEST="900Mi"
     PROMETHEUS_CPU_LIMIT="864m"
     PROMETHEUS_MEMORY_LIMIT="4000Mi"
     
