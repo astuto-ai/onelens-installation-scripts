@@ -15,22 +15,10 @@ The OneLens Dedicated Node Installation creates EKS nodegroups with specific con
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh | bash -s -- my-cluster us-east-1
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
-### Method 2: Download and run locally
-```bash
-# Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh -o node-group-install.sh
-
-# Make it executable
-chmod +x node-group-install.sh
-
-# Run it
-./node-group-install.sh my-cluster us-east-1
-```
-
-### Method 3: Deploy CloudFormation template manually via AWS Console
+### Method 2: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
 curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
@@ -43,6 +31,8 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 #    - SubnetId: your-subnet-id
 #    - InstanceType: t4g.small (or choose based on pod count)
 #    - NodeGroupName: your-nodegroup-name
+#    - AMIType: your-ami
+#    - RoleName: desired-name
 # 4. Review and create stack
 ```
 
@@ -100,7 +90,7 @@ The user/role running this script needs the following permissions:
 ### Bash Script Usage
 
 ```bash
-./node-group-install.sh CLUSTER_NAME REGION
+bash node-group-install.sh CLUSTER_NAME REGION
 ```
 
 ### Arguments
@@ -110,17 +100,25 @@ The user/role running this script needs the following permissions:
 | `CLUSTER_NAME` | Name of your EKS cluster | ✅ | `my-eks-cluster` |
 | `REGION` | AWS region where cluster is located | ✅ | `us-east-1` |
 
-### Examples
+### Example
 
 ```bash
-# Production cluster in US East
-./node-group-install.sh production-cluster us-east-1
+bash node-group-install.sh production-cluster us-east-1
+```
 
-# Development cluster in EU West  
-./node-group-install.sh dev-cluster eu-west-1
+## 🔍 What the Script Does
 
-# Staging cluster in Asia Pacific
-./node-group-install.sh staging-cluster ap-south-1
+1. **Validates prerequisites** - Checks for AWS CLI, kubectl, and proper configuration
+2. **Creates IAM role** - Sets up EKS worker node role with necessary policies
+3. **Detects subnet** - Automatically finds a suitable public subnet in your cluster
+4. **Counts pods** - Determines current workload to size instances appropriately
+5. **Creates nodegroup** - Deploys the EKS nodegroup with proper taints and labels
+6. **Configures isolation** - Applies taints to prevent other workloads from scheduling
+
+Upon successful completion, the script will display:
+
+```
+✅ Nodegroup onelens-nodegroup is now ACTIVE in private subnet subnet-005afaa5f6ce9c2d1 with instance type t4g.large and AMI type AL2023_ARM_64_STANDARD. (values change based on your environment)
 ```
 
 ### CloudFormation Template Usage
@@ -132,7 +130,9 @@ The CloudFormation template accepts the following parameters:
 | `ClusterName` | String | - | Name of the EKS cluster |
 | `SubnetId` | AWS::EC2::Subnet::Id | - | Subnet ID where the nodegroup will be created |
 | `InstanceType` | String | `t4g.small` | EC2 instance type for the nodegroup |
-| `NodeGroupName` | String | `onelens-nodegroup-single-az1` | Name for the nodegroup |
+| `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMIType for instance |
+| `NodeGroupName` | String | `onelens-nodegroup` | Name for the nodegroup |
+| `RoleName` | String | `onelens-{clustername}-{region}` | Name for the noderole |
 
 ## 🔧 Instance Type Selection
 
@@ -144,64 +144,9 @@ The script automatically determines the optimal instance type based on your curr
 | `t4g.medium` | 100–499 pods | Small production |
 | `t4g.large` | 500–1499 pods | Medium production |
 | `t4g.xlarge` | 1500–2000 pods | Large production |
+| `t4g.2xlarge` | 2000 > pods | Large production |
 
-### Manual Override
 
-To use a specific instance type with the CloudFormation template, simply specify the `InstanceType` parameter:
-
-```bash
-aws cloudformation create-stack \
-  --stack-name onelens-nodegroup \
-  --template-body file://node-group-install.yaml \
-  --parameters \
-    ParameterKey=ClusterName,ParameterValue=my-cluster \
-    ParameterKey=SubnetId,ParameterValue=subnet-12345 \
-    ParameterKey=InstanceType,ParameterValue=t4g.large \
-    ParameterKey=NodeGroupName,ParameterValue=my-custom-nodegroup
-```
-
-## 📤 Output
-
-Upon successful completion, the script will display:
-
-```
-Nodegroup onelens-nodegroup-single-az1 creation started in subnet subnet-12345 with instance type t4g.medium
-```
-
-The CloudFormation template outputs:
-
-- **NodegroupName**: The created EKS nodegroup
-- **NodeRoleArn**: ARN of the created IAM role
-
-## 🔍 What the Script Does
-
-1. **Validates prerequisites** - Checks for AWS CLI, kubectl, and proper configuration
-2. **Creates IAM role** - Sets up EKS worker node role with necessary policies
-3. **Detects subnet** - Automatically finds a suitable public subnet in your cluster
-4. **Counts pods** - Determines current workload to size instances appropriately
-5. **Creates nodegroup** - Deploys the EKS nodegroup with proper taints and labels
-6. **Configures isolation** - Applies taints to prevent other workloads from scheduling
-
-## 🏗️ Architecture
-
-### Nodegroup Configuration
-
-The created nodegroup includes:
-
-- **Single AZ deployment** for cost optimization
-- **Taints** with `onelens-workload=agent:NoSchedule` to isolate workloads
-- **Labels** with `onelens-workload=agent` for workload identification
-- **Scaling** configured for 1 desired, 1 minimum, 1 maximum node
-- **AMI Type** set to `AL2023_ARM_64_STANDARD` for ARM64 support
-
-### IAM Role Policies
-
-The created IAM role includes these managed policies:
-
-- `AmazonEKSWorkerNodePolicy` - Basic EKS worker node permissions
-- `AmazonEKS_CNI_Policy` - Network policy for pod networking
-- `AmazonEC2ContainerRegistryPullOnly` - ECR read access
-- `AmazonSSMManagedInstanceCore` - SSM access for node management
 
 ## 🛠 Troubleshooting
 
@@ -229,50 +174,6 @@ aws sts get-caller-identity
 aws eks describe-cluster --name my-cluster --region us-east-1
 ```
 
-**No suitable subnet found:**
-```bash
-# Check available subnets
-aws eks describe-cluster --name my-cluster --region us-east-1 --query "cluster.resourcesVpcConfig.subnetIds"
-```
-
-### Debug Mode
-
-Enable debug logging to see detailed execution information:
-
-```bash
-set -x  # Enable debug mode
-./node-group-install.sh my-cluster us-east-1
-```
-
-### Idempotency & Multiple Runs
-
-**✅ Safe to re-run when:**
-- No nodegroup exists → Creates new nodegroup
-- Nodegroup exists with different parameters → Updates nodegroup
-
-**❌ Will fail when:**
-- Nodegroup is in progress (`*_IN_PROGRESS`) → Exits with error
-- Nodegroup in failed state → Exits with error
-
-**Note:** The script creates a nodegroup with a fixed name. If you need multiple nodegroups, use the CloudFormation template with different `NodeGroupName` parameters.
-
-## 📁 Files Created
-
-The script creates:
-
-- **IAM Role**: `Onelens-AmazonEKSNodegroupRole-{CLUSTER_NAME}`
-- **EKS Nodegroup**: `onelens-nodegroup-single-az1`
-
-The CloudFormation template creates a stack with:
-- **IAM Role** for EKS worker nodes
-- **EKS Nodegroup** with specified configuration
-
-## 🏷️ Resource Tags
-
-All created resources are automatically tagged with:
-- `CreatedBy`: node-group-install
-- `EKSCluster`: Cluster name
-- `Purpose`: OneLens dedicated workload
 
 ## 🔗 Related Documentation
 
