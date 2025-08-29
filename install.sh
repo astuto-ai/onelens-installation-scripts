@@ -157,7 +157,11 @@ check_ebs_driver
 echo "Persistent storage for Prometheus is ENABLED."
 
 # Phase 9: Cluster Pod Count and Resource Allocation
-TOTAL_PODS=$(kubectl get pods --all-namespaces --no-headers 2>/dev/null | wc -l)
+NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces | wc -l | tr -d '[:space:]')
+NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces | wc -l | tr -d '[:space:]')
+TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
+
+echo "Total number of pods in the cluster: $TOTAL_PODS"
 
 if [ $? -ne 0 ]; then
     echo "Error: Failed to fetch pod details. Please check if Kubernetes is running and kubectl is configured correctly." >&2
