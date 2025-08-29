@@ -1,6 +1,22 @@
 #!/bin/bash
 set -e
 
+# ---------- Loading animation function ----------
+show_loading() {
+    local message="$1"
+    local pid="$2"
+    local delay=0.5
+    local spinstr='|/-\'
+    
+    while kill -0 "$pid" 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf "\r[%c] %s" "$spinstr" "$message"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+    done
+    printf "\r[✓] %s\n" "$message"
+}
+
 # ---------- Usage check ----------
 if [ "$#" -lt 2 ]; then
   echo "Usage: $0 <cluster-name> <region>"
@@ -12,7 +28,8 @@ REGION=$2
 NODEGROUP_NAME="onelens-nodegroup"
 
 # ---------- Fetch AWS account ID ----------
-echo "Fetching AWS account ID..."
+
+echo "Fetching AWS account ID..." 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Detected AWS Account ID: $ACCOUNT_ID"
 
@@ -26,8 +43,8 @@ echo "Region          : $REGION"
 echo "================================================="
 
 read -p "Proceed with this AWS account and cluster? (yes/no): " INITIAL_CONFIRM
-if [[ "$INITIAL_CONFIRM" != "yes" ]]; then
-  echo "Aborted by user."
+if [[ "$INITIAL_CONFIRM" == "no" ]]; then
+  echo "please rerun the script with right aws credentials and access to the eks cluster"
   exit 0
 fi
 
@@ -98,7 +115,13 @@ echo "==========================================================================
 # ---------- Subnet selection ----------
 echo ""
 echo "Please select a subnet for your nodegroup:"
-read -p "Enter subnet index (1-$((SUBNET_INDEX-1))): " SELECTED_INDEX
+read -p "Enter subnet index (1-$((SUBNET_INDEX-1))) or press Enter for first subnet: " SELECTED_INDEX
+
+# If user just presses Enter, select first subnet
+if [ -z "$SELECTED_INDEX" ]; then
+  SELECTED_INDEX=1
+  echo "✅ Auto-selected first subnet (index 1)"
+fi
 
 # Validate input
 if ! [[ "$SELECTED_INDEX" =~ ^[0-9]+$ ]] || [ "$SELECTED_INDEX" -lt 1 ] || [ "$SELECTED_INDEX" -gt $((SUBNET_INDEX-1)) ]; then
@@ -137,8 +160,26 @@ echo "================================================="
 
 # ---------- Fetch number of pods ----------
 echo "Counting pods in cluster $CLUSTER_NAME..."
-NUM_PODS=$(kubectl get pods --all-namespaces --no-headers | wc -l | tr -d '[:space:]')
-echo "Detected Pods: $NUM_PODS"
+NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces | wc -l | tr -d '[:space:]')
+NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces | wc -l | tr -d '[:space:]')
+NUM_PODS=$((NUM_RUNNING + NUM_PENDING))
+## add 20% buffer to the pods count
+NUM_PODS=$(((NUM_PODS * 12 + 9) / 10))
+echo "Detected Pods with additional 20% buffer for future considerations: $NUM_PODS"
+
+read -p "Type Enter to continue with the detected pods count ($NUM_PODS) or modify the count: " MODIFY_PODS
+
+if [[ "$MODIFY_PODS" =~ ^[0-9]+$ ]]; then
+  NUM_PODS=$MODIFY_PODS
+fi
+
+if ! [[ "$NUM_PODS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid input. Please enter a positive number."
+  exit 1
+fi
+
+echo "Pod count set to: $NUM_PODS"
+
 
 # ---------- Instance type selection ----------
 if [ "$NUM_PODS" -lt 100 ]; then
@@ -193,8 +234,8 @@ echo "================================================="
 
 # ---------- Ask for confirmation ----------
 read -p "Proceed with this configuration? (yes/no): " CONFIRM
-if [[ "$CONFIRM" != "yes" ]]; then
-  echo "Aborted by user."
+if [[ "$CONFIRM" == "no" ]]; then
+  echo "please rerun the script with right nodegroup configuration"
   exit 0
 fi
 
@@ -241,11 +282,14 @@ aws eks create-nodegroup \
   --region "$REGION" \
   --ami-type "$AMI_TYPE"
 
-echo "Waiting for nodegroup $NODEGROUP_NAME to become ACTIVE..."
 aws eks wait nodegroup-active \
   --cluster-name "$CLUSTER_NAME" \
   --nodegroup-name "$NODEGROUP_NAME" \
-  --region "$REGION"
+  --region "$REGION" &
+WAIT_PID=$!
+
+show_loading "Waiting for nodegroup $NODEGROUP_NAME to become ACTIVE..." "$WAIT_PID"
+wait $WAIT_PID
 
 echo "✅ Nodegroup $NODEGROUP_NAME is now ACTIVE in $SUBNET_TYPE subnet $SELECTED_SUBNET_ID with instance type $INSTANCE_TYPE and AMI type $AMI_TYPE."
 
@@ -261,7 +305,7 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent 
   --set job.env.CLUSTER_NAME=$CLUSTER_NAME \\
   --set job.env.REGION=$REGION \\
   --set-string job.env.ACCOUNT=$ACCOUNT_ID \\
-  --set job.env.REGISTRATION_TOKEN=<registration-token>   
+  --set job.env.REGISTRATION_TOKEN="<registration-token>" \\
   --set job.env.NODE_SELECTOR_KEY=onelens-workload \\
   --set job.env.NODE_SELECTOR_VALUE=agent \\
   --set job.env.TOLERATION_KEY=onelens-workload \\

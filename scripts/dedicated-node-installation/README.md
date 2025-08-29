@@ -30,7 +30,6 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 #    - ClusterName: your-cluster-name
 #    - SubnetId: your-subnet-id
 #    - InstanceType: t4g.small (or choose based on pod count)
-#    - NodeGroupName: your-nodegroup-name
 #    - AMIType: your-ami
 #    - RoleName: desired-name
 # 4. Review and create stack
@@ -131,7 +130,6 @@ The CloudFormation template accepts the following parameters:
 | `SubnetId` | AWS::EC2::Subnet::Id | - | Subnet ID where the nodegroup will be created |
 | `InstanceType` | String | `t4g.small` | EC2 instance type for the nodegroup |
 | `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMIType for instance |
-| `NodeGroupName` | String | `onelens-nodegroup` | Name for the nodegroup |
 | `RoleName` | String | `onelens-{clustername}-{region}` | Name for the noderole |
 
 ## 🔧 Instance Type Selection

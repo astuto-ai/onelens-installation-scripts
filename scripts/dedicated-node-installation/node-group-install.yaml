@@ -15,11 +15,6 @@ Parameters:
     Default: t4g.small
     Description: "EC2 Recommended instance type: t4g.small (1 to 100 pods), t4g.medium (100 to 499), t4g.large (500 to 1499), t4g.xlarge (1500 to 2000) or t4g.2xlarge (2000 above)"
 
-  NodeGroupName:
-    Type: String
-    Default: onelens-nodegroup
-    Description: Name for the nodegroup
-
   AMIType:
     Type: String
     Default: AL2023_ARM_64_STANDARD
@@ -59,17 +54,17 @@ Resources:
     Type: AWS::EKS::Nodegroup
     Properties:
       ClusterName: !Ref ClusterName
-      NodegroupName: !Ref NodeGroupName
+      NodegroupName: onelens-nodegroup
       NodeRole: !GetAtt EksNodeRole.Arn
       Subnets:
         - !Ref SubnetId
       InstanceTypes:
         - !Ref InstanceType
+      AmiType: !Ref AMIType
       ScalingConfig:
         MinSize: 1
         MaxSize: 1
         DesiredSize: 1
-      AmiType: !Ref AMIType
       Taints:
         - Key: onelens-workload
           Value: agent
