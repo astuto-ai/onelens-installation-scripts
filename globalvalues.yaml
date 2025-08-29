@@ -3,7 +3,7 @@ onelens-agent:
 
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.4.0
+    tag: v1.4.1
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"

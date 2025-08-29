@@ -34,7 +34,7 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.4.0}"
+: "${RELEASE_VERSION:=1.4.1}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
@@ -157,7 +157,11 @@ check_ebs_driver
 echo "Persistent storage for Prometheus is ENABLED."
 
 # Phase 9: Cluster Pod Count and Resource Allocation
-TOTAL_PODS=$(kubectl get pods --all-namespaces --no-headers 2>/dev/null | wc -l)
+NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces | wc -l | tr -d '[:space:]')
+NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces | wc -l | tr -d '[:space:]')
+TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
+
+echo "Total number of pods in the cluster: $TOTAL_PODS"
 
 if [ $? -ne 0 ]; then
     echo "Error: Failed to fetch pod details. Please check if Kubernetes is running and kubectl is configured correctly." >&2
@@ -326,7 +330,7 @@ else
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.4.0}\" \
+    --version \"\${RELEASE_VERSION:=1.4.1}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
