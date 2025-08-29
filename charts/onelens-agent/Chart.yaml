@@ -10,7 +10,7 @@ maintainers:
 dependencies:
   - name: onelens-agent-base
     repository: oci://609916866699.dkr.ecr.ap-south-1.amazonaws.com/helm-charts
-    version: v1.4.1
+    version: 1.4.1
     alias: onelens-agent
     condition: onelens-agent.enabled
   - name: prometheus
