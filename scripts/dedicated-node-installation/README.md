@@ -18,6 +18,41 @@ The OneLens Dedicated Node Installation creates EKS nodegroups with specific con
 bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
+### Arguments
+
+| Argument | Description | Required | Example |
+|----------|-------------|----------|---------|
+| `CLUSTER_NAME` | Name of your EKS cluster | ✅ | `my-eks-cluster` |
+| `REGION` | AWS region where cluster is located | ✅ | `us-east-1` |
+
+
+## 🔍 What the Script Does
+
+1. **Validates prerequisites** - Checks for AWS CLI, kubectl, and proper configuration
+2. **Creates IAM role** - Sets up EKS worker node role with necessary policies
+3. **Detects subnet** - Automatically finds a suitable public subnet in your cluster
+4. **Counts pods** - Determines current workload to size instances appropriately
+5. **Creates nodegroup** - Deploys the EKS nodegroup with proper taints and labels
+6. **Configures isolation** - Applies taints to prevent other workloads from scheduling
+7 **Asks user consent** - Confirms the configuration from the user and gives the ability to reconfigure manually
+
+
+The script automatically determines the optimal instance type based on your current pod count:
+
+| Instance Type | Pod Count Range | Use Case |
+|---------------|-----------------|----------|
+| `t4g.small` | < 100 pods | Development/testing |
+| `t4g.medium` | 100–499 pods | Small production |
+| `t4g.large` | 500–1499 pods | Medium production |
+| `t4g.xlarge` | 1500–2000 pods | Large production |
+| `t4g.2xlarge` | 2000 > pods | Large production |
+
+Upon successful completion, the script will display:
+
+```
+✅ Nodegroup onelens-nodegroup is now ACTIVE in private subnet subnet-005afaa5f6ce9c2d1 with instance type t4g.large and AMI type AL2023_ARM_64_STANDARD. (values change based on your environment)
+```
+
 ### Method 2: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
@@ -30,8 +65,9 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 #    - ClusterName: your-cluster-name
 #    - SubnetId: your-subnet-id
 #    - InstanceType: t4g.small (or choose based on pod count)
-#    - AMIType: your-ami
-#    - RoleName: desired-name
+#    - NodeGroupName: your-nodegroup-name (ignore for defaults)
+#    - AMIType: your-ami-id (eg: AL2023_ARM_64_STANDARD)
+#    - RoleName: desired-name (ignore for defaults)
 # 4. Review and create stack
 ```
 
@@ -84,41 +120,6 @@ The user/role running this script needs the following permissions:
 }
 ```
 
-## 🛠 Usage
-
-### Bash Script Usage
-
-```bash
-bash node-group-install.sh CLUSTER_NAME REGION
-```
-
-### Arguments
-
-| Argument | Description | Required | Example |
-|----------|-------------|----------|---------|
-| `CLUSTER_NAME` | Name of your EKS cluster | ✅ | `my-eks-cluster` |
-| `REGION` | AWS region where cluster is located | ✅ | `us-east-1` |
-
-### Example
-
-```bash
-bash node-group-install.sh production-cluster us-east-1
-```
-
-## 🔍 What the Script Does
-
-1. **Validates prerequisites** - Checks for AWS CLI, kubectl, and proper configuration
-2. **Creates IAM role** - Sets up EKS worker node role with necessary policies
-3. **Detects subnet** - Automatically finds a suitable public subnet in your cluster
-4. **Counts pods** - Determines current workload to size instances appropriately
-5. **Creates nodegroup** - Deploys the EKS nodegroup with proper taints and labels
-6. **Configures isolation** - Applies taints to prevent other workloads from scheduling
-
-Upon successful completion, the script will display:
-
-```
-✅ Nodegroup onelens-nodegroup is now ACTIVE in private subnet subnet-005afaa5f6ce9c2d1 with instance type t4g.large and AMI type AL2023_ARM_64_STANDARD. (values change based on your environment)
-```
 
 ### CloudFormation Template Usage
 
@@ -128,21 +129,9 @@ The CloudFormation template accepts the following parameters:
 |-----------|------|---------|-------------|
 | `ClusterName` | String | - | Name of the EKS cluster |
 | `SubnetId` | AWS::EC2::Subnet::Id | - | Subnet ID where the nodegroup will be created |
-| `InstanceType` | String | `t4g.small` | EC2 instance type for the nodegroup |
+| `InstanceType` | String | `t4g.small` | EC2 instance type for the nodegroup to be selected based on pods count |
 | `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMIType for instance |
 | `RoleName` | String | `onelens-{clustername}-{region}` | Name for the noderole |
-
-## 🔧 Instance Type Selection
-
-The script automatically determines the optimal instance type based on your current pod count:
-
-| Instance Type | Pod Count Range | Use Case |
-|---------------|-----------------|----------|
-| `t4g.small` | < 100 pods | Development/testing |
-| `t4g.medium` | 100–499 pods | Small production |
-| `t4g.large` | 500–1499 pods | Medium production |
-| `t4g.xlarge` | 1500–2000 pods | Large production |
-| `t4g.2xlarge` | 2000 > pods | Large production |
 
 
 
