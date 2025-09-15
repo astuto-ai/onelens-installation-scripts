@@ -160,26 +160,33 @@ echo "helm upgrade onelens-agent onelens/onelens-agent with dynamic resource all
 
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts
 helm repo update
-# REVISION=$(helm history onelens-agent -n onelens-agent | grep -v '02:00' | tail -1 | awk '{print $1}')
-# echo $REVISION
-# helm rollback onelens-agent $REVISION -n onelens-agent
 
-# # Perform the upgrade with dynamically calculated resource values
-# helm upgrade onelens-agent onelens/onelens-agent \
-#   --version=0.1.1-beta.4 \
-#   --namespace onelens-agent \
-#   --history-max 200 \
-#   --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
-#   --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
-#   --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
-#   --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
-#   --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
-#   --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
-#   --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
-#   --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT"
+# Perform the upgrade with dynamically calculated resource values
+helm upgrade onelens-agent onelens/onelens-agent \
+  --version=1.3.0 \
+  --reuse-values \
+  --history-max 200 \
+  --atomic \
+  --timeout=5m \
+  --namespace onelens-agent \
+  --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
+  --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
+  --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
+  --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
+  --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
+  --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
+  --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
+  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT"
 
-# echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
+if [ $? -eq 0 ]; then
+    echo "Upgrade completed successfully with dynamic resource allocation based on $TOTAL_PODS pods."
+else
+    echo "Upgrade failed and was automatically rolled back by --atomic flag"
+    exit 1
+fi
+
+echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
