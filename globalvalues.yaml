@@ -3,7 +3,7 @@ onelens-agent:
 
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.5.0
+    tag: v1.6.0
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"
@@ -636,11 +636,11 @@ prometheus:
 
     resources: 
       requests:
-          cpu: '100m'
-          memory: '100Mi'
+          cpu: 100m
+          memory: 100Mi
       limits:
-        cpu: '100m'
-        memory: '100Mi'
+        cpu: 100m
+        memory: 100Mi
 
     serviceAnnotations:
       prometheus.io/probe: pushgateway

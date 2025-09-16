@@ -30,8 +30,8 @@ We follow [Semantic Versioning](https://semver.org/) (SemVer):
 2. **Create and Push Version Tag**
    ```bash
    # For version 1.4.0
-   git tag v1.5.0
-   git push origin v1.5.0
+   git tag v1.6.0
+   git push origin v1.6.0
    ```
 
 3. **Automatic Process**
