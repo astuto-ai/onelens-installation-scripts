@@ -6,3 +6,4 @@
 #1.3.0 - EBS tags and Encryption
 #1.4.0 - change prometheus memory requests
 #1.4.1 - change calculation of pods
+#1.5.0 - change resources config of agent
