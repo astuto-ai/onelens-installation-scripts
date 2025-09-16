@@ -3,7 +3,7 @@ onelens-agent:
 
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.5.0
+    tag: v1.6.0
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"
@@ -142,7 +142,13 @@ prometheus:
           scheme: HTTP
         periodSeconds: 10
 
-      resources: {}
+      resources:
+        requests:
+          cpu: 100m
+          memory: 100Mi
+        limits:
+          cpu: 100m
+          memory: 100Mi
 
   server:
     name: server
@@ -610,27 +616,7 @@ prometheus:
 
   extraManifests: []
 
-  alertmanager:
-    enabled: true
-
-    persistence:
-      size: 2Gi
-
-    podSecurityContext:
-      runAsUser: 65534
-      runAsNonRoot: true
-      runAsGroup: 65534
-      fsGroup: 65534
-
-  kube-state-metrics:
-    enabled: true
-
-  prometheus-pushgateway:
-    enabled: true
-
-    serviceAnnotations:
-      prometheus.io/probe: pushgateway
-
+  
   alertmanager:
     enabled: false
 
@@ -859,7 +845,14 @@ prometheus:
 
     namespaceOverride: ""
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
+
 
     kubeTargetVersionOverride: ""
 
@@ -914,9 +907,6 @@ prometheus:
       timeoutSeconds: 5
 
 
-
-
-
   prometheus-pushgateway:
     enabled: true
     serviceAnnotations:
@@ -957,7 +947,13 @@ prometheus:
     extraInitContainers: []
     extraContainers: []
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
 
     webConfiguration: {}
 
