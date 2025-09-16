@@ -163,7 +163,7 @@ helm repo update
 
 # Perform the upgrade with dynamically calculated resource values
 helm upgrade onelens-agent onelens/onelens-agent \
-  --version=1.3.0 \
+  --version=1.5.0 \
   --reuse-values \
   --history-max 200 \
   --atomic \
