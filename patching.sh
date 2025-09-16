@@ -153,6 +153,23 @@ else
     ONELENS_MEMORY_LIMIT="300Mi"
 fi
 
+## Other component resources
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="100Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="100Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT="100m"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST="100m"
+
+PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
+PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
+
+KSM_MEMORY_LIMIT=100Mi""
+KSM_MEMORY_REQUEST="100Mi"
+KSM_CPU_LIMIT="100m"
+KSM_CPU_REQUEST="100m"
+
+
 # Phase 5: Helm Upgrade with Dynamic Resource Allocation
 echo "helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts"
 echo "helm repo update"
@@ -163,7 +180,7 @@ helm repo update
 
 # Perform the upgrade with dynamically calculated resource values
 helm upgrade onelens-agent onelens/onelens-agent \
-  --version=1.5.0 \
+  --version=1.6.0 \
   --reuse-values \
   --history-max 200 \
   --atomic \
@@ -180,7 +197,20 @@ helm upgrade onelens-agent onelens/onelens-agent \
   --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
   --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
   --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
-  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT"
+  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT" \
+  --set prometheus.prometheus-pushgateway.resources.requests.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" \
+  --set prometheus.prometheus-pushgateway.resources.requests.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
+  --set prometheus.prometheus-pushgateway.resources.limits.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" \
+  --set prometheus.prometheus-pushgateway.resources.limits.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" \
+  --set prometheus.kube-state-metrics.resources.requests.cpu="$KSM_CPU_REQUEST" \
+  --set prometheus.kube-state-metrics.resources.requests.memory="$KSM_MEMORY_REQUEST" \
+  --set prometheus.kube-state-metrics.resources.limits.cpu="$KSM_CPU_LIMIT" \
+  --set prometheus.kube-state-metrics.resources.limits.memory="$KSM_MEMORY_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.requests.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.requests.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
+
 
 if [ $? -eq 0 ]; then
     echo "Upgrade completed successfully with dynamic resource allocation based on $TOTAL_PODS pods."
