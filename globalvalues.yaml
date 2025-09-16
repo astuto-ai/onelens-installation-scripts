@@ -142,7 +142,13 @@ prometheus:
           scheme: HTTP
         periodSeconds: 10
 
-      resources: {}
+      resources:
+        requests:
+          cpu: 100m
+          memory: 100Mi
+        limits:
+          cpu: 100m
+          memory: 100Mi
 
   server:
     name: server
@@ -628,6 +634,14 @@ prometheus:
   prometheus-pushgateway:
     enabled: true
 
+    resources: 
+      requests:
+          cpu: '100m'
+          memory: '100Mi'
+      limits:
+        cpu: '100m'
+        memory: '100Mi'
+
     serviceAnnotations:
       prometheus.io/probe: pushgateway
 
@@ -859,7 +873,14 @@ prometheus:
 
     namespaceOverride: ""
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
+
 
     kubeTargetVersionOverride: ""
 
