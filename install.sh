@@ -236,9 +236,9 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1150m"
-    PROMETHEUS_MEMORY_REQUEST="5294Mi"
-    PROMETHEUS_CPU_LIMIT="316m"
-    PROMETHEUS_MEMORY_LIMIT="1150Mi"
+    PROMETHEUS_MEMORY_REQUEST="5400Mi"
+    PROMETHEUS_CPU_LIMIT="1150m"
+    PROMETHEUS_MEMORY_LIMIT="5400Mi"
     
     # OpenCost resources
     OPENCOST_CPU_REQUEST="250m"
@@ -459,4 +459,3 @@ kubectl delete job onelensdeployerjob -n onelens-agent || true
 kubectl delete clusterrole onelensdeployerjob-clusterrole || true
 kubectl delete clusterrolebinding onelensdeployerjob-clusterrolebinding || true
 kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
-
