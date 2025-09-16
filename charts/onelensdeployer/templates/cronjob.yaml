@@ -27,6 +27,10 @@ spec:
             - name: {{ .Values.cronjob.name }}
               image: {{ .Values.cronjob.image }}:{{ .Values.cronjob.imageTag }}
               imagePullPolicy: {{ .Values.cronjob.imagePullPolicy }}
+              {{- with .Values.cronjob.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
               env:
                 {{- range $key, $value := .Values.cronjob.env }}
                 - name: {{ $key }}

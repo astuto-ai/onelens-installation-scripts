@@ -616,35 +616,7 @@ prometheus:
 
   extraManifests: []
 
-  alertmanager:
-    enabled: true
-
-    persistence:
-      size: 2Gi
-
-    podSecurityContext:
-      runAsUser: 65534
-      runAsNonRoot: true
-      runAsGroup: 65534
-      fsGroup: 65534
-
-  kube-state-metrics:
-    enabled: true
-
-  prometheus-pushgateway:
-    enabled: true
-
-    resources: 
-      requests:
-          cpu: 100m
-          memory: 100Mi
-      limits:
-        cpu: 100m
-        memory: 100Mi
-
-    serviceAnnotations:
-      prometheus.io/probe: pushgateway
-
+  
   alertmanager:
     enabled: false
 
@@ -935,9 +907,6 @@ prometheus:
       timeoutSeconds: 5
 
 
-
-
-
   prometheus-pushgateway:
     enabled: true
     serviceAnnotations:
@@ -978,7 +947,13 @@ prometheus:
     extraInitContainers: []
     extraContainers: []
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
 
     webConfiguration: {}
 
