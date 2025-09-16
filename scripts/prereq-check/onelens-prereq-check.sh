@@ -4,7 +4,6 @@
 # This script validates all prerequisites for OneLens Agent installation
 # Version: 1.0
 
-set -e
 
 # Configuration
 REQUIRED_URLS=(
