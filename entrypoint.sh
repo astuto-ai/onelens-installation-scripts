@@ -1,9 +1,12 @@
 #!/bin/bash
 
+# Global API endpoint
+API_ENDPOINT="https://api-gp.onelens.cloud"
+
 # Function to update cluster version logs
 update_cluster_logs() {
     local message="$1"
-    curl --location --request PUT 'https://api-in.onelens.cloud/v1/kubernetes/cluster-version' \
+    curl --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
         --header 'Content-Type: application/json' \
         --data '{
             "registration_id": "'"$REGISTRATION_ID"'",
@@ -46,7 +49,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
   echo "Fetching $SCRIPT_NAME from OneLens API..."
   
   # Call the API to get the patching script
-  API_RESPONSE=$(curl --location --request GET 'https://api-in.onelens.cloud/v1/kubernetes/cluster-version' \
+  API_RESPONSE=$(curl --location --request POST "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
     --header 'Content-Type: application/json' \
     --data '{
       "registration_id": "'"$REGISTRATION_ID"'",
@@ -74,7 +77,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
       exit 0
     fi
 
-    API_RESPONSE_SCRIPT=$(curl --location --request GET 'https://api-in.onelens.cloud/v1/kubernetes/patching-script' \
+    API_RESPONSE_SCRIPT=$(curl --location --request POST "${API_ENDPOINT}/v1/kubernetes/patching-script" \
     --header 'Content-Type: application/json' \
     --data '{
       "registration_id": "'"$REGISTRATION_ID"'",
@@ -93,7 +96,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
         if ./"$SCRIPT_NAME"; then
           # Report successful patching
           current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          curl --location --request PUT 'https://api-in.onelens.cloud/v1/kubernetes/cluster-version' \
+          curl --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
           --header 'Content-Type: application/json' \
           --data '{
               "registration_id": "'"$REGISTRATION_ID"'",

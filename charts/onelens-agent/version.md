@@ -19,3 +19,4 @@
 | v1.4.1 | Skipped | v1.4.1 |
 | v1.5.0 | Right size the reqs and limits of agent based on available max usage data | v1.5.0 |
 | v1.6.0 | set resources for ksm , gateway , reloader | v1.6.0 |
+| v1.7.0 | Agent Image changes |

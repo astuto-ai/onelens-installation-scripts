@@ -34,9 +34,9 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.6.0}"
+: "${RELEASE_VERSION:=1.7.0}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
-: "${API_BASE_URL:=https://api-in.onelens.cloud}"
+: "${API_BASE_URL:=https://api-gp.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
 # Export the variables so they are available in the environment
@@ -330,7 +330,7 @@ else
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.6.0}\" \
+    --version \"\${RELEASE_VERSION:=1.7.0}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
