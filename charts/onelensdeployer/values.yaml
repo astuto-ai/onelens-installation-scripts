@@ -9,6 +9,14 @@ job:
   ttlSecondsAfterFinished: 300
   env:
     deployment_type: job
+  resources:
+    requests:
+      cpu: 400m
+      memory: 250Mi
+    limits:
+      cpu: 400m
+      memory: 250Mi
+
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
   # - key: "key"
@@ -37,6 +45,13 @@ cronjob:
   restartPolicy: Never
   env:
     deployment_type: cronjob
+  resources:
+    requests:
+      cpu: 400m
+      memory: 250Mi
+    limits:
+      cpu: 400m
+      memory: 250Mi
   concurrencyPolicy: "Forbid" # Prevent concurrent job executions
   successfulJobsHistoryLimit: 1 # Number of successful jobs to keep
   failedJobsHistoryLimit: 1 # Number of failed jobs to keep

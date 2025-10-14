@@ -187,10 +187,10 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     OPENCOST_MEMORY_LIMIT="200Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="200m"
-    ONELENS_MEMORY_REQUEST="115Mi"
-    ONELENS_CPU_LIMIT="200m"
-    ONELENS_MEMORY_LIMIT="115Mi"
+    ONELENS_CPU_REQUEST="400m"
+    ONELENS_MEMORY_REQUEST="400Mi"
+    ONELENS_CPU_LIMIT="400m"
+    ONELENS_MEMORY_LIMIT="400Mi"
     
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
@@ -207,10 +207,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="250Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="300m"
-    ONELENS_MEMORY_REQUEST="127Mi"
-    ONELENS_CPU_LIMIT="300m"
-    ONELENS_MEMORY_LIMIT="127Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
@@ -227,10 +227,10 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     OPENCOST_MEMORY_LIMIT="360Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="330m"
-    ONELENS_MEMORY_REQUEST="138Mi"
-    ONELENS_CPU_LIMIT="330m"
-    ONELENS_MEMORY_LIMIT="138Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
@@ -247,10 +247,10 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     OPENCOST_MEMORY_LIMIT="450Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="350m"
-    ONELENS_MEMORY_REQUEST="190Mi"
-    ONELENS_CPU_LIMIT="350m"
-    ONELENS_MEMORY_LIMIT="190Mi"
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="600Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="600Mi"
     
 else
     echo "Setting resources for very large cluster (1500+ pods)"
@@ -267,10 +267,10 @@ else
     OPENCOST_MEMORY_LIMIT="600Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="300Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="300Mi"
+    ONELENS_CPU_REQUEST="700m"
+    ONELENS_MEMORY_REQUEST="700Mi"
+    ONELENS_CPU_LIMIT="700m"
+    ONELENS_MEMORY_LIMIT="700Mi"
 fi
 
 

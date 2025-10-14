@@ -932,9 +932,6 @@ prometheus:
       timeoutSeconds: 5
 
 
-
-
-
   prometheus-pushgateway:
     enabled: true
     serviceAnnotations:
@@ -975,7 +972,13 @@ prometheus:
     extraInitContainers: []
     extraContainers: []
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
 
     webConfiguration: {}
 
