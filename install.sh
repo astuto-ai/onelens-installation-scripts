@@ -36,7 +36,7 @@ trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 # Phase 2: Environment Variable Setup
 : "${RELEASE_VERSION:=1.7.0}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
-: "${API_BASE_URL:=https://api-gp.onelens.cloud}"
+: "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
 # Export the variables so they are available in the environment
