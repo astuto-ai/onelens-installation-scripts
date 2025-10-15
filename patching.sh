@@ -6,7 +6,7 @@ echo "Step 0: Checking prerequisites..."
 HELM_VERSION="v3.13.2"
 KUBECTL_VERSION="v1.28.2"
 
-# Detect architecture
+# # Detect architecture
 ARCH=$(uname -m)
 
 if [[ "$ARCH" == "x86_64" ]]; then
@@ -61,16 +61,16 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     PROMETHEUS_MEMORY_LIMIT="1188Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="20m"
-    OPENCOST_MEMORY_REQUEST="80Mi"
-    OPENCOST_CPU_LIMIT="20m"
-    OPENCOST_MEMORY_LIMIT="80Mi"
+    OPENCOST_CPU_REQUEST="200m"
+    OPENCOST_MEMORY_REQUEST="200Mi"
+    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_MEMORY_LIMIT="200Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="200m"
-    ONELENS_MEMORY_REQUEST="115Mi"
-    ONELENS_CPU_LIMIT="200m"
-    ONELENS_MEMORY_LIMIT="115Mi"
+    ONELENS_CPU_REQUEST="400m"
+    ONELENS_MEMORY_REQUEST="400Mi"
+    ONELENS_CPU_LIMIT="400m"
+    ONELENS_MEMORY_LIMIT="400Mi"
     
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
@@ -81,16 +81,16 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PROMETHEUS_MEMORY_LIMIT="1771Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="30m"
-    OPENCOST_MEMORY_REQUEST="140Mi"
-    OPENCOST_CPU_LIMIT="30m"
-    OPENCOST_MEMORY_LIMIT="140Mi"
+    OPENCOST_CPU_REQUEST="200m"
+    OPENCOST_MEMORY_REQUEST="250Mi"
+    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_MEMORY_LIMIT="250Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="300m"
-    ONELENS_MEMORY_REQUEST="127Mi"
-    ONELENS_CPU_LIMIT="300m"
-    ONELENS_MEMORY_LIMIT="127Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
@@ -101,36 +101,36 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     PROMETHEUS_MEMORY_LIMIT="3533Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="80m"
+    OPENCOST_CPU_REQUEST="250m"
     OPENCOST_MEMORY_REQUEST="360Mi"
-    OPENCOST_CPU_LIMIT="80m"
+    OPENCOST_CPU_LIMIT="250m"
     OPENCOST_MEMORY_LIMIT="360Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="330m"
-    ONELENS_MEMORY_REQUEST="138Mi"
-    ONELENS_CPU_LIMIT="330m"
-    ONELENS_MEMORY_LIMIT="138Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1150m"
-    PROMETHEUS_MEMORY_REQUEST="5294Mi"
-    PROMETHEUS_CPU_LIMIT="316m"
-    PROMETHEUS_MEMORY_LIMIT="1150Mi"
+    PROMETHEUS_MEMORY_REQUEST="5400Mi"
+    PROMETHEUS_CPU_LIMIT="1150m"
+    PROMETHEUS_MEMORY_LIMIT="5400Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="100m"
+    OPENCOST_CPU_REQUEST="250m"
     OPENCOST_MEMORY_REQUEST="450Mi"
-    OPENCOST_CPU_LIMIT="100m"
+    OPENCOST_CPU_LIMIT="250m"
     OPENCOST_MEMORY_LIMIT="450Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="350m"
-    ONELENS_MEMORY_REQUEST="190Mi"
-    ONELENS_CPU_LIMIT="350m"
-    ONELENS_MEMORY_LIMIT="190Mi"
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="600Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="600Mi"
     
 else
     echo "Setting resources for very large cluster (1500+ pods)"
@@ -141,17 +141,34 @@ else
     PROMETHEUS_MEMORY_LIMIT="7066Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="200m"
+    OPENCOST_CPU_REQUEST="300m"
     OPENCOST_MEMORY_REQUEST="600Mi"
-    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_CPU_LIMIT="300m"
     OPENCOST_MEMORY_LIMIT="600Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="300Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="300Mi"
+    ONELENS_CPU_REQUEST="700m"
+    ONELENS_MEMORY_REQUEST="700Mi"
+    ONELENS_CPU_LIMIT="700m"
+    ONELENS_MEMORY_LIMIT="700Mi"
 fi
+
+## Other component resources
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="100Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="100Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT="100m"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST="100m"
+
+PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
+PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
+
+KSM_MEMORY_LIMIT=100Mi""
+KSM_MEMORY_REQUEST="100Mi"
+KSM_CPU_LIMIT="100m"
+KSM_CPU_REQUEST="100m"
+
 
 # Phase 5: Helm Upgrade with Dynamic Resource Allocation
 echo "helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts"
@@ -160,26 +177,47 @@ echo "helm upgrade onelens-agent onelens/onelens-agent with dynamic resource all
 
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts
 helm repo update
-# REVISION=$(helm history onelens-agent -n onelens-agent | grep -v '02:00' | tail -1 | awk '{print $1}')
-# echo $REVISION
-# helm rollback onelens-agent $REVISION -n onelens-agent
 
-# # Perform the upgrade with dynamically calculated resource values
-# helm upgrade onelens-agent onelens/onelens-agent \
-#   --version=0.1.1-beta.4 \
-#   --namespace onelens-agent \
-#   --history-max 200 \
-#   --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
-#   --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
-#   --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
-#   --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
-#   --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
-#   --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
-#   --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
-#   --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
-#   --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT"
+# Perform the upgrade with dynamically calculated resource values
+helm upgrade onelens-agent onelens/onelens-agent \
+  --version=1.7.0 \
+  --reuse-values \
+  --history-max 200 \
+  --atomic \
+  --timeout=5m \
+  --namespace onelens-agent \
+  --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
+  --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
+  --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
+  --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
+  --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
+  --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
+  --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
+  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT" \
+  --set onelens-agent.image.tag="v1.7.0" \
+  --set onelens-agent.secrets.API_BASE_URL="https://api-in.onelens.cloud" \
+  --set prometheus.prometheus-pushgateway.resources.requests.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" \
+  --set prometheus.prometheus-pushgateway.resources.requests.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
+  --set prometheus.prometheus-pushgateway.resources.limits.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" \
+  --set prometheus.prometheus-pushgateway.resources.limits.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" \
+  --set prometheus.kube-state-metrics.resources.requests.cpu="$KSM_CPU_REQUEST" \
+  --set prometheus.kube-state-metrics.resources.requests.memory="$KSM_MEMORY_REQUEST" \
+  --set prometheus.kube-state-metrics.resources.limits.cpu="$KSM_CPU_LIMIT" \
+  --set prometheus.kube-state-metrics.resources.limits.memory="$KSM_MEMORY_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.requests.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.requests.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
 
-# echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
+if [ $? -eq 0 ]; then
+    echo "Upgrade completed successfully with dynamic resource allocation based on $TOTAL_PODS pods."
+else
+    echo "Upgrade failed and was automatically rolled back by --atomic flag"
+    exit 1
+fi
+
+echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
