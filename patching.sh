@@ -214,14 +214,14 @@ helm upgrade onelens-agent onelens/onelens-agent \
   --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
 
 
-helm upgrade onelensdeployer onelens/onelensdeployer \
-  --version=1.7.0 \
-  --reuse-values \
-  --history-max 200 \
-  --atomic \
-  --timeout=5m \
-  --namespace onelens-agent \
-  --set cronjob.imageTag="v1.7.0"
+# helm upgrade onelensdeployer onelens/onelensdeployer \
+#   --version=1.7.0 \
+#   --reuse-values \
+#   --history-max 200 \
+#   --atomic \
+#   --timeout=5m \
+#   --namespace onelens-agent \
+#   --set cronjob.imageTag="v1.7.0"
 
 
 if [ $? -eq 0 ]; then
