@@ -1,0 +1,61 @@
+name: Helm Chart PR Preview
+
+
+permissions:  
+  id-token: write
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'charts/onelensdeployer/**'
+      - 'charts/onelens-agent/**'
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::609916866699:role/onelens-agent-github-actions-ecr-role
+          aws-region: ap-south-1
+          role-session-name: GitHubActionsSession
+
+      - name: Authenticate Helm with AWS ECR
+        run: |
+          aws ecr get-login-password --region ap-south-1 | helm registry login --username AWS --password-stdin 609916866699.dkr.ecr.ap-south-1.amazonaws.com
+
+      - name: Package charts
+        run: |
+          mkdir -p output
+          echo "Updating dependencies for onelensdeployer..."
+          helm dependency update charts/onelensdeployer
+          helm package charts/onelensdeployer -d output
+
+          echo "Updating dependencies for onelens-agent..."
+          helm dependency update charts/onelens-agent
+          helm package charts/onelens-agent -d output
+
+      - name: Create index.yaml for preview
+        run: |
+          cd output
+          helm repo index . --url https://astuto-ai.github.io/onelens-installation-scripts/preview/pr-${{ github.event.pull_request.number }}
+
+      - name: Push PR preview to master branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          personal_token: ${{ secrets.PREVIEW_WORKFLOW_TOKEN }}
+          publish_dir: ./output
+          destination_dir: preview/pr-${{ github.event.pull_request.number }}
+          publish_branch: master

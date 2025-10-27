@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EKS Nodegroup with IAM role, taints, labels and instance-type passed directly
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of the EKS cluster
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID where the nodegroup will be created
+
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues:
+      - t4g.small
+      - t4g.medium
+      - t4g.large
+      - t4g.xlarge
+    Description: |
+      EC2 instance type for the nodegroup. Choose based on Pod count:
+        - t4g.small   → < 100 pods
+        - t4g.medium  → 100–499 pods
+        - t4g.large   → 500–1499 pods
+        - t4g.xlarge  → 1500–2000 pods
+
+  NodeGroupName:
+    Type: String
+    Default: onelens-nodegroup-single-az1
+    Description: Name for the nodegroup
+
+Resources:
+  EksNodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub Onelens-AmazonEKSNodegroupRole-${ClusterName}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  EksNodegroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: !Ref NodeGroupName
+      NodeRole: !GetAtt EksNodeRole.Arn
+      Subnets:
+        - !Ref SubnetId
+      InstanceTypes:
+        - !Ref InstanceType
+      ScalingConfig:
+        MinSize: 1
+        MaxSize: 1
+        DesiredSize: 1
+      AmiType: AL2023_ARM_64_STANDARD
+      Taints:
+        - Key: onelens-workload
+          Value: agent
+          Effect: NO_SCHEDULE
+      Labels:
+        onelens-workload: agent
+
+Outputs:
+  NodegroupName:
+    Value: !Ref EksNodegroup
+    Description: The created nodegroup
+
+  NodeRoleArn:
+    Value: !GetAtt EksNodeRole.Arn
+    Description: ARN of the created IAM role

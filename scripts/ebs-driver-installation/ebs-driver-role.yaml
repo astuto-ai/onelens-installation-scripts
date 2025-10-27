@@ -1,0 +1,98 @@
+# ==============================================================================
+# AWS PERMISSIONS REQUIRED TO DEPLOY THIS CLOUDFORMATION TEMPLATE
+# ==============================================================================
+#
+# SUMMARY: This template creates an IAM role for EBS CSI Driver with OIDC trust
+#          relationship. OIDC URL is provided as input parameter.
+#
+# REQUIRED IAM PERMISSIONS FOR DEPLOYMENT:
+# ----------------------------------------
+# 1. CloudFormation: CreateStack, UpdateStack, DeleteStack, DescribeStack*
+# 2. IAM: CreateRole, DeleteRole, GetRole, PassRole, AttachRolePolicy, 
+#         DetachRolePolicy, TagRole, UntagRole
+#
+# MINIMUM REQUIRED ROLE: IAM + CloudFormation permissions
+#
+# PREREQUISITES:
+# - EKS cluster must exist with OIDC identity provider enabled
+# - Get OIDC URL: aws eks describe-cluster --name CLUSTER --query cluster.identity.oidc.issuer --output text
+# - You can use the full URL with or without https:// prefix (template handles both)
+#
+# DEPLOYMENT COMMAND:
+# aws cloudformation create-stack \
+#   --stack-name ebs-csi-driver-role \
+#   --template-body file://scripts/ebs-driver-role.yaml \
+#   --parameters ParameterKey=ClusterName,ParameterValue=your-cluster \
+#                ParameterKey=OIDCIssuerURL,ParameterValue=https://oidc.eks.us-east-1.amazonaws.com/id/XXXXX \
+#   --capabilities CAPABILITY_NAMED_IAM
+#
+# Note: You can paste the full OIDC URL with https:// - it will be automatically stripped
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create IAM Role for Amazon EBS CSI Driver with OIDC trust for EKS
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of your EKS cluster
+  OIDCIssuerURL:
+    Type: String
+    Description: OIDC issuer URL for your EKS cluster (https:// prefix will be automatically stripped)
+    # Get this value by running: aws eks describe-cluster --name YOUR_CLUSTER --query cluster.identity.oidc.issuer --output text
+    # You can paste the full URL - the template will automatically remove https:// if present
+
+Conditions:
+  HasHttpsPrefix: !Equals 
+    - !Select [0, !Split ["://", !Ref OIDCIssuerURL]]
+    - "https"
+
+Resources:
+
+  EBSCSIDriverIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 
+        - "AmazonEKS_EBS_CSI_DriverRole-${ClusterName}-${Region}"
+        - CleanOIDCURL: !If
+          - HasHttpsPrefix
+          - !Select [1, !Split ["://", !Ref OIDCIssuerURL]]
+          - !Ref OIDCIssuerURL
+          Region: !Select [2, !Split [".", !Ref OIDCIssuerURL]]
+      # Role name format: AmazonEKS_EBS_CSI_DriverRole-{ClusterName}-{Region}
+      # Example: AmazonEKS_EBS_CSI_DriverRole-my-cluster-us-east-1
+      # Region is extracted from OIDC URL by splitting on "." and taking 3rd element
+      # Works with: https://oidc.eks.us-east-1.amazonaws.com or oidc.eks.us-east-1.amazonaws.com
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "Federated": "arn:aws:iam::${AWS::AccountId}:oidc-provider/${CleanOIDCURL}"
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${CleanOIDCURL}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+                  }
+                }
+              }
+            ]
+          }
+        - CleanOIDCURL: !If 
+          - HasHttpsPrefix
+          - !Select [1, !Split ["://", !Ref OIDCIssuerURL]]
+          - !Ref OIDCIssuerURL
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+
+Outputs:
+  RoleName:
+    Description: Name of the IAM role created
+    Value: !Ref EBSCSIDriverIAMRole
+
+  RoleArn:
+    Description: ARN of the IAM role
+    Value: !GetAtt EBSCSIDriverIAMRole.Arn

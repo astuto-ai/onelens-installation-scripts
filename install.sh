@@ -1,5 +1,7 @@
 #!/bin/bash
-set -ex
+echo "Running main installation steps here..."
+
+set -e
 trap -p
 
 # Phase 1: Logging Setup
@@ -28,12 +30,12 @@ send_logs() {
         }"
 }
 
-# Ensure send_logs runs before exit
-trap 'send_logs; exit 1' ERR EXIT
+# Ensure we send logs on error, and preserve the original exit code
+trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=0.1.1-beta.3}"
-: "${IMAGE_TAG:=latest}"
+: "${RELEASE_VERSION:=1.3.0}"
+: "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
@@ -167,11 +169,124 @@ echo "Total number of pods in the cluster: $TOTAL_PODS"
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
 
 if [ "$TOTAL_PODS" -lt 100 ]; then
-    CPU_REQUEST="500m"
-    MEMORY_REQUEST="2000Mi"
+    echo "Setting resources for small cluster (<100 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="116m"
+    PROMETHEUS_MEMORY_REQUEST="1188Mi"
+    PROMETHEUS_CPU_LIMIT="864m"
+    PROMETHEUS_MEMORY_LIMIT="4000Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="100m"
+    OPENCOST_MEMORY_REQUEST="63Mi"
+    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_MEMORY_LIMIT="400Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="104m"
+    ONELENS_MEMORY_REQUEST="115Mi"
+    ONELENS_CPU_LIMIT="414m"
+    ONELENS_MEMORY_LIMIT="450Mi"
+    
+elif [ "$TOTAL_PODS" -lt 500 ]; then
+    echo "Setting resources for medium cluster (100-499 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="230m"
+    PROMETHEUS_MEMORY_REQUEST="1771Mi"
+    PROMETHEUS_CPU_LIMIT="1035m"
+    PROMETHEUS_MEMORY_LIMIT="7000Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="29m"
+    OPENCOST_MEMORY_REQUEST="69Mi"
+    OPENCOST_CPU_LIMIT="138m"
+    OPENCOST_MEMORY_LIMIT="345Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="127m"
+    ONELENS_MEMORY_REQUEST="127Mi"
+    ONELENS_CPU_LIMIT="552m"
+    ONELENS_MEMORY_LIMIT="483Mi"
+    
+elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    echo "Setting resources for large cluster (500-999 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="288m"
+    PROMETHEUS_MEMORY_REQUEST="3533Mi"
+    PROMETHEUS_CPU_LIMIT="1551m"
+    PROMETHEUS_MEMORY_LIMIT="12000Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="69m"
+    OPENCOST_MEMORY_REQUEST="115Mi"
+    OPENCOST_CPU_LIMIT="414m"
+    OPENCOST_MEMORY_LIMIT="759Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="230m"
+    ONELENS_MEMORY_REQUEST="138Mi"
+    ONELENS_CPU_LIMIT="966m"
+    ONELENS_MEMORY_LIMIT="588Mi"
+    
+elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    echo "Setting resources for extra large cluster (1000-1499 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="316m"
+    PROMETHEUS_MEMORY_REQUEST="5294Mi"
+    PROMETHEUS_CPU_LIMIT="1809m"
+    PROMETHEUS_MEMORY_LIMIT="15000Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="92m"
+    OPENCOST_MEMORY_REQUEST="161Mi"
+    OPENCOST_CPU_LIMIT="483m"
+    OPENCOST_MEMORY_LIMIT="897Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="288m"
+    ONELENS_MEMORY_REQUEST="150Mi"
+    ONELENS_CPU_LIMIT="1173m"
+    ONELENS_MEMORY_LIMIT="621Mi"
+    
 else
-    CPU_REQUEST="1000m"
-    MEMORY_REQUEST="4000Mi"
+    echo "Setting resources for very large cluster (1500+ pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="345m"
+    PROMETHEUS_MEMORY_REQUEST="7066Mi"
+    PROMETHEUS_CPU_LIMIT="2070m"
+    PROMETHEUS_MEMORY_LIMIT="18000Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="115m"
+    OPENCOST_MEMORY_REQUEST="196Mi"
+    OPENCOST_CPU_LIMIT="552m"
+    OPENCOST_MEMORY_LIMIT="1035Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="345m"
+    ONELENS_MEMORY_REQUEST="161Mi"
+    ONELENS_CPU_LIMIT="1380m"
+    ONELENS_MEMORY_LIMIT="690Mi"
+fi
+
+
+PROMETHEUS_RETENTION="10d"
+
+if [ "$TOTAL_PODS" -lt 100 ]; then
+    PROMETHEUS_RETENTION_SIZE="6GB"
+    PROMETHEUS_VOLUME_SIZE="10Gi"
+elif [ "$TOTAL_PODS" -lt 500 ]; then
+    PROMETHEUS_RETENTION_SIZE="12GB"
+    PROMETHEUS_VOLUME_SIZE="20Gi"
+elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    PROMETHEUS_RETENTION_SIZE="20GB"
+    PROMETHEUS_VOLUME_SIZE="30Gi"
+elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    PROMETHEUS_RETENTION_SIZE="30GB"
+    PROMETHEUS_VOLUME_SIZE="40Gi"
+else
+    PROMETHEUS_RETENTION_SIZE="35GB"
+    PROMETHEUS_VOLUME_SIZE="50Gi"
 fi
 
 # Phase 10: Helm Deployment
@@ -185,30 +300,34 @@ check_var() {
 check_var CLUSTER_TOKEN
 check_var REGISTRATION_ID
 
-# # Check if an older version of onelens-agent is already running
-# if helm list -n onelens-agent | grep -q "onelens-agent"; then
-#     echo "An older version of onelens-agent is already running."
-#     CURRENT_VERSION=$(helm get values onelens-agent -n onelens-agent -o json | jq '.["onelens-agent"].image.tag // "unknown"')
-#     echo "Current version of onelens-agent: $CURRENT_VERSION"
-
-#     if [ "$CURRENT_VERSION" != "$IMAGE_TAG" ]; then
-#         echo "Patching onelens-agent to version $IMAGE_TAG..."
-#     else
-#         echo "onelens-agent is already at the desired version ($IMAGE_TAG)."
-#         exit 1
-#     fi
-# else
-#     echo "No existing onelens-agent release found. Proceeding with installation."
-# fi
 export TOLERATION_KEY="${TOLERATION_KEY:=}"
 export TOLERATION_VALUE="${TOLERATION_VALUE:=}"
 export TOLERATION_OPERATOR="${TOLERATION_OPERATOR:=}"
 export TOLERATION_EFFECT="${TOLERATION_EFFECT:=}"
 export NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:=}"
 export NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:=}"
+export IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:=}"
+
+## EBS Driver custom tag and custom encryption
+export EBS_TAGS_ENABLED="${EBS_TAGS_ENABLED:=false}"
+export EBS_TAGS="${EBS_TAGS:=}"
+export EBS_ENCRYPTION_ENABLED="${EBS_ENCRYPTION_ENABLED:=false}"
+export EBS_ENCRYPTION_KEY="${EBS_ENCRYPTION_KEY:=}"
+
+FILE="globalvalues.yaml"
+
+echo "using $FILE"
+
+if [ -f "$FILE" ]; then
+    echo "File $FILE exists"
+else
+    echo "File $FILE does not exist"
+    exit 1
+fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=0.1.1-beta.3}\" \
+    --version \"\${RELEASE_VERSION:=1.3.0}\" \
+    -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
     --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
@@ -217,8 +336,22 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$CLUSTER_NAME\" \
     --set onelens-agent.image.tag=\"$IMAGE_TAG\" \
     --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
-    --set prometheus.server.resources.requests.cpu=\"$CPU_REQUEST\" \
-    --set prometheus.server.resources.requests.memory=\"$MEMORY_REQUEST\""
+    --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
+    --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
+    --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
+    --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$OPENCOST_CPU_REQUEST\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$OPENCOST_MEMORY_REQUEST\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$OPENCOST_CPU_LIMIT\" \
+    --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$OPENCOST_MEMORY_LIMIT\" \
+    --set onelens-agent.resources.requests.cpu=\"$ONELENS_CPU_REQUEST\" \
+    --set onelens-agent.resources.requests.memory=\"$ONELENS_MEMORY_REQUEST\" \
+    --set onelens-agent.resources.limits.cpu=\"$ONELENS_CPU_LIMIT\" \
+    --set onelens-agent.resources.limits.memory=\"$ONELENS_MEMORY_LIMIT\" \
+    --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
+    --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
+    --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+
 # Append tolerations only if set
 if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
   for path in \
@@ -234,6 +367,8 @@ if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR
       --set $path.tolerations[0].effect=\"$TOLERATION_EFFECT\""
   done
 fi
+
+# Append nodeSelector only if set
 if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
   for path in \
     prometheus-opencost-exporter.opencost \
@@ -244,13 +379,59 @@ if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
     CMD+=" --set $path.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
   done
 fi
+
+# Append imagePullSecrets only if set
+if [[ -n "$IMAGE_PULL_SECRET" ]]; then
+  for path in \
+    prometheus-opencost-exporter.opencost \
+    prometheus.server \
+    onelens-agent.cronJob \
+    prometheus.prometheus-pushgateway \
+    prometheus.kube-state-metrics; do
+    CMD+=" --set $path.imagePullSecrets=\"$IMAGE_PULL_SECRET\""
+  done
+fi
+
+# Append custom EBS tags only if set
+if [[ "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TAGS" ]]; then
+  echo "Processing EBS tags: $EBS_TAGS"
+  # Enable volume tags
+  CMD+=" --set onelens-agent.storageClass.volumeTags.enabled=true"
+  
+  # Parse comma-separated key=value pairs
+  IFS=',' read -ra TAG_PAIRS <<< "$EBS_TAGS"
+  for tag_pair in "${TAG_PAIRS[@]}"; do
+    # Trim whitespace
+    tag_pair=$(echo "$tag_pair" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    # Split on first '=' to handle values that might contain '='
+    tag_key=$(echo "$tag_pair" | cut -d'=' -f1)
+    tag_value=$(echo "$tag_pair" | cut -d'=' -f2-)
+    
+    if [[ -n "$tag_key" && -n "$tag_value" ]]; then
+      echo "Adding EBS tag: $tag_key=$tag_value"
+      CMD+=" --set onelens-agent.storageClass.volumeTags.tags.$tag_key=\"$tag_value\""
+    else
+      echo "Warning: Skipping invalid tag format: $tag_pair (expected key=value)"
+    fi
+  done
+fi
+
+# Append encryption only if set
+if [[ "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
+  CMD+=" --set onelens-agent.storageClass.encryption.enabled=true"
+  if [[ -n "$EBS_ENCRYPTION_KEY" ]]; then
+    CMD+=" --set onelens-agent.storageClass.encryption.kmsKeyId=\"$EBS_ENCRYPTION_KEY\""
+  fi
+fi
+
 # Final execution
 CMD+=" --wait || { echo \"Error: Helm deployment failed.\"; exit 1; }"
 
 # Run it
 eval "$CMD"
 
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-opencost-exporter -n onelens-agent --timeout=300s || {
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-opencost-exporter -n onelens-agent --timeout=800s || {
     echo "Error: Pods failed to become ready."
     echo "Installation Failed."
     false
@@ -268,5 +449,10 @@ curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
         \"cluster_token\": \"$CLUSTER_TOKEN\",
         \"status\": \"CONNECTED\"
     }"
-
 echo "To verify deployment: kubectl get pods -n onelens-agent"
+sleep 60
+kubectl delete job onelensdeployerjob -n onelens-agent || true
+kubectl delete clusterrole onelensdeployerjob-clusterrole || true
+kubectl delete clusterrolebinding onelensdeployerjob-clusterrolebinding || true
+kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
+

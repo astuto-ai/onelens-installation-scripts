@@ -1,8 +1,16 @@
-{{- if .Values.serviceAccount.enabled }}
+{{- if .Values.job.serviceAccount.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .Values.serviceAccount.name }}
-  namespace: {{ .Values.namespace }}
+  name: {{ .Values.job.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
 {{- end }}
 
+--- 
+{{- if .Values.cronjob.serviceAccount.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.cronjob.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

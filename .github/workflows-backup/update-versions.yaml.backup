@@ -1,0 +1,100 @@
+name: Update Helm Chart Versions
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: 'Helm chart version (e.g. 1.2.0)'
+        required: true
+        default: ''
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      AGENT_CHART_DIR: charts/onelens-agent
+      DEPLOYER_CHART_DIR: charts/onelensdeployer
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Install yq and Helm
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Determine chart version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.chart_version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          fi
+          echo "Using chart version: $VERSION"
+          echo "Using image tag: $TAG"
+          echo "chart_version=$VERSION" >> $GITHUB_ENV
+          echo "image_tag=$TAG" >> $GITHUB_ENV
+
+      - name: Update onelens-agent chart files
+        run: |
+          echo "🔄 Updating $AGENT_CHART_DIR"
+
+          yq e ".appVersion = \"$chart_version\"" -i "$AGENT_CHART_DIR/Chart.yaml"
+          yq e ".version = \"$chart_version\"" -i "$AGENT_CHART_DIR/Chart.yaml"
+          yq e '(.dependencies[] | select(.name == "onelens-agent-base") .version) = strenv(chart_version)' -i "$AGENT_CHART_DIR/Chart.yaml"
+          yq e '(.dependencies[] | select(.name == "onelens-agent-base") .version) = strenv(chart_version)' -i "$AGENT_CHART_DIR/Chart.lock"
+
+          # Update image tag with 'v' prefix
+          yq e ".onelens-agent.image.tag = \"$image_tag\"" -i "$AGENT_CHART_DIR/values.yaml"
+
+          VERSION_FILE="$AGENT_CHART_DIR/version.md"
+
+          # Ensure version.md exists with header
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo -e "# Version History\n" > "$VERSION_FILE"
+            echo "| Version | Short Description | Image Tag Version |" >> "$VERSION_FILE"
+            echo "|---------|------------------|--------------------|" >> "$VERSION_FILE"
+          fi
+
+          # Append new version row
+          echo "| $chart_version | Versioning Changes | $image_tag |" >> "$VERSION_FILE"
+
+      - name: Update onelensdeployer chart files
+        run: |
+          echo "🔄 Updating $DEPLOYER_CHART_DIR"
+          yq e ".version = \"$chart_version\"" -i "$DEPLOYER_CHART_DIR/Chart.yaml"
+
+      - name: Update onelensdeployer image tags
+        run: |
+          echo "📝 Updating image tags in values.yaml"
+          yq e ".job.tag = \"$image_tag\"" -i "$DEPLOYER_CHART_DIR/values.yaml"
+          yq e ".cronjob.tag = \"$image_tag\"" -i "$DEPLOYER_CHART_DIR/values.yaml"
+
+      - name: Commit and push changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add $AGENT_CHART_DIR/Chart.yaml
+          git add $AGENT_CHART_DIR/Chart.lock
+          git add $AGENT_CHART_DIR/values.yaml
+          git add $AGENT_CHART_DIR/version.md
+          git add $DEPLOYER_CHART_DIR/Chart.yaml
+          git add $DEPLOYER_CHART_DIR/values.yaml
+          git commit -m "Bump charts to version $chart_version" || echo "No changes to commit"
+          git push origin HEAD:master

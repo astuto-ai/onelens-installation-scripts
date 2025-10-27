@@ -1,28 +1,34 @@
 onelens-agent:
   enabled: true
-
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v0.1.1-beta.2
+    tag: v1.3.0
     pullPolicy: IfNotPresent
-
   nameOverride: "onelens-agent"
   fullnameOverride: "onelens-agent"
-
   serviceAccount:
     enabled: true
     name: "onelens-agent-sa"
     annotations: {}
-
   storageClass:
     enabled: true  
     name: onelens-sc
     provisioner: ebs.csi.aws.com
-    reclaimPolicy: Retain
+    reclaimPolicy: Delete
     volumeBindingMode: WaitForFirstConsumer
     volumeType: gp3
-    allowVolumeExpansion: false
-
+    allowVolumeExpansion: true
+    encryption:
+      enabled: false
+      kmsKeyId: ""
+    volumeTags:
+      enabled: true
+      tags:
+        Application_Name: "OnelensAgent"
+        Application_Owner: "Astuto"
+    labels:
+      Application_Name: "OnelensAgent"
+      Application_Owner: "Astuto"
   resources:
     requests:
       cpu: "100m"
@@ -30,17 +36,15 @@ onelens-agent:
     limits:
       cpu: "500m"
       memory: "256Mi"
-
   # CronJob configuration
   cronJob:
-    cronSchedule: "0 * * * *"  # Run once an hour at the top of the hour
-    concurrencyPolicy: "Forbid"  # Prevent concurrent job executions
+    cronSchedule: "0 * * * *" # Run once an hour at the top of the hour
+    concurrencyPolicy: "Forbid" # Prevent concurrent job executions
     successfulJobsHistoryLimit: 3 # Number of successful jobs to keep
     failedJobsHistoryLimit: 2 # Number of failed jobs to keep
     suspend: false # Suspend the job
     restartPolicy: "Never" # Restart the job on failure
-    healthCheck: false  # Set to true to enable health check for cronjob pod
-
+    healthCheck: false # Set to true to enable health check for cronjob pod
     # Tolerations allow the agent to be scheduled on nodes with matching taints
     tolerations: []
     # - key: "key"
@@ -48,20 +52,17 @@ onelens-agent:
     #   value: "value"
     #   effect: "NoSchedule"
     nodeSelector: {}
-      # kubernetes.io/os: linux
-
+    # kubernetes.io/os: linux
   # Environment variables
   env:
     # Health Checker URLs
     OPENCOST_HEALTH_CHECKER_URL: "http://onelens-agent-prometheus-opencost-exporter:9003/healthz"
     PROMETHEUS_HEALTH_CHECKER_URL: "http://onelens-agent-prometheus-server:80/-/healthy"
-
   secrets:
     # Secrets for onelens-agent
     API_BASE_URL: "https://dev-api.onelens.cloud" # DON'T ADD TRAILING SLASH
     CLUSTER_TOKEN: "your-raw-token" # Don't encode
     REGISTRATION_ID: "your-raw-id" # Don't encode
-
 prometheus:
   enabled: true
   server:
@@ -87,7 +88,6 @@ prometheus:
           static_configs:
             - targets:
                 - localhost:9090
-
         - job_name: 'kubernetes-apiservers'
           kubernetes_sd_configs:
             - role: endpoints
@@ -99,7 +99,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
               action: keep
               regex: default;kubernetes;https
-
         - job_name: 'kubernetes-nodes'
           scheme: https
           tls_config:
@@ -116,7 +115,6 @@ prometheus:
               regex: (.+)
               target_label: __metrics_path__
               replacement: /api/v1/nodes/$1/proxy/metrics
-
         - job_name: 'kubernetes-nodes-cadvisor'
           scheme: https
           tls_config:
@@ -133,7 +131,6 @@ prometheus:
               regex: (.+)
               target_label: __metrics_path__
               replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
-
         - job_name: 'kubernetes-service-endpoints'
           honor_labels: true
           kubernetes_sd_configs:
@@ -172,7 +169,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_pod_node_name]
               action: replace
               target_label: node
-
         - job_name: 'kubernetes-service-endpoints-slow'
           honor_labels: true
           scrape_interval: 5m
@@ -210,7 +206,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_pod_node_name]
               action: replace
               target_label: node
-
         - job_name: 'prometheus-pushgateway'
           honor_labels: true
           kubernetes_sd_configs:
@@ -219,7 +214,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
               action: keep
               regex: pushgateway
-
         - job_name: 'kubernetes-services'
           honor_labels: true
           metrics_path: /probe
@@ -243,7 +237,6 @@ prometheus:
               target_label: namespace
             - source_labels: [__meta_kubernetes_service_name]
               target_label: service
-
         - job_name: 'kubernetes-pods'
           honor_labels: true
           kubernetes_sd_configs:
@@ -268,7 +261,6 @@ prometheus:
               regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
               replacement: '[$2]:$1'
               target_label: __address__
-
   extraScrapeConfigs: |
     - job_name: opencost
       honor_labels: true
@@ -286,31 +278,30 @@ prometheus:
   kube-state-metrics:
     enabled: true
     collectors:
-      - cronjobs                     # Scheduled jobs that run at specified intervals
-      - daemonsets                   # Ensures a pod runs on all (or some) nodes
-      - deployments                  # Manages ReplicaSets and Pods
-      - horizontalpodautoscalers     # Automatically scales Pod replicas based on metrics
-      - jobs                         # One-time tasks that run to completion
-      - limitranges                  # Enforces resource limits in a namespace
-      - namespaces                   # Virtual clusters within a physical cluster
-      - nodes                        # Physical or virtual machines in the cluster
-      - persistentvolumeclaims       # Storage requests by Pods
-      - persistentvolumes           # Cluster storage resources
-      - pods                        # Smallest deployable units in Kubernetes
-      - replicasets                 # Maintains a stable set of replica Pods
-      - resourcequotas              # Limits aggregate resource consumption per namespace
-      - statefulsets               # Manages stateful applications
-      - storageclasses             # Defines different classes of storage
+      - cronjobs # Scheduled jobs that run at specified intervals
+      - daemonsets # Ensures a pod runs on all (or some) nodes
+      - deployments # Manages ReplicaSets and Pods
+      - horizontalpodautoscalers # Automatically scales Pod replicas based on metrics
+      - jobs # One-time tasks that run to completion
+      - limitranges # Enforces resource limits in a namespace
+      - namespaces # Virtual clusters within a physical cluster
+      - nodes # Physical or virtual machines in the cluster
+      - persistentvolumeclaims # Storage requests by Pods
+      - persistentvolumes # Cluster storage resources
+      - pods # Smallest deployable units in Kubernetes
+      - replicasets # Maintains a stable set of replica Pods
+      - resourcequotas # Limits aggregate resource consumption per namespace
+      - statefulsets # Manages stateful applications
+      - storageclasses # Defines different classes of storage
     # Comma-separated list of metrics to be exposed.
     # This list comprises of exact metric names and/or regex patterns.
     # The allowlist and denylist are mutually exclusive.
     metricAllowlist: []
-
     # Comma-separated list of metrics not to be enabled.
     # This list comprises of exact metric names and/or regex patterns.
     # The allowlist and denylist are mutually exclusive.
     metricDenylist: []
-    service: 
+    service:
       annotations:
         custom.metrics/scrape: "true"
         prometheus.io/scrape: "false"
@@ -330,13 +321,11 @@ prometheus:
       - nodes=[*]
       - resourcequotas=[*]
       - persistentvolumes=[*]
-
   prometheus-pushgateway:
     enabled: true
     serviceAnnotations:
       prometheus.io/probe: "false"
       prometheus.custom/probe: pushgateway
-
   prometheus-node-exporter:
     enabled: false
     nodeSelector:
@@ -349,11 +338,9 @@ prometheus:
     scrape_interval: 30s
     scrape_timeout: 10s
     evaluation_interval: 1m
-
-
 prometheus-opencost-exporter:
   enabled: true
-  opencost:    
+  opencost:
     exporter:
       cloudProviderApiKey: ""
       defaultClusterId: 'default-cluster'
@@ -388,4 +375,3 @@ prometheus-opencost-exporter:
         serviceName: onelens-agent-prometheus-server
         namespaceName: onelens-agent
         port: 80
-

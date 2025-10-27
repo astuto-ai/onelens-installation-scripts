@@ -4,12 +4,14 @@ kind: Job
 metadata:
   name: {{ .Values.job.name }}
 spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
   template:
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name }}
+      serviceAccountName: {{ .Values.job.serviceAccount.name }}
       containers:
         - name: {{ .Values.job.name }}
-          image: {{ .Values.job.image }}
+          image: {{ .Values.job.image }}:{{ .Values.job.imageTag }}
           imagePullPolicy: {{ .Values.job.imagePullPolicy }}
           env:
             {{- range $key, $value := .Values.job.env }}

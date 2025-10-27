@@ -2,23 +2,13 @@ job:
   enabled: true
   name: onelensdeployerjob
   image: public.ecr.aws/w7k6q5m9/onelens-deployer
+  imageTag: v1.3.0
   imagePullPolicy: Always
   restartPolicy: Never
-  env: {}
-
-cronjob:
-  enabled: false
-  name: onelensdeployercronjob
-  schedule: "* * * * *"
-  image: public.ecr.aws/w7k6q5m9/onelens-deployer
-  restartPolicy: Never
-  env: {}
-  concurrencyPolicy: "Forbid"  # Prevent concurrent job executions
-  successfulJobsHistoryLimit: 3 # Number of successful jobs to keep
-  failedJobsHistoryLimit: 2 # Number of failed jobs to keep
-  suspend: false # Suspend the job
-  healthCheck: false  # Set to true to enable health check for cronjob pod
-
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 300
+  env:
+    deployment_type: job
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
   # - key: "key"
@@ -26,12 +16,82 @@ cronjob:
   #   value: "value"
   #   effect: "NoSchedule"
   nodeSelector: {}
-    # kubernetes.io/os: linux
-
-serviceAccount:
+  # kubernetes.io/os: linux
+  serviceAccount:
+    enabled: true
+    name: onelensdeployerjob-sa
+  clusterRole:
+    name: onelensdeployerjob-clusterrole
+    rules:
+      - apiGroups: ["*"]
+        resources: ["*"]
+        verbs: ["*"]
+  clusterRoleBinding:
+    name: onelensdeployerjob-clusterrolebinding
+cronjob:
   enabled: true
-  name: onelensdeployer-sa
-namespace: default
+  name: onelensupdater
+  schedule: "0 2 * * *"
+  image: public.ecr.aws/w7k6q5m9/onelens-deployer
+  imageTag: v1.3.0
+  restartPolicy: Never
+  env:
+    deployment_type: cronjob
+  concurrencyPolicy: "Forbid" # Prevent concurrent job executions
+  successfulJobsHistoryLimit: 1 # Number of successful jobs to keep
+  failedJobsHistoryLimit: 1 # Number of failed jobs to keep
+  suspend: false # Suspend the job
+  healthCheck: false # Set to true to enable health check for cronjob pod
+  # Tolerations allow the agent to be scheduled on nodes with matching taints
+  tolerations: []
+  # - key: "key"
+  #   operator: "Equal"
+  #   value: "value"
+  #   effect: "NoSchedule"
+  nodeSelector: {}
+  # kubernetes.io/os: linux
 
-clusterRoleBinding:
-  name: helm-deployer-binding
+  serviceAccount:
+    enabled: true
+    name: onelensupdater-sa
+  clusterRole:
+    name: onelensupdater-clusterrole
+    rules:
+      # Read access needed to inspect current deployments and resources
+      - apiGroups: ["", "apps", "autoscaling", "batch", "extensions", "policy", "rbac.authorization.k8s.io", "networking.k8s.io"]
+        resources: ["deployments", "replicasets", "pods", "services", "configmaps", "secrets", "persistentvolumeclaims", "statefulsets", "horizontalpodautoscalers", "ingresses", "networkpolicies", "roles", "rolebindings", "serviceaccounts", "daemonsets", "jobs", "cronjobs"]
+        verbs: ["get", "list", "watch", "patch", "update"]
+      # Write access to perform patching and upgrades
+      - apiGroups: ["", "apps", "autoscaling", "batch", "extensions", "policy", "rbac.authorization.k8s.io", "networking.k8s.io"]
+        resources: ["deployments", "replicasets", "pods", "services", "configmaps", "secrets", "persistentvolumeclaims", "statefulsets", "horizontalpodautoscalers", "ingresses", "networkpolicies", "roles", "rolebindings", "serviceaccounts", "daemonsets", "jobs", "cronjobs"]
+        verbs: ["create", "get", "list", "patch", "update", "watch"]
+      # Namespace discovery
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get", "list", "watch", "patch", "update"]
+      # Read access to RBAC resources
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+        verbs: ["get", "list", "watch", "patch", "update"]
+      # Read access to limitranges
+      - apiGroups: [""]
+        resources: ["limitranges"]
+        verbs: ["list", "watch", "patch", "update"]
+      # Read access to nodes
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list", "watch", "patch", "update"]
+      # Read access to persistentvolumes
+      - apiGroups: [""]
+        resources: ["persistentvolumes"]
+        verbs: ["list", "watch", "patch", "update"]
+      # Read access to resourcequotas
+      - apiGroups: [""]
+        resources: ["resourcequotas"]
+        verbs: ["list", "watch", "patch", "update"]
+      # Read access to StorageClasses
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch", "patch", "update"]
+  clusterRoleBinding:
+    name: onelensupdater-clusterrolebinding
