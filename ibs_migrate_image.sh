@@ -185,7 +185,7 @@ ecr_login_default
 # Image mapping using arrays instead of associative array
 # Format: "source|target"
 IMAGES=(
-  "public.ecr.aws/w7k6q5m9/onelens-agent:v1.0.0|onelens-agent:v1.0.0"
+  "public.ecr.aws/w7k6q5m9/onelens-agent:v1.7.0|onelens-agent:v1.7.0"
   "quay.io/prometheus/prometheus:v3.1.0|prometheus:v3.1.0"
   "quay.io/kubecost1/kubecost-cost-model:prod-1.108.0|kubecost-cost-model:prod-1.108.0"
   "quay.io/prometheus-operator/prometheus-config-reloader:v0.79.2|prometheus-config-reloader:v0.79.2"

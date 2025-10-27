@@ -96,7 +96,7 @@ CLUSTER_NAME=$(prompt_with_validation "CLUSTER_NAME" "Enter cluster name" "Clust
 echo ""
 
 # Default release version
-DEFAULT_RELEASE_VERSION="0.1.1-beta.4"
+DEFAULT_RELEASE_VERSION="1.7.0"
 echo "Default release version is: $DEFAULT_RELEASE_VERSION"
 read -p "Press Enter to keep release version or type a new one: " RELEASE_VERSION_INPUT
 if [[ -n "$RELEASE_VERSION_INPUT" ]]; then
@@ -199,105 +199,125 @@ fi
 info "Total number of pods in the cluster: $TOTAL_PODS"
 
 if [ "$TOTAL_PODS" -lt 100 ]; then
-    info "Setting resources for small cluster (<100 pods)"
+    echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="116m"
+    PROMETHEUS_CPU_REQUEST="300m"
     PROMETHEUS_MEMORY_REQUEST="1188Mi"
-    PROMETHEUS_CPU_LIMIT="864m"
-    PROMETHEUS_MEMORY_LIMIT="4000Mi"
+    PROMETHEUS_CPU_LIMIT="300m"
+    PROMETHEUS_MEMORY_LIMIT="1188Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="17m"
-    OPENCOST_MEMORY_REQUEST="63Mi"
-    OPENCOST_CPU_LIMIT="105m"
-    OPENCOST_MEMORY_LIMIT="276Mi"
+    OPENCOST_CPU_REQUEST="200m"
+    OPENCOST_MEMORY_REQUEST="200Mi"
+    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_MEMORY_LIMIT="200Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="104m"
-    ONELENS_MEMORY_REQUEST="115Mi"
-    ONELENS_CPU_LIMIT="414m"
-    ONELENS_MEMORY_LIMIT="450Mi"
+    ONELENS_CPU_REQUEST="400m"
+    ONELENS_MEMORY_REQUEST="400Mi"
+    ONELENS_CPU_LIMIT="400m"
+    ONELENS_MEMORY_LIMIT="400Mi"
     
 elif [ "$TOTAL_PODS" -lt 500 ]; then
-    info "Setting resources for medium cluster (100-499 pods)"
+    echo "Setting resources for medium cluster (100-499 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="230m"
+    PROMETHEUS_CPU_REQUEST="350m"
     PROMETHEUS_MEMORY_REQUEST="1771Mi"
-    PROMETHEUS_CPU_LIMIT="1035m"
-    PROMETHEUS_MEMORY_LIMIT="7000Mi"
+    PROMETHEUS_CPU_LIMIT="350m"
+    PROMETHEUS_MEMORY_LIMIT="1771Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="29m"
-    OPENCOST_MEMORY_REQUEST="69Mi"
-    OPENCOST_CPU_LIMIT="138m"
-    OPENCOST_MEMORY_LIMIT="345Mi"
+    OPENCOST_CPU_REQUEST="200m"
+    OPENCOST_MEMORY_REQUEST="250Mi"
+    OPENCOST_CPU_LIMIT="200m"
+    OPENCOST_MEMORY_LIMIT="250Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="127m"
-    ONELENS_MEMORY_REQUEST="127Mi"
-    ONELENS_CPU_LIMIT="552m"
-    ONELENS_MEMORY_LIMIT="483Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1000 ]; then
-    info "Setting resources for large cluster (500-999 pods)"
+    echo "Setting resources for large cluster (500-999 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="288m"
+    PROMETHEUS_CPU_REQUEST="1000m"
     PROMETHEUS_MEMORY_REQUEST="3533Mi"
-    PROMETHEUS_CPU_LIMIT="1551m"
-    PROMETHEUS_MEMORY_LIMIT="12000Mi"
+    PROMETHEUS_CPU_LIMIT="1000m"
+    PROMETHEUS_MEMORY_LIMIT="3533Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="69m"
-    OPENCOST_MEMORY_REQUEST="115Mi"
-    OPENCOST_CPU_LIMIT="414m"
-    OPENCOST_MEMORY_LIMIT="759Mi"
+    OPENCOST_CPU_REQUEST="250m"
+    OPENCOST_MEMORY_REQUEST="360Mi"
+    OPENCOST_CPU_LIMIT="250m"
+    OPENCOST_MEMORY_LIMIT="360Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="230m"
-    ONELENS_MEMORY_REQUEST="138Mi"
-    ONELENS_CPU_LIMIT="966m"
-    ONELENS_MEMORY_LIMIT="588Mi"
+    ONELENS_CPU_REQUEST="500m"
+    ONELENS_MEMORY_REQUEST="500Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="500Mi"
     
 elif [ "$TOTAL_PODS" -lt 1500 ]; then
-    info "Setting resources for extra large cluster (1000-1499 pods)"
+    echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="316m"
-    PROMETHEUS_MEMORY_REQUEST="5294Mi"
-    PROMETHEUS_CPU_LIMIT="1809m"
-    PROMETHEUS_MEMORY_LIMIT="15000Mi"
+    PROMETHEUS_CPU_REQUEST="1150m"
+    PROMETHEUS_MEMORY_REQUEST="5400Mi"
+    PROMETHEUS_CPU_LIMIT="1150m"
+    PROMETHEUS_MEMORY_LIMIT="5400Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="92m"
-    OPENCOST_MEMORY_REQUEST="161Mi"
-    OPENCOST_CPU_LIMIT="483m"
-    OPENCOST_MEMORY_LIMIT="897Mi"
+    OPENCOST_CPU_REQUEST="250m"
+    OPENCOST_MEMORY_REQUEST="450Mi"
+    OPENCOST_CPU_LIMIT="250m"
+    OPENCOST_MEMORY_LIMIT="450Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="288m"
-    ONELENS_MEMORY_REQUEST="150Mi"
-    ONELENS_CPU_LIMIT="1173m"
-    ONELENS_MEMORY_LIMIT="621Mi"
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="600Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="600Mi"
     
 else
-    info "Setting resources for very large cluster (1500+ pods)"
+    echo "Setting resources for very large cluster (1500+ pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="345m"
+    PROMETHEUS_CPU_REQUEST="1500m"
     PROMETHEUS_MEMORY_REQUEST="7066Mi"
-    PROMETHEUS_CPU_LIMIT="2070m"
-    PROMETHEUS_MEMORY_LIMIT="18000Mi"
+    PROMETHEUS_CPU_LIMIT="1500m"
+    PROMETHEUS_MEMORY_LIMIT="7066Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="115m"
-    OPENCOST_MEMORY_REQUEST="196Mi"
-    OPENCOST_CPU_LIMIT="552m"
-    OPENCOST_MEMORY_LIMIT="1035Mi"
+    OPENCOST_CPU_REQUEST="300m"
+    OPENCOST_MEMORY_REQUEST="600Mi"
+    OPENCOST_CPU_LIMIT="300m"
+    OPENCOST_MEMORY_LIMIT="600Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="345m"
-    ONELENS_MEMORY_REQUEST="161Mi"
-    ONELENS_CPU_LIMIT="1380m"
-    ONELENS_MEMORY_LIMIT="690Mi"
+    ONELENS_CPU_REQUEST="700m"
+    ONELENS_MEMORY_REQUEST="700Mi"
+    ONELENS_CPU_LIMIT="700m"
+    ONELENS_MEMORY_LIMIT="700Mi"
 fi
+
+PROMETHEUS_RETENTION="10d"
+
+if [ "$TOTAL_PODS" -lt 100 ]; then
+    PROMETHEUS_RETENTION_SIZE="6GB"
+    PROMETHEUS_VOLUME_SIZE="10Gi"
+elif [ "$TOTAL_PODS" -lt 500 ]; then
+    PROMETHEUS_RETENTION_SIZE="12GB"
+    PROMETHEUS_VOLUME_SIZE="20Gi"
+elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    PROMETHEUS_RETENTION_SIZE="20GB"
+    PROMETHEUS_VOLUME_SIZE="30Gi"
+elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    PROMETHEUS_RETENTION_SIZE="30GB"
+    PROMETHEUS_VOLUME_SIZE="40Gi"
+else
+    PROMETHEUS_RETENTION_SIZE="35GB"
+    PROMETHEUS_VOLUME_SIZE="50Gi"
+fi
+
 
 # Download configuration values
 URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/refs/heads/master/globalvalues.yaml"
@@ -319,7 +339,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     -f $FILE \
     --set job.env.imagePullSecrets=\"null\" \
     --set onelens-agent.image.repository=\"$registry_url/onelens-agent\" \
-    --set onelens-agent.image.tag=\"v1.0.0\" \
+    --set onelens-agent.image.tag=\"v1.7.0\" \
     --set prometheus.server.image.repository=\"$registry_url/prometheus\" \
     --set prometheus.server.image.tag=\"v3.1.0\" \
     --set prometheus.configmapReload.prometheus.image.repository=\"$registry_url/prometheus-config-reloader\" \
@@ -338,6 +358,9 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\" \
     --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$CLUSTER_NAME\" \
     --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
+    --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
+    --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
+    --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
     --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
     --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
     --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
