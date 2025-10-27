@@ -2,8 +2,8 @@ onelens-agent:
   enabled: true
 
   image:
-    repository: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/onelens-agent
-    tag: v0.1.1-beta.2
+    repository: public.ecr.aws/w7k6q5m9/onelens-agent
+    tag: v1.7.0
     pullPolicy: IfNotPresent
 
   nameOverride: "onelens-agent"
@@ -18,10 +18,18 @@ onelens-agent:
     enabled: true  
     name: onelens-sc
     provisioner: ebs.csi.aws.com
-    reclaimPolicy: Retain
+    reclaimPolicy: Delete
     volumeBindingMode: WaitForFirstConsumer
     volumeType: gp3
-    allowVolumeExpansion: false
+    allowVolumeExpansion: true
+    encryption:
+      enabled: false
+      kmsKeyId: ""
+    volumeTags:
+      enabled: false
+    labels:
+      Application_Name: "OnelensAgent"
+      Application_Owner: "Astuto"
 
   resources:
     requests:
@@ -90,7 +98,7 @@ prometheus:
       enabled: true
       name: configmap-reload
       image:
-        repository: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus-config-reloader
+        repository: quay.io/prometheus-operator/prometheus-config-reloader
         tag: v0.79.2
         digest: ""
         pullPolicy: IfNotPresent
@@ -131,7 +139,13 @@ prometheus:
           scheme: HTTP
         periodSeconds: 10
 
-      resources: {}
+      resources:
+        requests:
+          cpu: 100m
+          memory: 100Mi
+        limits:
+          cpu: 100m
+          memory: 100Mi
 
   server:
     name: server
@@ -145,7 +159,7 @@ prometheus:
     sidecarTemplateValues: {}
 
     image:
-      repository: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/prometheus
+      repository: quay.io/prometheus/prometheus
       tag: "v3.1.0"
       digest: ""
       pullPolicy: IfNotPresent
@@ -166,6 +180,8 @@ prometheus:
 
     extraFlags:
       - web.enable-lifecycle
+      - storage.tsdb.max-block-duration=2h
+      - storage.tsdb.min-block-duration=30m
 
     configPath: /etc/config/prometheus.yml
 
@@ -365,7 +381,7 @@ prometheus:
     terminationGracePeriodSeconds: 300
 
     retention: "30d"
-    retentionSize: "9GB"
+    retentionSize: "6GB"
 
   ruleFiles: {}
 
@@ -612,17 +628,16 @@ prometheus:
   kube-state-metrics:
     enabled: true
 
-  prometheus-node-exporter:
-    enabled: true
-
-    rbac:
-      pspEnabled: false
-
-    containerSecurityContext:
-      allowPrivilegeEscalation: false
-
   prometheus-pushgateway:
     enabled: true
+
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
 
     serviceAnnotations:
       prometheus.io/probe: pushgateway
@@ -630,15 +645,13 @@ prometheus:
   alertmanager:
     enabled: false
 
-
-
   kube-state-metrics:
     enabled: true
 
     prometheusScrape: true
     image:
-      registry: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com
-      repository: kube-state-metrics
+      registry: registry.k8s.io
+      repository: kube-state-metrics/kube-state-metrics
       tag: ""
       sha: ""
       pullPolicy: IfNotPresent
@@ -857,7 +870,14 @@ prometheus:
 
     namespaceOverride: ""
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
+
 
     kubeTargetVersionOverride: ""
 
@@ -912,9 +932,6 @@ prometheus:
       timeoutSeconds: 5
 
 
-
-
-
   prometheus-pushgateway:
     enabled: true
     serviceAnnotations:
@@ -925,7 +942,7 @@ prometheus:
     namespaceOverride: ""
 
     image:
-      repository: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com/pushgateway
+      repository: quay.io/prometheus/pushgateway
       tag: ""
       pullPolicy: IfNotPresent
 
@@ -955,7 +972,13 @@ prometheus:
     extraInitContainers: []
     extraContainers: []
 
-    resources: {}
+    resources: 
+      requests:
+          cpu: 100m
+          memory: 100Mi
+      limits:
+        cpu: 100m
+        memory: 100Mi
 
     webConfiguration: {}
 
@@ -1041,15 +1064,6 @@ prometheus:
 
     lifecycle: {}
 
-
-
-
-
-
-
-
-
-
   prometheus-node-exporter:
     enabled: false
     nodeSelector:
@@ -1098,8 +1112,8 @@ prometheus-opencost-exporter:
       cloudProviderApiKey: ""
       defaultClusterId: 'default-cluster'
       image:
-        registry: 609916866699.dkr.ecr.ap-southeast-1.amazonaws.com
-        repository: kubecost-cost-model
+        registry: quay.io
+        repository: kubecost1/kubecost-cost-model
         tag: ""
         pullPolicy: IfNotPresent
       replicas: 1
