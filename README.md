@@ -51,6 +51,11 @@ You need:
 - kubectl configured to connect to your cluster
 - Cluster admin permissions to install applications
 
+### Firewall Requirments
+
+Whitelist the following domains so that agent can post K8s cluster utilization data to OneLens servers:
+- *.onelens.cloud
+
 ---
 
 ## Installation Steps
