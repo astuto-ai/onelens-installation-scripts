@@ -43,7 +43,7 @@ echo ""
 API_BASE_URL="${API_BASE_URL:=https://api-in.onelens.cloud}"
 PVC_ENABLED="${PVC_ENABLED:=true}"
 IMAGE_TAG="${IMAGE_TAG:=latest}"
-DEFAULT_REGISTRY_URL="609916866699.dkr.ecr.ap-southeast-1.amazonaws.com"
+DEFAULT_REGISTRY_URL="471112871310.dkr.ecr.ap-south-2.amazonaws.com"
 echo "Default registry URL is: $DEFAULT_REGISTRY_URL"
 read -p "Is this registry URL OK? (Y/n): " CONFIRM_REGISTRY
 echo ""
@@ -82,7 +82,7 @@ else
 fi
 
 # Default registration token
-DEFAULT_REGISTRATION_TOKEN="c8573285-7f68-4b44-8a6f-68cb1f95ccbc"
+DEFAULT_REGISTRATION_TOKEN="a8e0adcd-8b31-4c6d-b086-ae06d9dd9e78"
 echo "Default registration token is: $DEFAULT_REGISTRATION_TOKEN"
 read -p "Press Enter to keep registration token or type a new one: " REGISTRATION_TOKEN_INPUT
 if [[ -n "$REGISTRATION_TOKEN_INPUT" ]]; then
@@ -331,7 +331,10 @@ if ! curl -s -f -O "$URL"; then
 fi
 
 info "Downloaded $FILE successfully."
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
+
+# Add or update helm repo (--force-update handles existing repos)
+info "Adding/updating Helm repository 'onelens'..."
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ --force-update
 helm repo update
 info "Preparing Helm installation command..."
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
