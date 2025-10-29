@@ -54,7 +54,7 @@ You need:
 ### Firewall Requirments
 
 Whitelist the following domains so that agent can post K8s cluster utilization data to OneLens servers:
-- *.onelens.cloud
+- `*.onelens.cloud`
 
 ---
 
