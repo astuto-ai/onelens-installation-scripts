@@ -106,46 +106,7 @@ bash ibs_migrate_image.sh
 
 ---
 
-### Step 3: Check Cluster Accessibility
-
-This step verifies that your Kubernetes cluster can pull images from your ECR.
-
-**Run the script:**
-```bash
-bash ibs_accessibility_check.sh
-```
-
-**You will be asked for:**
-
-1. **AWS Account ID** - Same as Step 2
-2. **AWS Region** - Same as Step 2
-3. **Namespace** - Where to run the test (default: `default`)
-   - You can just press Enter to use default
-4. **Image Pull Secret Name** - Name of the secret for ECR access (default: `regcred`)
-   - You can just press Enter to use default
-
-**What it does:**
-- Creates a Kubernetes secret with your AWS ECR credentials
-- Tries to pull one test image from your ECR
-- Runs a test pod to verify everything works
-- Cleans up the test resources
-
-**Success looks like:**
-```
-✅ Image pull secret created successfully
-✅ Test pod is running successfully
-✅ Accessibility check passed!
-```
-
-**If it fails:**
-- Check your AWS credentials are correct
-- Make sure Step 2 completed successfully
-- Verify your cluster has internet access to AWS
-- Check if your cluster has any security policies blocking ECR
-
----
-
-### Step 4: Deploy OneLens Agent
+### Step 3: Deploy OneLens Agent
 
 This is the final step that installs OneLens Agent on your cluster.
 
@@ -175,7 +136,7 @@ bash ibs_deployment.sh
    - Example: `production-eks-cluster`
 
 6. **Release Version** 
-   - Default: `0.1.1-beta.4`
+   - Default: `1.7.0`
    - Press Enter to use default, or type a specific version
 
 7. **Image Pull Secret** 
@@ -219,7 +180,6 @@ kubectl get pods -n onelens-agent
 ```
 
 You should see pods like:
-- `onelens-agent-xxxxx` - Running
 - `prometheus-server-xxxxx` - Running
 - `prometheus-opencost-exporter-xxxxx` - Running
 - `prometheus-kube-state-metrics-xxxxx` - Running
