@@ -183,15 +183,13 @@ echo "Pod count set to: $NUM_PODS"
 
 # ---------- Instance type selection ----------
 if [ "$NUM_PODS" -lt 100 ]; then
-  INSTANCE_TYPE="t4g.small"
+  INSTANCE_TYPE="t4g.medium"
 elif [ "$NUM_PODS" -lt 500 ]; then
   INSTANCE_TYPE="t4g.medium"
 elif [ "$NUM_PODS" -lt 1500 ]; then
-  INSTANCE_TYPE="t4g.large"
-elif [ "$NUM_PODS" -le 2000 ]; then
   INSTANCE_TYPE="t4g.xlarge"
 else
-  INSTANCE_TYPE="t4g.2xlarge"
+  INSTANCE_TYPE="t4g.xlarge"
 fi
 echo "Recommended Instance Type: $INSTANCE_TYPE"
 

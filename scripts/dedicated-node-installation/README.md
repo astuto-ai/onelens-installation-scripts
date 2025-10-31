@@ -15,7 +15,7 @@ The OneLens Dedicated Node Installation creates EKS nodegroups with specific con
 
 ### Method 1: Run directly from the internet
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
 ### Arguments
@@ -37,15 +37,32 @@ bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installatio
 7 **Asks user consent** - Confirms the configuration from the user and gives the ability to reconfigure manually
 
 
+### Requested Resource based on cluster size
+
+| Cluster Size | Pod Count | Prometheus | OpenCost | OneLens Agent | Pushgateway | KSM | **Total CPU** | **Total Memory** | **Recommended t4g Instance** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Small** | <100 | 300m / 1188Mi | 200m / 200Mi | 400m / 400Mi | 100m / 100Mi | 100m / 100Mi | **1100m (1.10)** | **1988Mi (~1.94 GB)** | **t4g.medium** (2 vCPU, 4 GB) |
+| **Medium** | 100-499 | 350m / 1771Mi | 200m / 250Mi | 500m / 500Mi | 100m / 100Mi | 100m / 100Mi | **1250m (1.25)** | **2721Mi (~2.66 GB)** | **t4g.medium** (2 vCPU, 4 GB) |
+| **Large** | 500-999 | 1000m / 3533Mi | 250m / 360Mi | 500m / 500Mi | 100m / 100Mi | 100m / 100Mi | **1950m (1.95)** | **4593Mi (~4.49 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
+| **Extra Large** | 1000-1499 | 1150m / 5400Mi | 250m / 450Mi | 600m / 600Mi | 100m / 100Mi | 100m / 100Mi | **2200m (2.20)** | **6650Mi (~6.49 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
+| **Very Large** | 1500+ | 1500m / 7066Mi | 300m / 600Mi | 700m / 700Mi | 100m / 100Mi | 100m / 100Mi | **2700m (2.70)** | **8566Mi (~8.37 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
+
+**Notes:**
+
+- CPU is shown in millicores (m), where 1000m = 1 vCPU
+- Memory is shown in Mebibytes (Mi), where 1024 Mi = 1 GiB
+- Instance recommendations include ~20% overhead for system resources and burstability
+- t4g instances are ARM-based (Graviton2) - ensure your container images support ARM64 architecture
+
+
 The script automatically determines the optimal instance type based on your current pod count:
 
 | Instance Type | Pod Count Range | Use Case |
 |---------------|-----------------|----------|
-| `t4g.small` | < 100 pods | Development/testing |
+| `t4g.medium` | < 100 pods | Development/testing |
 | `t4g.medium` | 100–499 pods | Small production |
-| `t4g.large` | 500–1499 pods | Medium production |
-| `t4g.xlarge` | 1500–2000 pods | Large production |
-| `t4g.2xlarge` | 2000 > pods | Large production |
+| `t4g.xlarge` | 500–1499 pods | Medium production |
+| `t4g.xlarge` | 1500+ > pods | Large production |
 
 Upon successful completion, the script will display:
 
@@ -56,7 +73,7 @@ Upon successful completion, the script will display:
 ### Method 2: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
 
 # Then deploy via AWS Console:
 # 1. Go to AWS CloudFormation Console
