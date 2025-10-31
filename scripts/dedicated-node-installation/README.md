@@ -15,7 +15,7 @@ The OneLens Dedicated Node Installation creates EKS nodegroups with specific con
 
 ### Method 1: Run directly from the internet
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
 ### Arguments
@@ -73,7 +73,7 @@ Upon successful completion, the script will display:
 ### Method 2: Deploy CloudFormation template manually via AWS Console
 ```bash
 # Download the CloudFormation template
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
 
 # Then deploy via AWS Console:
 # 1. Go to AWS CloudFormation Console
