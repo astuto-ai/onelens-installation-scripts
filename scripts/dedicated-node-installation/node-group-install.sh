@@ -189,7 +189,7 @@ elif [ "$NUM_PODS" -lt 500 ]; then
 elif [ "$NUM_PODS" -lt 1500 ]; then
   INSTANCE_TYPE="t4g.xlarge"
 else
-  INSTANCE_TYPE="t4g.xlarge"
+  INSTANCE_TYPE="t4g.2xlarge"
 fi
 echo "Recommended Instance Type: $INSTANCE_TYPE"
 
