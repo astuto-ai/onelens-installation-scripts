@@ -9,3 +9,4 @@
 #1.5.0 - change resources config of agent
 #1.6.0 - set resources for ksm , gateway , reloader
 #1.7.0 - API's changes
+#1.8.0 - Adaptive KSM and Pushgateway Resource config
