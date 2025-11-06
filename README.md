@@ -65,7 +65,7 @@ Whitelist the following domains so that agent can post K8s cluster utilization d
 Clone this specific branch to your computer:
 
 ```bash
-git clone -b release/ibs-v1.7.0 https://github.com/astuto-ai/onelens-installation-scripts.git
+git clone -b release/ibs-v1.8.0 https://github.com/astuto-ai/onelens-installation-scripts.git
 cd onelens-installation-scripts
 ```
 
@@ -141,7 +141,7 @@ bash ibs_deployment.sh
    - Example: `production-eks-cluster`
 
 6. **Release Version** 
-   - Default: `1.7.0`
+   - Default: `1.8.0`
    - Press Enter to use default, or type a specific version
 
 7. **Image Pull Secret** 
