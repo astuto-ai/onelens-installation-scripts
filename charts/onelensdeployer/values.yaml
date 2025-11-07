@@ -1,10 +1,38 @@
 # ==================================================================================
-# SHARED RBAC CONFIGURATION
+# BOOTSTRAP RBAC CONFIGURATION (Installation Job Only)
 # ==================================================================================
-# Both the installation job and the updater cronjob use the same RBAC permissions
-# This follows the principle of least privilege with:
-# - Namespace-scoped: Full control over the onelens-agent namespace (Role)
-# - Cluster-scoped: Minimal permissions restricted to specific resources (ClusterRole)
+# Used ONLY by the installation job to CREATE cluster-scoped resources
+# This is deleted after installation completes (see install.sh cleanup)
+bootstrapRbac:
+  clusterRole:
+    enabled: true
+    name: onelensdeployer-bootstrap-clusterrole
+    rules:
+      # Namespace creation permission
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["create"]
+      # StorageClass creation permission
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["create"]
+      # ClusterRole creation permission
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles"]
+        verbs: ["create"]
+      # ClusterRoleBinding creation permission
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterrolebindings"]
+        verbs: ["create"]
+  clusterRoleBinding:
+    enabled: true
+    name: onelensdeployer-bootstrap-clusterrolebinding
+
+# ==================================================================================
+# ONGOING RBAC CONFIGURATION (Both Job & CronJob)
+# ==================================================================================
+# Used by both installation job and updater cronjob to MANAGE existing resources
+# This follows the principle of least privilege with strict resourceNames restrictions
 rbac:
   # Namespace-scoped permissions - we own all resources in this namespace
   role:
@@ -21,6 +49,7 @@ rbac:
   
   # Cluster-scoped permissions - minimal with strict resourceNames restrictions
   clusterRole:
+    enabled: true
     name: onelensdeployer-clusterrole
     rules:
       # StorageClass permissions - we own this resource, restricted by resourceNames
@@ -29,21 +58,79 @@ rbac:
         verbs: ["*"]
         resourceNames:
           - onelens-sc
-      # Cluster-scoped READ-ONLY permissions required to manage ClusterRoles
-      # These permissions are needed because when you patch a ClusterRole (ClusterRole for prometheus-server, kube-state-metrics, etc.),
-      # you must have all the permissions that ClusterRole grants (escalation protection)
+      # Namespace permissions - we own onelens-agent namespace
       - apiGroups: [""]
-        resources: ["namespaces", "nodes", "pods"]
-        verbs: ["get", "list"]
+        resources: ["namespaces"]
+        verbs: ["*"]
+        resourceNames:
+          - onelens-agent
+      # Cluster-scoped READ-ONLY permissions required to manage ClusterRoles
+      # These permissions are needed because when you patch a ClusterRole,
+      # you must have all the permissions that ClusterRole grants (escalation protection)
+      # Also required for monitoring components like kube-state-metrics and Prometheus
+      - apiGroups: [""]
+        resources:
+          - configmaps
+          - deployments
+          - endpoints
+          - ingresses
+          - limitranges
+          - namespaces
+          - nodes
+          - nodes/metrics
+          - nodes/proxy
+          - persistentvolumeclaims
+          - persistentvolumes
+          - pods
+          - replicationcontrollers
+          - resourcequotas
+          - services
+        verbs: ["get", "list", "watch"]
       - apiGroups: ["apps"]
-        resources: ["daemonsets", "deployments", "statefulsets"]
-        verbs: ["get", "list"]
+        resources:
+          - daemonsets
+          - deployments
+          - replicasets
+          - statefulsets
+        verbs: ["get", "list", "watch"]
       - apiGroups: ["autoscaling"]
-        resources: ["horizontalpodautoscalers"]
-        verbs: ["get", "list"]
+        resources:
+          - horizontalpodautoscalers
+        verbs: ["get", "list", "watch"]
       - apiGroups: ["batch"]
-        resources: ["cronjobs", "jobs"]
-        verbs: ["get", "list"]
+        resources:
+          - cronjobs
+          - jobs
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["extensions"]
+        resources:
+          - daemonsets
+          - deployments
+          - ingresses
+          - ingresses/status
+          - replicasets
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources:
+          - ingresses
+          - ingresses/status
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["discovery.k8s.io"]
+        resources:
+          - endpointslices
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources:
+          - poddisruptionbudgets
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources:
+          - storageclasses
+        verbs: ["get", "list", "watch"]
+      # Non-resource URL permissions for Prometheus metrics scraping
+      - nonResourceURLs:
+          - /metrics
+        verbs: ["get"]
       # ClusterRole permissions - we own these resources, restricted by resourceNames
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterroles"]
@@ -54,6 +141,7 @@ rbac:
           - onelens-agent-prometheus-server
           - onelens-agent-workload-reader
           - onelensdeployer-clusterrole
+          - onelensdeployer-bootstrap-clusterrole
       # ClusterRoleBinding permissions - we own these resources, restricted by resourceNames
       - apiGroups: ["rbac.authorization.k8s.io"]
         resources: ["clusterrolebindings"]
@@ -64,6 +152,7 @@ rbac:
           - onelens-agent-prometheus-server
           - onelens-agent-workload-reader-binding
           - onelensdeployer-clusterrolebinding
+          - onelensdeployer-bootstrap-clusterrolebinding
   clusterRoleBinding:
     enabled: true
     name: onelensdeployer-clusterrolebinding

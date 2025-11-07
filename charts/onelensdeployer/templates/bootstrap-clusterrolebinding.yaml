@@ -1,0 +1,18 @@
+{{- if .Values.bootstrapRbac.clusterRoleBinding.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.bootstrapRbac.clusterRoleBinding.name }}
+subjects:
+  # Only bind the installation job service account to bootstrap ClusterRole
+  {{- if .Values.job.serviceAccount.enabled }}
+  - kind: ServiceAccount
+    name: {{ .Values.job.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Values.bootstrapRbac.clusterRole.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+
