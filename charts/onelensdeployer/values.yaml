@@ -70,36 +70,38 @@ cronjob:
     enabled: true
     name: onelensupdater-sa
   clusterRole:
-    name: onelensupdater-clusterrole
+    name: onelensupdater-clusterrole-minimal
+    annotations:
+    meta.helm.sh/release-name: onelensdeployer
+    meta.helm.sh/release-namespace: onelens-agent
     rules:
-      # Read access needed to inspect current deployments and resources
-      - apiGroups: ["", "apps", "autoscaling", "batch", "extensions", "policy", "rbac.authorization.k8s.io", "networking.k8s.io"]
-        resources: ["deployments", "replicasets", "pods", "services", "configmaps", "secrets", "persistentvolumeclaims", "statefulsets", "horizontalpodautoscalers", "ingresses", "networkpolicies", "roles", "rolebindings", "serviceaccounts", "daemonsets", "jobs", "cronjobs"]
-        verbs: ["get", "list", "watch", "patch", "update"]
-      # Write access to perform patching and upgrades
-      - apiGroups: ["", "apps", "autoscaling", "batch", "extensions", "policy", "rbac.authorization.k8s.io", "networking.k8s.io"]
-        resources: ["deployments", "replicasets", "pods", "services", "configmaps", "secrets", "persistentvolumeclaims", "statefulsets", "horizontalpodautoscalers", "ingresses", "networkpolicies", "roles", "rolebindings", "serviceaccounts", "daemonsets", "jobs", "cronjobs"]
-        verbs: ["create", "get", "list", "patch", "update", "watch"]
       # Namespace discovery
       - apiGroups: [""]
-        resources: ["namespaces"]
-        verbs: ["get", "list", "watch", "patch", "update"]
+        resources: ["namespaces", "nodes", "pods"]
+        verbs: ["get", "list", "watch"]
       # Read access to RBAC resources
       - apiGroups: ["rbac.authorization.k8s.io"]
-        resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
-        verbs: ["get", "list", "watch", "patch", "update"]
-      # Read access to limitranges
-      - apiGroups: [""]
-        resources: ["limitranges"]
-        verbs: ["list", "watch", "patch", "update"]
-      # Read access to nodes
-      - apiGroups: [""]
-        resources: ["nodes"]
-        verbs: ["get", "list", "watch", "patch", "update"]
-      # Read access to persistentvolumes
-      - apiGroups: [""]
-        resources: ["persistentvolumes"]
-        verbs: ["list", "watch", "patch", "update"]
+        resources: ["clusterroles"]
+        resourceNames: ["onelens-agent-kube-state-metrics", "onelens-agent-prometheus-opencost-exporter", "onelens-agent-prometheus-server", "onelens-agent-workload-reader", "onelensdeployerjob-clusterrole", "onelensupdater-clusterrole-minimal"]
+        verbs: ["get", "list", "watch", "patch", "update", "delete"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterrolebindings"]
+        resourceNames: ["onelens-agent-kube-state-metrics", "onelens-agent-prometheus-opencost-exporter", "onelens-agent-prometheus-server", "onelens-agent-workload-reader-binding", "onelensdeployerjob-clusterrolebinding", "onelensupdater-clusterrolebinding-minimal"]
+        verbs: ["get", "list", "watch", "patch", "update", "delete"]
+      # Read access to RBAC resources
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings"]
+        resourceNames: ["onelens-agent-kube-state-metrics-role", "onelens-agent-prometheus-opencost-exporter-role", "onelens-agent-prometheus-server-role", "onelens-agent-workload-reader-role", "onelensdeployerjob-clusterrole-role", "onelensupdater-clusterrole-minimal-role"]
+        verbs: ["get", "list", "watch", "patch", "update", "delete"]
+      - apiGroups: ["apps"]
+        resources: ["daemonsets, deployments, statefulsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
       # Read access to resourcequotas
       - apiGroups: [""]
         resources: ["resourcequotas"]
@@ -107,6 +109,17 @@ cronjob:
       # Read access to StorageClasses
       - apiGroups: ["storage.k8s.io"]
         resources: ["storageclasses"]
-        verbs: ["get", "list", "watch", "patch", "update"]
+        resourceNames: ["onelens-sc"]
+        verbs: ["get", "list", "watch", "patch", "update", "delete"]
   clusterRoleBinding:
     name: onelensupdater-clusterrolebinding
+  role:
+    name: onelensupdater-role
+    namespace: onelens-agent
+    rules:
+      - apiGroups: ["*"]
+        resources: ["*"]
+        verbs: ["*"]
+  roleBinding:
+    name: onelensupdater-rolebinding
+    namespace: onelens-agent

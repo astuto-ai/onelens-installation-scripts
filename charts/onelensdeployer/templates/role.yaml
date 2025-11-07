@@ -1,0 +1,10 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.cronjob.role.name }}
+  namespace: {{ .Values.cronjob.role.namespace }}
+  annotations:
+    meta.helm.sh/release-namespace: {{ .Values.cronjob.role.namespace }}
+rules:
+{{- toYaml .Values.cronjob.role.rules | nindent 2 }}
+
