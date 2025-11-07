@@ -1,3 +1,77 @@
+# ==================================================================================
+# SHARED RBAC CONFIGURATION
+# ==================================================================================
+# Both the installation job and the updater cronjob use the same RBAC permissions
+# This follows the principle of least privilege with:
+# - Namespace-scoped: Full control over the onelens-agent namespace (Role)
+# - Cluster-scoped: Minimal permissions restricted to specific resources (ClusterRole)
+rbac:
+  # Namespace-scoped permissions - we own all resources in this namespace
+  role:
+    enabled: true
+    name: onelensdeployer-role
+    rules:
+      # Full control over all namespace-scoped resources - we own this namespace
+      - apiGroups: ["*"]
+        resources: ["*"]
+        verbs: ["*"]
+  roleBinding:
+    enabled: true
+    name: onelensdeployer-rolebinding
+  
+  # Cluster-scoped permissions - minimal with strict resourceNames restrictions
+  clusterRole:
+    name: onelensdeployer-clusterrole
+    rules:
+      # StorageClass permissions - we own this resource, restricted by resourceNames
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["*"]
+        resourceNames:
+          - onelens-sc
+      # Cluster-scoped READ-ONLY permissions required to manage ClusterRoles
+      # These permissions are needed because when you patch a ClusterRole (ClusterRole for prometheus-server, kube-state-metrics, etc.),
+      # you must have all the permissions that ClusterRole grants (escalation protection)
+      - apiGroups: [""]
+        resources: ["namespaces", "nodes", "pods"]
+        verbs: ["get", "list"]
+      - apiGroups: ["apps"]
+        resources: ["daemonsets", "deployments", "statefulsets"]
+        verbs: ["get", "list"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list"]
+      - apiGroups: ["batch"]
+        resources: ["cronjobs", "jobs"]
+        verbs: ["get", "list"]
+      # ClusterRole permissions - we own these resources, restricted by resourceNames
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles"]
+        verbs: ["*"]
+        resourceNames:
+          - onelens-agent-kube-state-metrics
+          - onelens-agent-prometheus-opencost-exporter
+          - onelens-agent-prometheus-server
+          - onelens-agent-workload-reader
+          - onelensdeployer-clusterrole
+      # ClusterRoleBinding permissions - we own these resources, restricted by resourceNames
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterrolebindings"]
+        verbs: ["*"]
+        resourceNames:
+          - onelens-agent-kube-state-metrics
+          - onelens-agent-prometheus-opencost-exporter
+          - onelens-agent-prometheus-server
+          - onelens-agent-workload-reader-binding
+          - onelensdeployer-clusterrolebinding
+  clusterRoleBinding:
+    enabled: true
+    name: onelensdeployer-clusterrolebinding
+
+# ==================================================================================
+# INSTALLATION JOB
+# ==================================================================================
+# One-time job that performs initial installation using shared RBAC permissions
 job:
   enabled: true
   name: onelensdeployerjob
@@ -28,24 +102,11 @@ job:
   serviceAccount:
     enabled: true
     name: onelensdeployerjob-sa
-  
-  # ==================================================================================
-  # CLUSTER-ADMIN PERMISSIONS (ClusterRole)
-  # ==================================================================================
-  # Initial deployment job requires full cluster-admin permissions to:
-  # - Install all onelens components across namespaces
-  # - Create CRDs, StorageClasses, and other cluster-scoped resources
-  # - Set up initial RBAC, ServiceAccounts, and security policies
-  # This is a one-time installation job with elevated privileges
-  clusterRole:
-    name: onelensdeployerjob-clusterrole
-    rules:
-      # Full cluster-admin access for initial installation
-      - apiGroups: ["*"]
-        resources: ["*"]
-        verbs: ["*"]
-  clusterRoleBinding:
-    name: onelensdeployerjob-clusterrolebinding
+
+# ==================================================================================
+# UPDATER CRONJOB
+# ==================================================================================
+# Periodic job that performs helm upgrade using shared RBAC permissions
 cronjob:
   enabled: true
   name: onelensupdater
@@ -79,80 +140,3 @@ cronjob:
   serviceAccount:
     enabled: true
     name: onelensupdater-sa
-  
-  # ==================================================================================
-  # NAMESPACE-SCOPED PERMISSIONS (Role)
-  # ==================================================================================
-  # We own all resources within the onelens-agent namespace
-  # This Role grants full control over namespace-scoped resources like:
-  # - Deployments, StatefulSets, DaemonSets
-  # - Pods, Services, ConfigMaps, Secrets
-  # - Jobs, CronJobs, etc.
-  role:
-    enabled: true
-    name: onelensupdater-role
-    rules:
-      # Full control over all namespace-scoped resources - we own this namespace
-      - apiGroups: ["*"]
-        resources: ["*"]
-        verbs: ["*"]
-  roleBinding:
-    enabled: true
-    name: onelensupdater-rolebinding
-  
-  # ==================================================================================
-  # CLUSTER-SCOPED PERMISSIONS (ClusterRole)
-  # ==================================================================================
-  # Minimal cluster-scoped permissions with strict resourceNames restrictions
-  # This ClusterRole manages:
-  # 1. Our own StorageClass (onelens-sc)
-  # 2. Our own ClusterRoles and ClusterRoleBindings
-  # 3. READ-ONLY access to cluster resources (for RBAC escalation protection)
-  clusterRole:
-    name: onelensupdater-clusterrole
-    rules:
-      # StorageClass permissions - we own this resource, restricted by resourceNames
-      - apiGroups: ["storage.k8s.io"]
-        resources: ["storageclasses"]
-        verbs: ["*"]
-        resourceNames:
-          - onelens-sc
-      # Cluster-scoped READ-ONLY permissions required to manage ClusterRoles
-      # These permissions are needed because when you patch a ClusterRole (ClusterRole for prometheus-server, kube-state-metrics, etc.),
-      # you must have all the permissions that ClusterRole grants (escalation protection)
-      - apiGroups: [""]
-        resources: ["namespaces", "nodes", "pods"]
-        verbs: ["get", "list"]
-      - apiGroups: ["apps"]
-        resources: ["daemonsets", "deployments", "statefulsets"]
-        verbs: ["get", "list"]
-      - apiGroups: ["autoscaling"]
-        resources: ["horizontalpodautoscalers"]
-        verbs: ["get", "list"]
-      - apiGroups: ["batch"]
-        resources: ["cronjobs", "jobs"]
-        verbs: ["get", "list"]
-      # ClusterRole permissions - we own these resources, restricted by resourceNames
-      - apiGroups: ["rbac.authorization.k8s.io"]
-        resources: ["clusterroles"]
-        verbs: ["*"]
-        resourceNames:
-          - onelens-agent-kube-state-metrics
-          - onelens-agent-prometheus-opencost-exporter
-          - onelens-agent-prometheus-server
-          - onelens-agent-workload-reader
-          - onelensdeployerjob-clusterrole
-          - onelensupdater-clusterrole
-      # ClusterRoleBinding permissions - we own these resources, restricted by resourceNames
-      - apiGroups: ["rbac.authorization.k8s.io"]
-        resources: ["clusterrolebindings"]
-        verbs: ["*"]
-        resourceNames:
-          - onelens-agent-kube-state-metrics
-          - onelens-agent-prometheus-opencost-exporter
-          - onelens-agent-prometheus-server
-          - onelens-agent-workload-reader-binding
-          - onelensdeployerjob-clusterrolebinding
-          - onelensupdater-clusterrolebinding
-  clusterRoleBinding:
-    name: onelensupdater-clusterrolebinding

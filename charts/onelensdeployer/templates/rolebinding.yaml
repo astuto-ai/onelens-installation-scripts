@@ -1,16 +1,24 @@
-{{- if .Values.cronjob.roleBinding.enabled }}
+{{- if .Values.rbac.roleBinding.enabled }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ .Values.cronjob.roleBinding.name }}
+  name: {{ .Values.rbac.roleBinding.name }}
   namespace: {{ .Release.Namespace }}
 subjects:
+  # Bind both job and cronjob service accounts to the shared Role
+  {{- if .Values.job.serviceAccount.enabled }}
+  - kind: ServiceAccount
+    name: {{ .Values.job.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  {{- if .Values.cronjob.serviceAccount.enabled }}
   - kind: ServiceAccount
     name: {{ .Values.cronjob.serviceAccount.name }}
     namespace: {{ .Release.Namespace }}
+  {{- end }}
 roleRef:
   kind: Role
-  name: {{ .Values.cronjob.role.name }}
+  name: {{ .Values.rbac.role.name }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
 
