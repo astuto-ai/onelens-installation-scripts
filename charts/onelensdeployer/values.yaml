@@ -70,12 +70,9 @@ cronjob:
     enabled: true
     name: onelensupdater-sa
   clusterRole:
-    name: onelensupdater-clusterrole-minimal
-    annotations:
-    meta.helm.sh/release-name: onelensdeployer
-    meta.helm.sh/release-namespace: onelens-agent
+    name: onelensupdater-clusterrole
     rules:
-      # Namespace discovery
+      # Namespace, node and pods only read only access to get the metadata for all the nodes, pods to sent via onelens agent.
       - apiGroups: [""]
         resources: ["namespaces", "nodes", "pods"]
         verbs: ["get", "list", "watch"]
@@ -94,7 +91,7 @@ cronjob:
         resourceNames: ["onelens-agent-kube-state-metrics-role", "onelens-agent-prometheus-opencost-exporter-role", "onelens-agent-prometheus-server-role", "onelens-agent-workload-reader-role", "onelensdeployerjob-clusterrole-role", "onelensupdater-clusterrole-minimal-role"]
         verbs: ["get", "list", "watch", "patch", "update", "delete"]
       - apiGroups: ["apps"]
-        resources: ["daemonsets, deployments, statefulsets"]
+        resources: ["daemonsets", "deployments", "statefulsets"]
         verbs: ["get", "list", "watch"]
       - apiGroups: ["autoscaling"]
         resources: ["horizontalpodautoscalers"]
@@ -102,10 +99,6 @@ cronjob:
       - apiGroups: ["batch"]
         resources: ["jobs", "cronjobs"]
         verbs: ["get", "list", "watch"]
-      # Read access to resourcequotas
-      - apiGroups: [""]
-        resources: ["resourcequotas"]
-        verbs: ["list", "watch", "patch", "update"]
       # Read access to StorageClasses
       - apiGroups: ["storage.k8s.io"]
         resources: ["storageclasses"]
@@ -115,11 +108,9 @@ cronjob:
     name: onelensupdater-clusterrolebinding
   role:
     name: onelensupdater-role
-    namespace: onelens-agent
     rules:
       - apiGroups: ["*"]
         resources: ["*"]
         verbs: ["*"]
   roleBinding:
     name: onelensupdater-rolebinding
-    namespace: onelens-agent
