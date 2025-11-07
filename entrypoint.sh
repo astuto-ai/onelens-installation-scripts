@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Global API endpoint
-API_ENDPOINT="https://api-gp.onelens.cloud"
+API_ENDPOINT="https://api-in.onelens.cloud"
 
 # Function to update cluster version logs
 update_cluster_logs() {

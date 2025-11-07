@@ -34,7 +34,7 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.8.0}"
+: "${RELEASE_VERSION:=1.9.0}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
@@ -390,7 +390,7 @@ else
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.8.0}\" \
+    --version \"\${RELEASE_VERSION:=1.9.0}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -523,7 +523,15 @@ curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
     }"
 echo "To verify deployment: kubectl get pods -n onelens-agent"
 sleep 60
+
+# Cleanup bootstrap RBAC resources (used only for initial installation)
+echo "Cleaning up bootstrap RBAC resources..."
+kubectl delete clusterrolebinding onelensdeployer-bootstrap-clusterrolebinding || true
+kubectl delete clusterrole onelensdeployer-bootstrap-clusterrole || true
+
+# Cleanup installation job resources
+echo "Cleaning up installation job resources..."
 kubectl delete job onelensdeployerjob -n onelens-agent || true
-kubectl delete clusterrole onelensdeployerjob-clusterrole || true
-kubectl delete clusterrolebinding onelensdeployerjob-clusterrolebinding || true
 kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
+
+echo "Bootstrap cleanup complete. Ongoing RBAC resources retained for cronjob updates."

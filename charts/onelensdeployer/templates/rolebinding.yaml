@@ -1,10 +1,11 @@
-{{- if .Values.rbac.clusterRoleBinding.enabled }}
+{{- if .Values.rbac.roleBinding.enabled }}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: {{ .Values.rbac.clusterRoleBinding.name }}
+  name: {{ .Values.rbac.roleBinding.name }}
+  namespace: {{ .Release.Namespace }}
 subjects:
-  # Bind both job and cronjob service accounts to the shared ClusterRole
+  # Bind both job and cronjob service accounts to the shared Role
   {{- if .Values.job.serviceAccount.enabled }}
   - kind: ServiceAccount
     name: {{ .Values.job.serviceAccount.name }}
@@ -16,7 +17,8 @@ subjects:
     namespace: {{ .Release.Namespace }}
   {{- end }}
 roleRef:
-  kind: ClusterRole
-  name: {{ .Values.rbac.clusterRole.name }}
+  kind: Role
+  name: {{ .Values.rbac.role.name }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
+

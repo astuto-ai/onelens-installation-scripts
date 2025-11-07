@@ -1,0 +1,9 @@
+{{- if .Values.bootstrapRbac.clusterRole.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.bootstrapRbac.clusterRole.name }}
+rules:
+{{- toYaml .Values.bootstrapRbac.clusterRole.rules | nindent 2 }}
+{{- end }}
+
