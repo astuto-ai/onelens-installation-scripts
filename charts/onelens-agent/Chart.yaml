@@ -2,15 +2,15 @@ apiVersion: v2
 name: onelens-agent
 description: Helm chart for the OneLens Agent
 type: application
-version: 1.8.0
-appVersion: 1.8.0
+version: 1.9.0
+appVersion: 1.9.0
 maintainers:
   - name: OneLens
     email: support@onelens.ai
 dependencies:
   - name: onelens-agent-base
     repository: oci://609916866699.dkr.ecr.ap-south-1.amazonaws.com/helm-charts
-    version: 1.8.0
+    version: 1.9.0
     alias: onelens-agent
     condition: onelens-agent.enabled
   - name: prometheus
