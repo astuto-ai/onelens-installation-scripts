@@ -96,7 +96,7 @@ CLUSTER_NAME=$(prompt_with_validation "CLUSTER_NAME" "Enter cluster name" "Clust
 echo ""
 
 # Default release version
-DEFAULT_RELEASE_VERSION="1.8.0"
+DEFAULT_RELEASE_VERSION="1.9.0"
 echo "Default release version is: $DEFAULT_RELEASE_VERSION"
 read -p "Press Enter to keep release version or type a new one: " RELEASE_VERSION_INPUT
 if [[ -n "$RELEASE_VERSION_INPUT" ]]; then
@@ -403,7 +403,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     -f $FILE \
     --set job.env.imagePullSecrets=\"null\" \
     --set onelens-agent.image.repository=\"$registry_url/onelens-agent\" \
-    --set onelens-agent.image.tag=\"v1.8.0\" \
+    --set onelens-agent.image.tag=\"v1.9.0\" \
     --set prometheus.server.image.repository=\"$registry_url/prometheus\" \
     --set prometheus.server.image.tag=\"v3.1.0\" \
     --set prometheus.configmapReload.prometheus.image.repository=\"$registry_url/prometheus-config-reloader\" \
@@ -496,6 +496,33 @@ CMD+=" --wait || { echo \"Error: Helm deployment failed.\"; exit 1; }"
 info "Installing OneLens Agent using Helm..."
 echo "Running: $CMD"
 eval "$CMD"
+
+
+CMD_UPDATOR="helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent  \
+--set job.enabled=false \
+--set cronjob.image=\"$registry_url/onelens-deployer\" \
+--set cronjob.imageTag=\"v1.9.0\" "
+
+
+# Append tolerations only if set
+if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
+  echo "Adding tolerance configurations for cronjob..."
+  CMD_UPDATOR+=" \
+    --set 'cronjob.tolerations[0].key=$TOLERATION_KEY' \
+    --set 'cronjob.tolerations[0].operator=$TOLERATION_OPERATOR' \
+    --set 'cronjob.tolerations[0].value=$TOLERATION_VALUE' \
+    --set 'cronjob.tolerations[0].effect=$TOLERATION_EFFECT'"
+fi
+
+# Append node selectors if set
+if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
+  echo "Adding node selector configurations for cronjob..."
+  CMD_UPDATOR+=" \
+    --set cronjob.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
+fi
+
+eval "$CMD_UPDATOR"
+
 
 # Wait for pods to be ready
 info "Waiting for OneLens pods to become ready..."
