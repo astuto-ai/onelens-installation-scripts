@@ -216,8 +216,8 @@ fi
 
 
 # Phase 5: Helm Upgrade with Dynamic Resource Allocation
-echo "helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts"
-echo "helm repo update"
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts
+helm repo update
 echo "helm upgrade onelens-agent onelens/onelens-agent with dynamic resource allocation"
 
 # Perform the upgrade with dynamically calculated resource values
