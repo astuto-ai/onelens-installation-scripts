@@ -65,7 +65,7 @@ Whitelist the following domains so that agent can post K8s cluster utilization d
 Clone this specific branch to your computer:
 
 ```bash
-git clone -b release/ibs-v1.8.0 https://github.com/astuto-ai/onelens-installation-scripts.git
+git clone -b release/ibs-v1.9.0 https://github.com/astuto-ai/onelens-installation-scripts.git
 cd onelens-installation-scripts
 ```
 
@@ -141,7 +141,7 @@ bash ibs_deployment.sh
    - Example: `production-eks-cluster`
 
 6. **Release Version** 
-   - Default: `1.8.0`
+   - Default: `1.9.0`
    - Press Enter to use default, or type a specific version
 
 7. **Image Pull Secret** 
@@ -159,6 +159,7 @@ bash ibs_deployment.sh
 - Installs OneLens Agent using Helm
 - Installs Prometheus for metrics collection
 - Installs OpenCost for cost analysis
+- Deploys OneLens Deployer CronJob (for automated updates and maintenance)
 - Waits for all components to start successfully
 - Updates OneLens API that installation is complete
 
@@ -173,6 +174,46 @@ bash ibs_deployment.sh
 [INFO] Installation complete!
 [INFO] To verify deployment: kubectl get pods -n onelens-agent
 ```
+
+---
+
+### Step 3.1: OneLens Deployer CronJob
+
+After the main OneLens Agent installation, the script automatically deploys the **OneLens Deployer CronJob**. This CronJob handles automated updates and maintenance tasks for your OneLens installation.
+
+**What gets deployed:**
+- **Helm Chart:** `onelensdeployer` from the OneLens Helm repository
+- **Namespace:** `onelens-agent` (same as the main agent)
+- **Image:** Uses the same registry URL you provided, with image `onelens-deployer:v1.9.0`
+- **Job Component:** Disabled (only CronJob is active)
+
+**Configuration Options:**
+
+If you provided **Tolerations and Node Selectors** during Step 3, they will be automatically applied to the CronJob:
+
+- **Tolerations:** Allows the CronJob pods to run on nodes with specific taints
+  - Example: `key=onelens-workload, operator=Equal, value=agent, effect=NoSchedule`
+  
+- **Node Selectors:** Ensures CronJob pods run only on specific nodes
+  - Example: `onelens-workload=agent`
+
+**What the CronJob does:**
+- Runs scheduled maintenance tasks
+- Handles automated updates and patches
+- Performs cluster health checks
+- Manages resource optimization
+
+**To verify the CronJob:**
+```bash
+kubectl get cronjob -n onelens-agent
+kubectl get jobs -n onelens-agent
+```
+
+You should see:
+- `onelensdeployer` CronJob in the list
+- Jobs created by the CronJob when it runs
+
+**Note:** If you skipped tolerations and node selectors during installation, the CronJob will still be deployed but without these scheduling constraints. You can add them later by updating the Helm release.
 
 ---
 
@@ -239,6 +280,7 @@ The following components are installed in the `onelens-agent` namespace:
 - **OpenCost (Kubecost)** - Cost calculation engine
 - **Kube-State-Metrics** - Kubernetes object state metrics
 - **Pushgateway** - Accepts metrics from batch jobs
+- **OneLens Deployer CronJob** - Automated maintenance and update scheduler
 
 All images are pulled from your private ECR, not from public registries.
 
@@ -249,7 +291,13 @@ All images are pulled from your private ECR, not from public registries.
 To remove OneLens Agent from your cluster:
 
 ```bash
+# Uninstall OneLens Agent
 helm uninstall onelens-agent -n onelens-agent
+
+# Uninstall OneLens Deployer CronJob
+helm uninstall onelensdeployer -n onelens-agent
+
+# Remove the namespace (this removes all components)
 kubectl delete namespace onelens-agent
 ```
 
