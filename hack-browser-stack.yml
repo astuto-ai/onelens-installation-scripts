@@ -1,0 +1,143 @@
+# Step 1: Create and label the namespace (run this first)
+# Create namespace if it doesn't exist, then label it with required Kyverno labels
+kubectl create namespace onelens-agent 2>/dev/null || true && \
+kubectl label namespace onelens-agent \
+  browserstack.com/BillingTeam=core \
+  browserstack.com/Team=infra \
+  browserstack.com/Env=stag \
+  browserstack.com/release=ga \
+  browserstack.com/monitoring=true \
+  --overwrite
+
+
+# Step 2: Run your helm install command (this should now work)
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent \
+  --set job.env.CLUSTER_NAME=browserstack-euc1-stag-001 \
+  --set job.env.REGION=eu-central-1 \
+  --set-string job.env.ACCOUNT=737963123736 \
+  --set job.env.REGISTRATION_TOKEN=f06d12c1-2952-4017-bffb-149170ac6d35 \
+  --set job.env.NODE_SELECTOR_KEY=purpose \
+  --set job.env.NODE_SELECTOR_VALUE=eks-pvtci-generic-amd64 \
+  --set job.env.TOLERATION_KEY=eks-pvtci-generic-amd64 \
+  --set-string job.env.TOLERATION_VALUE="" \
+  --set job.env.TOLERATION_OPERATOR=Exists \
+  --set job.env.TOLERATION_EFFECT=NoSchedule \
+  --set job.nodeSelector.purpose=eks-pvtci-generic-amd64 \
+  --set 'job.tolerations[0].key=eks-pvtci-generic-amd64' \
+  --set 'job.tolerations[0].operator=Exists' \
+  --set 'job.tolerations[0].effect=NoSchedule' \
+  --set cronjob.nodeSelector.purpose=eks-pvtci-generic-amd64 \
+  --set 'cronjob.tolerations[0].key=eks-pvtci-generic-amd64' \
+  --set 'cronjob.tolerations[0].operator=Exists' \
+  --set 'cronjob.tolerations[0].effect=NoSchedule' \
+  --set job.labels."browserstack\.com/BillingTeam"=core \
+  --set job.labels."browserstack\.com/Env"=stag \
+  --set job.labels."browserstack\.com/Team"=infra \
+  --set job.labels."browserstack\.com/application"=onelens \
+  --set job.labels."browserstack\.com/component"=onelens \
+  --set job.labels."browserstack\.com/release"=ga \
+  --set cronjob.labels."browserstack\.com/BillingTeam"=core \
+  --set cronjob.labels."browserstack\.com/Env"=stag \
+  --set cronjob.labels."browserstack\.com/Team"=infra \
+  --set cronjob.labels."browserstack\.com/application"=onelens \
+  --set cronjob.labels."browserstack\.com/component"=onelens \
+  --set cronjob.labels."browserstack\.com/release"=ga
+
+
+
+
+Recommended Prometheus resources for 2,700 pods:
+
+PROMETHEUS_CPU_REQUEST="2000m"
+
+PROMETHEUS_CPU_LIMIT="3000m"
+
+PROMETHEUS_MEMORY_REQUEST="12Gi"
+
+PROMETHEUS_MEMORY_LIMIT="18Gi"
+
+
+
+# OpenCost
+
+OPENCOST_CPU_REQUEST="400m"
+
+OPENCOST_CPU_LIMIT="600m"
+
+OPENCOST_MEMORY_REQUEST="800Mi"
+
+OPENCOST_MEMORY_LIMIT="1200Mi"
+
+# OneLens Agent
+
+ONELENS_CPU_REQUEST="800m"
+
+ONELENS_CPU_LIMIT="1200m"
+
+ONELENS_MEMORY_REQUEST="900Mi"
+
+ONELENS_MEMORY_LIMIT="1400Mi"
+
+#KSM (Kube State Metrics)
+
+KSM_CPU_REQUEST="400m"
+
+KSM_CPU_LIMIT="600m"
+
+KSM_MEMORY_REQUEST="700Mi"
+
+KSM_MEMORY_LIMIT="1000Mi"
+
+# Pushgateway
+
+PUSHGATEWAY_CPU_REQUEST="250m"
+
+PUSHGATEWAY_CPU_LIMIT="500m"
+
+PUSHGATEWAY_MEMORY_REQUEST="400Mi"
+
+PUSHGATEWAY_MEMORY_LIMIT="800Mi"
+
+
+
+
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<> \
+  --set job.env.REGION=<> \
+  --set-string job.env.ACCOUNT=<> \
+  --set job.env.REGISTRATION_TOKEN=<> \
+  \
+  --set job.env.NODE_SELECTOR_KEY=purpose \
+  --set-string job.env.NODE_SELECTOR_VALUE=eks-pvtci-generic-amd64 \
+  --set job.env.TOLERATION_KEY=eks-pvtci-generic-amd64 \
+  --set-string job.env.TOLERATION_OPERATOR=Exists \
+  --set-string job.env.TOLERATION_VALUE="" \
+  --set-string job.env.TOLERATION_EFFECT=NoSchedule \
+  \
+  --set job.nodeSelector.purpose=eks-pvtci-generic-amd64 \
+  --set 'job.tolerations[0].key=eks-pvtci-generic-amd64' \
+  --set 'job.tolerations[0].operator=Exists' \
+  --set 'job.tolerations[0].effect=NoSchedule' \
+  \
+  --set cronjob.nodeSelector.purpose=eks-pvtci-generic-amd64 \
+  --set 'cronjob.tolerations[0].key=eks-pvtci-generic-amd64' \
+  --set 'cronjob.tolerations[0].operator=Exists' \
+  --set 'cronjob.tolerations[0].effect=NoSchedule' \
+  \
+  --set job.labels."browserstack\.com/BillingTeam"=core \
+  --set job.labels."browserstack\.com/Env"=stag \
+  --set job.labels."browserstack\.com/Team"=infra \
+  --set job.labels."browserstack\.com/application"=onelens \
+  --set job.labels."browserstack\.com/component"=onelens \
+  --set job.labels."browserstack\.com/release"=ga \
+  \
+  --set cronjob.labels."browserstack\.com/BillingTeam"=core \
+  --set cronjob.labels."browserstack\.com/Env"=stag \
+  --set cronjob.labels."browserstack\.com/Team"=infra \
+  --set cronjob.labels."browserstack\.com/application"=onelens \
+  --set cronjob.labels."browserstack\.com/component"=onelens \
+  --set cronjob.labels."browserstack\.com/release"=ga \
+  \
+  --set-string job.env.IMAGE_PULL_SECRET=''
+
+

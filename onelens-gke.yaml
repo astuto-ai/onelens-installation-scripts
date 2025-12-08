@@ -1,0 +1,35 @@
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  annotations:
+    meta.helm.sh/release-name: onelens-agent
+    meta.helm.sh/release-namespace: onelens-agent
+  creationTimestamp: "2025-11-25T09:31:00Z"
+  labels:
+    Application_Name: OnelensAgent
+    Application_Owner: Astuto
+    app.kubernetes.io/managed-by: Helm
+  name: onelens-sc
+  resourceVersion: "1764063060879951000"
+  uid: 65c8f7b0-9200-44e6-8202-4680c5770d6d
+# parameters:
+#   replication-type: none
+#   type: hyperdisk-balanced
+provisioner: pd.csi.storage.gke.io
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+
+
+# Always check the node type and then select the type value for parameters for sc
+# pd- / pd-ssd - Generic ()
+# hyperdisk-balanced -> for C4A nodes
+# hyperdisk-ssd -> for C6A nodes
+# hyperdisk-hdd -> for C6 nodes
+# hyperdisk-balanced -> for C6A nodes
+# hyperdisk-balanced -> for C6A nodesstandard
+
+
+# # 2 ways
+# 1. filestore try 
+# 2. prerequiste (sku type) - node sku - automatically pod -  
