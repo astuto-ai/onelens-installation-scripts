@@ -34,7 +34,7 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=1.9.0}"
+: "${RELEASE_VERSION:=2.0.0}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
@@ -122,7 +122,50 @@ else
     kubectl create namespace onelens-agent || { echo "Error: Failed to create namespace 'onelens-agent'."; exit 1; }
 fi
 
-# Phase 8: EBS CSI Driver Check and Installation
+# Phase 7.5: Detect Cloud Provider
+detect_cloud_provider() {
+    echo "Detecting cloud provider..."
+    local cluster_endpoint
+    cluster_endpoint=$(kubectl cluster-info 2>/dev/null | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
+    
+    if [[ "$cluster_endpoint" =~ \.eks\.amazonaws\.com ]]; then
+        echo "AWS"
+    elif [[ "$cluster_endpoint" =~ \.azmk8s\.io ]]; then
+        echo "AZURE"
+    else
+        # Try to detect from node provider ID
+        local node_provider
+        node_provider=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || echo "")
+        if [[ "$node_provider" =~ ^aws:// ]]; then
+            echo "AWS"
+        elif [[ "$node_provider" =~ ^azure:// ]]; then
+            echo "AZURE"
+        else
+            echo "UNKNOWN"
+        fi
+    fi
+}
+
+CLOUD_PROVIDER=$(detect_cloud_provider)
+echo "Detected cloud provider: $CLOUD_PROVIDER"
+
+# Set storage class configuration based on cloud provider
+if [ "$CLOUD_PROVIDER" = "AWS" ]; then
+    STORAGE_CLASS_PROVISIONER="ebs.csi.aws.com"
+    STORAGE_CLASS_VOLUME_TYPE="gp3"
+    echo "Using AWS EBS storage class (provisioner: $STORAGE_CLASS_PROVISIONER, type: $STORAGE_CLASS_VOLUME_TYPE)"
+elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
+    STORAGE_CLASS_PROVISIONER="disk.csi.azure.com"
+    STORAGE_CLASS_SKU="StandardSSD_LRS"
+    echo "Using Azure Disk storage class (provisioner: $STORAGE_CLASS_PROVISIONER, sku: $STORAGE_CLASS_SKU)"
+else
+    # Default to AWS for backward compatibility
+    STORAGE_CLASS_PROVISIONER="ebs.csi.aws.com"
+    STORAGE_CLASS_VOLUME_TYPE="gp3"
+    echo "WARNING: Unknown cloud provider, defaulting to AWS EBS storage class"
+fi
+
+# Phase 8: CSI Driver Check and Installation (Cloud-specific)
 check_ebs_driver() {
     local retries=1
     local count=0
@@ -152,7 +195,38 @@ check_ebs_driver() {
     return 1
 }
 
-check_ebs_driver 
+check_azure_disk_driver() {
+    echo "Checking if Azure Disk CSI driver is installed..."
+    
+    # Check if Azure Disk CSI driver is installed (it's typically pre-installed on AKS)
+    if kubectl get csidriver disk.csi.azure.com &> /dev/null; then
+        echo "Azure Disk CSI driver is installed."
+        return 0
+    fi
+    
+    # Check if default storage class exists (AKS typically has this)
+    if kubectl get storageclass | grep -q "disk.csi.azure.com"; then
+        echo "Azure Disk storage class is available."
+        return 0
+    fi
+    
+    echo "WARNING: Azure Disk CSI driver may not be fully configured."
+    echo "For AKS clusters, this is typically pre-installed."
+    echo "If you encounter storage issues, run: az aks update -g <rg> -n <cluster> --enable-disk-driver"
+    return 0
+}
+
+# Run appropriate CSI driver check based on cloud provider
+if [ "$CLOUD_PROVIDER" = "AWS" ]; then
+    echo "Running AWS EBS CSI driver check..."
+    check_ebs_driver
+elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
+    echo "Running Azure Disk CSI driver check..."
+    check_azure_disk_driver
+else
+    echo "Unknown cloud provider. Skipping CSI driver check."
+    echo "Please ensure your cluster has a CSI driver installed for persistent storage."
+fi
 
 echo "Persistent storage for Prometheus is ENABLED."
 
@@ -390,7 +464,7 @@ else
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=1.9.0}\" \
+    --version \"\${RELEASE_VERSION:=2.0.0}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -422,7 +496,17 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace on
     --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PUSHGATEWAY_MEMORY_LIMIT\" \
     --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
     --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
-    --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+    --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
+    --set onelens-agent.storageClass.provisioner=\"$STORAGE_CLASS_PROVISIONER\""
+
+# Add cloud-specific storage class parameters
+if [ "$CLOUD_PROVIDER" = "AWS" ]; then
+    CMD+=" --set onelens-agent.storageClass.volumeType=\"$STORAGE_CLASS_VOLUME_TYPE\""
+elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
+    CMD+=" --set onelens-agent.storageClass.azure.skuName=\"$STORAGE_CLASS_SKU\""
+fi
+
+# Continue building command
 
 # Append tolerations only if set
 if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
@@ -464,8 +548,8 @@ if [[ -n "$IMAGE_PULL_SECRET" ]]; then
   done
 fi
 
-# Append custom EBS tags only if set
-if [[ "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TAGS" ]]; then
+# Append AWS-specific EBS tags only if set and running on AWS
+if [[ "$CLOUD_PROVIDER" == "AWS" && "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TAGS" ]]; then
   echo "Processing EBS tags: $EBS_TAGS"
   # Enable volume tags
   CMD+=" --set onelens-agent.storageClass.volumeTags.enabled=true"
@@ -489,8 +573,8 @@ if [[ "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TAGS" ]]; then
   done
 fi
 
-# Append encryption only if set
-if [[ "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
+# Append AWS-specific encryption only if set and running on AWS
+if [[ "$CLOUD_PROVIDER" == "AWS" && "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
   CMD+=" --set onelens-agent.storageClass.encryption.enabled=true"
   if [[ -n "$EBS_ENCRYPTION_KEY" ]]; then
     CMD+=" --set onelens-agent.storageClass.encryption.kmsKeyId=\"$EBS_ENCRYPTION_KEY\""

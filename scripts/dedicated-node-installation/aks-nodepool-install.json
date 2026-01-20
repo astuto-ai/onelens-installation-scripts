@@ -1,0 +1,88 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "ARM template for creating a dedicated AKS node pool for OneLens workloads"
+  },
+  "parameters": {
+    "clusterName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing AKS cluster"
+      }
+    },
+    "nodePoolName": {
+      "type": "string",
+      "defaultValue": "onelenspool",
+      "metadata": {
+        "description": "Name for the new node pool"
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2s",
+      "allowedValues": [
+        "Standard_B2s",
+        "Standard_B2ms",
+        "Standard_B4ms",
+        "Standard_D2s_v3",
+        "Standard_D4s_v3",
+        "Standard_D2as_v4",
+        "Standard_D4as_v4"
+      ],
+      "metadata": {
+        "description": "VM size for the node pool. Recommended: Standard_B2s (< 500 pods), Standard_B4ms (500+ pods)"
+      }
+    },
+    "nodeCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 10,
+      "metadata": {
+        "description": "Number of nodes in the pool"
+      }
+    },
+    "osType": {
+      "type": "string",
+      "defaultValue": "Linux",
+      "allowedValues": [
+        "Linux"
+      ],
+      "metadata": {
+        "description": "OS type for the nodes"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerService/managedClusters/agentPools",
+      "apiVersion": "2023-10-01",
+      "name": "[concat(parameters('clusterName'), '/', parameters('nodePoolName'))]",
+      "properties": {
+        "count": "[parameters('nodeCount')]",
+        "vmSize": "[parameters('vmSize')]",
+        "osType": "[parameters('osType')]",
+        "mode": "User",
+        "nodeTaints": [
+          "onelens-workload=agent:NoSchedule"
+        ],
+        "nodeLabels": {
+          "onelens-workload": "agent"
+        },
+        "enableAutoScaling": false,
+        "type": "VirtualMachineScaleSets"
+      }
+    }
+  ],
+  "outputs": {
+    "nodePoolName": {
+      "type": "string",
+      "value": "[parameters('nodePoolName')]"
+    },
+    "nodePoolId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.ContainerService/managedClusters/agentPools', parameters('clusterName'), parameters('nodePoolName'))]"
+    }
+  }
+}

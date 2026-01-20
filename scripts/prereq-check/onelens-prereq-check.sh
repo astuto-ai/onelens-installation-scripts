@@ -2,7 +2,8 @@
 
 # OneLens Agent Pre-requisite Checker
 # This script validates all prerequisites for OneLens Agent installation
-# Version: 1.0
+# Supports both AWS EKS and Azure AKS clusters
+# Version: 2.0
 
 
 # Configuration
@@ -20,13 +21,16 @@ REQUIRED_CONTAINER_REGISTRIES=(
 )
 
 MIN_HELM_VERSION="3.0.0"
-MIN_EKS_VERSION="1.27"
+MIN_K8S_VERSION="1.27"
 
 # Global array to track failed checks
 FAILED_CHECKS=()
 
 # Global array to track confirmed details
 CONFIRMED_DETAILS=()
+
+# Cloud provider detection (will be set by detect_cloud_provider)
+CLOUD_PROVIDER=""
 
 # Utility functions
 print_header() {
@@ -53,6 +57,10 @@ print_warning() {
     echo "WARNING: $1"
 }
 
+print_info() {
+    echo "INFO: $1"
+}
+
 add_failed_check() {
     FAILED_CHECKS+=("$1")
 }
@@ -75,10 +83,77 @@ check_command() {
     fi
 }
 
+# Detect cloud provider based on cluster endpoint
+detect_cloud_provider() {
+    print_step "Detecting cloud provider from cluster endpoint..."
+    
+    if ! check_command kubectl; then
+        print_error "kubectl is not installed, cannot detect cloud provider"
+        return 1
+    fi
+    
+    if ! kubectl cluster-info &> /dev/null; then
+        print_error "kubectl cannot connect to cluster, cannot detect cloud provider"
+        return 1
+    fi
+    
+    local cluster_endpoint
+    cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
+    
+    if [[ "$cluster_endpoint" =~ \.eks\.amazonaws\.com ]]; then
+        CLOUD_PROVIDER="aws"
+        print_success "Detected AWS EKS cluster"
+    elif [[ "$cluster_endpoint" =~ \.azmk8s\.io ]]; then
+        CLOUD_PROVIDER="azure"
+        print_success "Detected Azure AKS cluster"
+    else
+        # Try to detect from node labels
+        local node_provider
+        node_provider=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || echo "")
+        
+        if [[ "$node_provider" =~ ^aws:// ]]; then
+            CLOUD_PROVIDER="aws"
+            print_success "Detected AWS EKS cluster (from node provider)"
+        elif [[ "$node_provider" =~ ^azure:// ]]; then
+            CLOUD_PROVIDER="azure"
+            print_success "Detected Azure AKS cluster (from node provider)"
+        else
+            print_warning "Could not auto-detect cloud provider"
+            print_info "Cluster endpoint: $cluster_endpoint"
+            print_info "Node provider: $node_provider"
+            
+            # Ask user or default to generic
+            echo ""
+            echo "Please specify your cloud provider:"
+            echo "1) AWS (EKS)"
+            echo "2) Azure (AKS)"
+            read -r -p "Enter choice [1/2]: " choice
+            case "$choice" in
+                1) CLOUD_PROVIDER="aws" ;;
+                2) CLOUD_PROVIDER="azure" ;;
+                *) 
+                    print_error "Invalid choice. Defaulting to generic Kubernetes checks."
+                    CLOUD_PROVIDER="generic"
+                    ;;
+            esac
+        fi
+    fi
+    
+    add_confirmed_detail "Cloud Provider: ${CLOUD_PROVIDER^^}"
+    return 0
+}
+
 # Silent check for required tools before starting
 check_required_tools() {
     local missing_tools=()
-    local required_tools=("curl" "ping" "nslookup" "aws" "kubectl" "helm")
+    local required_tools=("curl" "kubectl" "helm")
+    
+    # Add cloud-specific tools based on detected provider
+    if [ "$CLOUD_PROVIDER" = "aws" ]; then
+        required_tools+=("aws")
+    elif [ "$CLOUD_PROVIDER" = "azure" ]; then
+        required_tools+=("az")
+    fi
     
     for tool in "${required_tools[@]}"; do
         if ! check_command "$tool"; then
@@ -91,7 +166,13 @@ check_required_tools() {
         printf '  - %s\n' "${missing_tools[@]}"
         echo ""
         echo "Please install the missing tools and try again."
-        echo "Required tools: curl, ping, nslookup, aws, kubectl, helm"
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+            echo "Required tools: curl, kubectl, helm, aws"
+        elif [ "$CLOUD_PROVIDER" = "azure" ]; then
+            echo "Required tools: curl, kubectl, helm, az"
+        else
+            echo "Required tools: curl, kubectl, helm"
+        fi
         exit 1
     fi
 }
@@ -151,6 +232,48 @@ get_eks_cluster_info() {
     return 0
 }
 
+# Function to get AKS cluster info
+get_aks_cluster_info() {
+    local cluster_endpoint="$1"
+    local context_name="$2"
+    
+    # Extract location from endpoint URL first
+    # AKS endpoints look like: https://<cluster-dns-prefix>.<location>.azmk8s.io:443
+    # or https://<cluster-dns-prefix>.hcp.<location>.azmk8s.io:443
+    local location="unknown"
+    if [[ "$cluster_endpoint" =~ \.hcp\.([^.]+)\.azmk8s\.io ]]; then
+        location="${BASH_REMATCH[1]}"
+    elif [[ "$cluster_endpoint" =~ \.([^.]+)\.azmk8s\.io ]]; then
+        location="${BASH_REMATCH[1]}"
+    fi
+    
+    # Method 1: Try to get actual cluster info from Azure CLI
+    if check_command az && az account show &> /dev/null; then
+        # Extract FQDN from endpoint for matching
+        local endpoint_fqdn="${cluster_endpoint#https://}"
+        endpoint_fqdn="${endpoint_fqdn%:443}"
+        endpoint_fqdn="${endpoint_fqdn%/}"
+        
+        # Try to find the cluster by listing all AKS clusters
+        local cluster_info
+        cluster_info=$(az aks list --query "[].{name:name,resourceGroup:resourceGroup,location:location,fqdn:fqdn}" -o tsv 2>/dev/null)
+        
+        if [ -n "$cluster_info" ]; then
+            while IFS=$'\t' read -r name rg loc fqdn; do
+                # Match by FQDN or by context name
+                if [[ "$fqdn" == "$endpoint_fqdn" ]] || [[ "$name" == "$context_name" ]]; then
+                    echo "$name|$loc|$rg"
+                    return 0
+                fi
+            done <<< "$cluster_info"
+        fi
+    fi
+    
+    # Method 2: Fallback to context name with parsed location
+    echo "$context_name (context name)|$location|unknown"
+    return 0
+}
+
 # Internet connectivity checks
 check_internet_access() {
     print_step "Checking connectivity and access to required URLs..."
@@ -170,7 +293,7 @@ check_internet_access() {
     # Check container registries DNS resolution
     print_step "Checking access to container registries..."
     for registry in "${REQUIRED_CONTAINER_REGISTRIES[@]}"; do
-        if nslookup "$registry" &> /dev/null; then
+        if nslookup "$registry" &> /dev/null 2>&1 || host "$registry" &> /dev/null 2>&1 || ping -c 1 "$registry" &> /dev/null 2>&1; then
             print_success "$registry accessible"
         else
             print_error "$registry not accessible"
@@ -224,8 +347,47 @@ check_aws_cli() {
     return 0
 }
 
-# Kubectl cluster check
-check_kubectl_cluster() {
+# Azure CLI configuration check
+check_azure_cli() {
+    print_step "Checking Azure CLI configuration..."
+    
+    if ! check_command az; then
+        print_error "Azure CLI is not installed or not in PATH"
+        add_failed_check "Azure CLI: Azure CLI is not installed or not in PATH"
+        return 1
+    fi
+    
+    # Check if Azure CLI is configured
+    if ! az account show &> /dev/null; then
+        print_error "Azure CLI is not configured or credentials are invalid"
+        print_error "Please run 'az login' to set up your credentials"
+        add_failed_check "Azure CLI: Azure CLI is not configured or credentials are invalid"
+        return 1
+    fi
+    
+    # Get Azure account information
+    local subscription_id subscription_name tenant_id user_name
+    subscription_id=$(az account show --query 'id' -o tsv)
+    subscription_name=$(az account show --query 'name' -o tsv)
+    tenant_id=$(az account show --query 'tenantId' -o tsv)
+    user_name=$(az account show --query 'user.name' -o tsv)
+    
+    print_success "Azure CLI is configured"
+    echo "Azure Account Details:"
+    echo "  Subscription ID: $subscription_id"
+    echo "  Subscription Name: $subscription_name"
+    echo "  Tenant ID: $tenant_id"
+    echo "  User: $user_name"
+    
+    # Store Azure details for final confirmation
+    add_confirmed_detail "Azure Subscription: $subscription_name ($subscription_id)"
+    add_confirmed_detail "Azure Tenant: $tenant_id"
+    add_confirmed_detail "Azure User: $user_name"
+    return 0
+}
+
+# Kubectl cluster check for EKS
+check_kubectl_cluster_eks() {
     print_step "Checking kubectl cluster configuration..."
     
     if ! check_command kubectl; then
@@ -246,7 +408,7 @@ check_kubectl_cluster() {
     local cluster_context
     cluster_context=$(kubectl config current-context)
     local cluster_endpoint
-    cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}')
+    cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
     
     # Try to get actual EKS cluster name and region
     local cluster_info
@@ -264,6 +426,56 @@ check_kubectl_cluster() {
     # Store cluster details for final confirmation
     add_confirmed_detail "EKS Cluster Name: $actual_cluster_name"
     add_confirmed_detail "AWS Region: $cluster_region"
+    add_confirmed_detail "Kubectl Context: $cluster_context"
+    add_confirmed_detail "Cluster Endpoint: $cluster_endpoint"
+    return 0
+}
+
+# Kubectl cluster check for AKS
+check_kubectl_cluster_aks() {
+    print_step "Checking kubectl cluster configuration..."
+    
+    if ! check_command kubectl; then
+        print_error "kubectl is not installed or not in PATH"
+        add_failed_check "Kubectl: kubectl is not installed or not in PATH"
+        return 1
+    fi
+    
+    # Check if kubectl can connect to cluster
+    if ! kubectl cluster-info &> /dev/null; then
+        print_error "kubectl cannot connect to any cluster"
+        print_error "Please ensure your kubeconfig is properly configured"
+        print_error "Run: az aks get-credentials --resource-group <rg> --name <cluster>"
+        add_failed_check "Kubectl: kubectl cannot connect to any cluster"
+        return 1
+    fi
+    
+    # Get cluster information
+    local cluster_context
+    cluster_context=$(kubectl config current-context)
+    local cluster_endpoint
+    cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
+    
+    # Try to get actual AKS cluster info
+    local cluster_info
+    cluster_info=$(get_aks_cluster_info "$cluster_endpoint" "$cluster_context")
+    local actual_cluster_name="${cluster_info%%|*}"
+    local remaining="${cluster_info#*|}"
+    local cluster_location="${remaining%%|*}"
+    local resource_group="${remaining#*|}"
+    
+    print_success "kubectl is configured and connected"
+    echo "Cluster Details:"
+    echo "  Current Context: $cluster_context"
+    echo "  Cluster Endpoint: $cluster_endpoint"
+    echo "  AKS Cluster Name: $actual_cluster_name"
+    echo "  Azure Location: $cluster_location"
+    echo "  Resource Group: $resource_group"
+    
+    # Store cluster details for final confirmation
+    add_confirmed_detail "AKS Cluster Name: $actual_cluster_name"
+    add_confirmed_detail "Azure Location: $cluster_location"
+    add_confirmed_detail "Resource Group: $resource_group"
     add_confirmed_detail "Kubectl Context: $cluster_context"
     add_confirmed_detail "Cluster Endpoint: $cluster_endpoint"
     return 0
@@ -295,21 +507,23 @@ check_helm_version() {
     fi
 }
 
-# EKS version check
-check_eks_version() {
-    print_step "Checking EKS cluster version..."
+# Kubernetes version check (generic for both EKS and AKS)
+check_k8s_version() {
+    local provider_name="$1"
+    print_step "Checking $provider_name cluster version..."
     
     local k8s_version
     k8s_version=$(
-        kubectl version -o json | \
+        kubectl version -o json 2>/dev/null | \
             grep -o '"gitVersion": *"v[^"]*"' | \
+            head -1 | \
             cut -d'"' -f4 | \
             sed 's/^v//'
     )
     
     if [ -z "$k8s_version" ] || [ "$k8s_version" = "null" ]; then
         print_error "Could not determine Kubernetes version"
-        add_failed_check "EKS Version: Could not determine Kubernetes version"
+        add_failed_check "$provider_name Version: Could not determine Kubernetes version"
         return 1
     fi
     
@@ -317,19 +531,19 @@ check_eks_version() {
     local version_major_minor
     version_major_minor=$(echo "$k8s_version" | cut -d. -f1,2)
     
-    if version_greater_equal "$version_major_minor" "$MIN_EKS_VERSION"; then
-        print_success "EKS version $k8s_version is compatible (>= $MIN_EKS_VERSION)"
-        add_confirmed_detail "EKS Version: $k8s_version"
+    if version_greater_equal "$version_major_minor" "$MIN_K8S_VERSION"; then
+        print_success "$provider_name version $k8s_version is compatible (>= $MIN_K8S_VERSION)"
+        add_confirmed_detail "$provider_name Version: $k8s_version"
         return 0
     else
-        print_error "EKS version $k8s_version is too old (minimum required: $MIN_EKS_VERSION)"
-        print_error "Please upgrade your EKS cluster to version $MIN_EKS_VERSION or later"
-        add_failed_check "EKS Version: Version $k8s_version is too old (minimum required: $MIN_EKS_VERSION)"
+        print_error "$provider_name version $k8s_version is too old (minimum required: $MIN_K8S_VERSION)"
+        print_error "Please upgrade your $provider_name cluster to version $MIN_K8S_VERSION or later"
+        add_failed_check "$provider_name Version: Version $k8s_version is too old (minimum required: $MIN_K8S_VERSION)"
         return 1
     fi
 }
 
-# EBS CSI driver check
+# EBS CSI driver check (AWS)
 check_ebs_driver() {
     print_step "Checking EBS CSI driver installation..."
     
@@ -416,68 +630,319 @@ check_ebs_driver() {
     return 0
 }
 
-
-
-# Main execution
-main() {
-    # Silent check for required tools first
-    check_required_tools
+# Azure Disk CSI driver check (Azure)
+check_azure_disk_driver() {
+    print_step "Checking Azure Disk CSI driver installation..."
     
-    print_header "OneLens Agent Pre-requisite Checker"
-    echo "This script will validate all prerequisites for OneLens Agent installation."
-    echo "Please ensure you have the necessary permissions to access AWS and Kubernetes resources."
+    # Check if Azure Disk CSI driver is installed
+    if ! kubectl get csidriver disk.csi.azure.com &> /dev/null; then
+        print_error "Azure Disk CSI driver is not installed"
+        echo ""
+        echo "To install the Azure Disk CSI driver, run the following command:"
+        echo "curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- <cluster-name> <resource-group>"
+        echo ""
+        echo "Replace '<cluster-name>' with your AKS cluster name and '<resource-group>' with your resource group"
+        echo "Alternative: Use the script in scripts/azure-disk-driver-installation/"
+        echo ""
+        echo "Or enable manually via Azure CLI:"
+        echo "  az aks update -g <resource-group> -n <cluster-name> --enable-disk-driver"
+        add_failed_check "Azure Disk CSI Driver: Azure Disk CSI driver is not installed"
+        return 1
+    fi
+    
+    print_success "Azure Disk CSI driver is installed"
+    
+    # Check Azure Disk CSI driver controller pods
+    print_step "Checking Azure Disk CSI driver controller pod status..."
+    local controller_pods_output
+    controller_pods_output=$(kubectl get pods -n kube-system -l app=csi-azuredisk-controller --no-headers 2>/dev/null)
+    
+    if [ -z "$controller_pods_output" ]; then
+        # Try alternative label
+        controller_pods_output=$(kubectl get pods -n kube-system | grep "csi-azuredisk-controller" | head -5)
+    fi
+    
+    if [ -z "$controller_pods_output" ]; then
+        print_warning "No Azure Disk CSI driver controller pods found"
+        echo "This might be normal for some AKS configurations."
+        echo "Checking if storage classes are available..."
+        
+        # Check if default storage class exists
+        if kubectl get storageclass | grep -q "default"; then
+            print_success "Default storage class is available"
+            add_confirmed_detail "Azure Disk CSI Driver: Storage class available"
+        else
+            add_failed_check "Azure Disk CSI Driver: No controller pods or storage class found"
+            return 1
+        fi
+    else
+        # Check if controller pods are ready
+        local controller_not_ready
+        controller_not_ready=$(echo "$controller_pods_output" | awk '{split($2,a,"/"); if(a[1] != a[2] || $3 != "Running") print $0}')
+        
+        if [ -n "$controller_not_ready" ]; then
+            print_warning "Some Azure Disk CSI driver controller pods are not ready"
+            echo "Controller pods status:"
+            kubectl get pods -n kube-system | grep "csi-azuredisk"
+            add_confirmed_detail "Azure Disk CSI Driver: Controller pods have issues (see warnings above)"
+        else
+            print_success "Azure Disk CSI driver controller pods are running and ready"
+            add_confirmed_detail "Azure Disk CSI Driver: Controller pods are healthy"
+        fi
+    fi
+    
+    # Check Azure Disk CSI driver node pods
+    print_step "Checking Azure Disk CSI driver node pod status..."
+    local node_pods_output
+    node_pods_output=$(kubectl get pods -n kube-system -l app=csi-azuredisk-node --no-headers 2>/dev/null)
+    
+    if [ -z "$node_pods_output" ]; then
+        # Try alternative approach
+        node_pods_output=$(kubectl get pods -n kube-system | grep "csi-azuredisk-node" 2>/dev/null)
+    fi
+    
+    if [ -z "$node_pods_output" ]; then
+        print_warning "No Azure Disk CSI driver node pods found explicitly"
+        echo "This might be normal for managed AKS clusters."
+    else
+        local node_not_ready
+        node_not_ready=$(echo "$node_pods_output" | awk '{split($2,a,"/"); if(a[1] != a[2] || $3 != "Running") print $0}')
+        
+        if [ -n "$node_not_ready" ]; then
+            print_warning "Some Azure Disk CSI driver node pods are not ready"
+            echo "Node pods status:"
+            kubectl get pods -n kube-system | grep "csi-azuredisk-node"
+            add_confirmed_detail "Azure Disk CSI Driver: Node pods have issues (see warnings above)"
+        else
+            print_success "Azure Disk CSI driver node pods are running and ready"
+            add_confirmed_detail "Azure Disk CSI Driver: Node pods are healthy"
+        fi
+    fi
+    
+    # Verify a storage class exists for Azure Disk
+    print_step "Checking Azure Disk storage classes..."
+    local storage_classes
+    storage_classes=$(kubectl get storageclass -o jsonpath='{.items[*].provisioner}' 2>/dev/null)
+    
+    if [[ "$storage_classes" =~ disk.csi.azure.com ]] || [[ "$storage_classes" =~ kubernetes.io/azure-disk ]]; then
+        print_success "Azure Disk storage class is available"
+        add_confirmed_detail "Azure Disk CSI Driver: Storage class configured"
+    else
+        print_warning "No Azure Disk storage class found"
+        echo "Available storage classes:"
+        kubectl get storageclass
+    fi
+    
+    return 0
+}
+
+# Print summary for AWS
+print_summary_aws() {
+    # Group details by category for better readability
     echo ""
-    echo "Running prerequisite checks..."
+    echo "AWS CONFIGURATION:"
+    echo "------------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^AWS ]] && [[ ! "$detail" =~ ^AWS\ Region ]]; then
+            echo "  $detail"
+        fi
+    done
     
-    local checks_passed=0
-    local total_checks=6
+    echo ""
+    echo "KUBERNETES CLUSTER:"
+    echo "-------------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^EKS|^Kubectl|^Cluster|^AWS\ Region ]] && [[ ! "$detail" =~ ^EKS\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
     
-    # Run all checks
+    echo ""
+    echo "TOOLS & VERSIONS:"
+    echo "-----------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^Helm|^EKS\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
+    
+    echo ""
+    echo "STORAGE:"
+    echo "--------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^EBS ]]; then
+            echo "  $detail"
+        fi
+    done
+}
+
+# Print summary for Azure
+print_summary_azure() {
+    # Group details by category for better readability
+    echo ""
+    echo "AZURE CONFIGURATION:"
+    echo "--------------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^Azure ]] && [[ ! "$detail" =~ ^Azure\ Location ]] && [[ ! "$detail" =~ ^Azure\ Disk ]]; then
+            echo "  $detail"
+        fi
+    done
+    
+    echo ""
+    echo "KUBERNETES CLUSTER:"
+    echo "-------------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^AKS|^Kubectl|^Cluster|^Azure\ Location|^Resource\ Group ]] && [[ ! "$detail" =~ ^AKS\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
+    
+    echo ""
+    echo "TOOLS & VERSIONS:"
+    echo "-----------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^Helm|^AKS\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
+    
+    echo ""
+    echo "STORAGE:"
+    echo "--------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^Azure\ Disk ]]; then
+            echo "  $detail"
+        fi
+    done
+}
+
+# Global variables for check results
+CHECKS_PASSED=0
+TOTAL_CHECKS=6
+
+# Main execution for AWS/EKS
+run_aws_checks() {
+    CHECKS_PASSED=0
+    TOTAL_CHECKS=6
+    
     echo ""
     print_header "1/6 - Internet Connectivity Check"
     if check_internet_access; then
-        ((checks_passed++))
+        ((CHECKS_PASSED++))
     fi
     
     echo ""
     print_header "2/6 - AWS CLI Configuration Check"
     if check_aws_cli; then
-        ((checks_passed++))
+        ((CHECKS_PASSED++))
     fi
     
     echo ""
     print_header "3/6 - Kubectl Cluster Configuration Check"
-    if check_kubectl_cluster; then
-        ((checks_passed++))
+    if check_kubectl_cluster_eks; then
+        ((CHECKS_PASSED++))
     fi
     
     echo ""
     print_header "4/6 - Helm Version Check"
     if check_helm_version; then
-        ((checks_passed++))
+        ((CHECKS_PASSED++))
     fi
     
     echo ""
     print_header "5/6 - EKS Version Check"
-    if check_eks_version; then
-        ((checks_passed++))
+    if check_k8s_version "EKS"; then
+        ((CHECKS_PASSED++))
     fi
     
     echo ""
     print_header "6/6 - EBS CSI Driver Check"
     if check_ebs_driver; then
-        ((checks_passed++))
+        ((CHECKS_PASSED++))
+    fi
+}
+
+# Main execution for Azure/AKS
+run_azure_checks() {
+    CHECKS_PASSED=0
+    TOTAL_CHECKS=6
+    
+    echo ""
+    print_header "1/6 - Internet Connectivity Check"
+    if check_internet_access; then
+        ((CHECKS_PASSED++))
+    fi
+    
+    echo ""
+    print_header "2/6 - Azure CLI Configuration Check"
+    if check_azure_cli; then
+        ((CHECKS_PASSED++))
+    fi
+    
+    echo ""
+    print_header "3/6 - Kubectl Cluster Configuration Check"
+    if check_kubectl_cluster_aks; then
+        ((CHECKS_PASSED++))
+    fi
+    
+    echo ""
+    print_header "4/6 - Helm Version Check"
+    if check_helm_version; then
+        ((CHECKS_PASSED++))
+    fi
+    
+    echo ""
+    print_header "5/6 - AKS Version Check"
+    if check_k8s_version "AKS"; then
+        ((CHECKS_PASSED++))
+    fi
+    
+    echo ""
+    print_header "6/6 - Azure Disk CSI Driver Check"
+    if check_azure_disk_driver; then
+        ((CHECKS_PASSED++))
+    fi
+}
+
+# Main execution
+main() {
+    print_header "OneLens Agent Pre-requisite Checker"
+    echo "This script will validate all prerequisites for OneLens Agent installation."
+    echo "Supports both AWS EKS and Azure AKS clusters."
+    echo ""
+    
+    # First detect cloud provider
+    print_header "Cloud Provider Detection"
+    if ! detect_cloud_provider; then
+        print_error "Could not detect cloud provider. Please ensure kubectl is configured."
+        exit 1
+    fi
+    
+    echo ""
+    echo "Running prerequisite checks for ${CLOUD_PROVIDER^^}..."
+    
+    # Check required tools after detecting provider
+    check_required_tools
+    
+    # Run appropriate checks based on cloud provider
+    if [ "$CLOUD_PROVIDER" = "aws" ]; then
+        run_aws_checks
+    elif [ "$CLOUD_PROVIDER" = "azure" ]; then
+        run_azure_checks
+    else
+        print_error "Unsupported cloud provider: $CLOUD_PROVIDER"
+        exit 1
     fi
     
     # Summary
     echo ""
     print_header "Pre-requisite Check Summary"
     
-    # Always show both passed and failed summary
     echo ""
     echo "PREREQUISITE CHECK RESULTS:"
     echo "============================"
-    echo "Status: $checks_passed/$total_checks checks passed"
+    echo "Cloud Provider: ${CLOUD_PROVIDER^^}"
+    echo "Status: $CHECKS_PASSED/$TOTAL_CHECKS checks passed"
     echo ""
     
     # Show successful configuration details
@@ -488,42 +953,11 @@ main() {
         echo "PASSED CHECKS - DETECTED CONFIGURATION:"
         echo "======================================="
         
-        # Group details by category for better readability
-        echo ""
-        echo "AWS CONFIGURATION:"
-        echo "------------------"
-        for detail in "${CONFIRMED_DETAILS[@]}"; do
-            if [[ "$detail" =~ ^AWS ]] && [[ ! "$detail" =~ ^AWS\ Region ]]; then
-                echo "  $detail"
-            fi
-        done
-        
-        echo ""
-        echo "KUBERNETES CLUSTER:"
-        echo "-------------------"
-        for detail in "${CONFIRMED_DETAILS[@]}"; do
-            if [[ "$detail" =~ ^EKS|^Kubectl|^Cluster|^AWS\ Region ]] && [[ ! "$detail" =~ ^EKS\ Version ]]; then
-                echo "  $detail"
-            fi
-        done
-        
-        echo ""
-        echo "TOOLS & VERSIONS:"
-        echo "-----------------"
-        for detail in "${CONFIRMED_DETAILS[@]}"; do
-            if [[ "$detail" =~ ^Helm|^EKS\ Version ]]; then
-                echo "  $detail"
-            fi
-        done
-        
-        echo ""
-        echo "STORAGE:"
-        echo "--------"
-        for detail in "${CONFIRMED_DETAILS[@]}"; do
-            if [[ "$detail" =~ ^EBS ]]; then
-                echo "  $detail"
-            fi
-        done
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+            print_summary_aws
+        elif [ "$CLOUD_PROVIDER" = "azure" ]; then
+            print_summary_azure
+        fi
         
         echo ""
     fi
@@ -541,14 +975,19 @@ main() {
     fi
     
     # Final status and next steps
-    if [ $checks_passed -eq $total_checks ]; then
+    if [ "$CHECKS_PASSED" -eq "$TOTAL_CHECKS" ]; then
         print_success "All pre-requisites passed! Your environment is ready for OneLens Agent installation."
         echo ""
-        echo "IMPORTANT: Please carefully review the detected configuration sections above"
-        echo "to ensure OneLens Agent will be installed on the correct AWS account and cluster."
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+            echo "IMPORTANT: Please carefully review the detected configuration sections above"
+            echo "to ensure OneLens Agent will be installed on the correct AWS account and cluster."
+        elif [ "$CLOUD_PROVIDER" = "azure" ]; then
+            echo "IMPORTANT: Please carefully review the detected configuration sections above"
+            echo "to ensure OneLens Agent will be installed on the correct Azure subscription and cluster."
+        fi
         echo ""
         echo "NEXT STEPS:"
-        echo "1. Verify the AWS account, region, and cluster details above are correct"
+        echo "1. Verify the account/subscription, region, and cluster details above are correct"
         echo "2. Run the OneLens Agent installation script"
         echo "3. Follow the installation guide for configuration"
     else

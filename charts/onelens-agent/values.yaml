@@ -2,7 +2,7 @@ onelens-agent:
   enabled: true
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v1.9.0
+    tag: v2.0.0
     pullPolicy: IfNotPresent
   nameOverride: "onelens-agent"
   fullnameOverride: "onelens-agent"
@@ -13,9 +13,14 @@ onelens-agent:
   storageClass:
     enabled: true  
     name: onelens-sc
+    # Cloud Provider: Set based on your Kubernetes environment
+    # AWS EKS: ebs.csi.aws.com
+    # Azure AKS: disk.csi.azure.com
+    # GKE: pd.csi.storage.gke.io
     provisioner: ebs.csi.aws.com
     reclaimPolicy: Delete
     volumeBindingMode: WaitForFirstConsumer
+    # AWS-specific parameters
     volumeType: gp3
     allowVolumeExpansion: true
     encryption:
@@ -23,6 +28,9 @@ onelens-agent:
       kmsKeyId: ""
     volumeTags:
       enabled: false
+    # Azure-specific parameters (used when provisioner is disk.csi.azure.com)
+    azure:
+      skuName: StandardSSD_LRS  # Options: Standard_LRS, Premium_LRS, StandardSSD_LRS, UltraSSD_LRS
     labels:
       Application_Name: "OnelensAgent"
       Application_Owner: "Astuto"
