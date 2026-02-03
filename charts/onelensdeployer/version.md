@@ -12,3 +12,4 @@
 #1.8.0 - Adaptive KSM and Pushgateway Resource config
 #1.9.0 - Implement Principle of least privilege
 #2.0.0 - Multi-cloud support: Add Azure AKS installation support
+#2.0.1 - Azure AKS support improvements and bug fixes
