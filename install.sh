@@ -123,17 +123,21 @@ else
 fi
 
 # Phase 7.5: Detect Cloud Provider
+# Step 1: Always try auto-detection first (most reliable method)
 detect_cloud_provider() {
-    echo "Detecting cloud provider..."
     local cluster_endpoint
     cluster_endpoint=$(kubectl cluster-info 2>/dev/null | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
     
+    # Primary detection: Check cluster endpoint URL
+    # EKS: Always has *.eks.amazonaws.com (100% reliable)
+    # AKS: Always has *.azmk8s.io (100% reliable)
+    # GKE: Can be added later (*.gke.io pattern)
     if [[ "$cluster_endpoint" =~ \.eks\.amazonaws\.com ]]; then
         echo "AWS"
     elif [[ "$cluster_endpoint" =~ \.azmk8s\.io ]]; then
         echo "AZURE"
     else
-        # Try to detect from node provider ID
+        # Fallback detection: Check node provider ID (backup method)
         local node_provider
         node_provider=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || echo "")
         if [[ "$node_provider" =~ ^aws:// ]]; then
@@ -146,8 +150,23 @@ detect_cloud_provider() {
     fi
 }
 
+echo "Detecting cloud provider..."
 CLOUD_PROVIDER=$(detect_cloud_provider)
-echo "Detected cloud provider: $CLOUD_PROVIDER"
+echo "Auto-detected cloud provider: $CLOUD_PROVIDER"
+
+# Step 2: If auto-detection failed, check for manual override
+if [ "$CLOUD_PROVIDER" = "UNKNOWN" ]; then
+    if [ -n "${CLOUD_PROVIDER_OVERRIDE:-}" ]; then
+        echo "Auto-detection failed. Using manual override: $CLOUD_PROVIDER_OVERRIDE"
+        if [[ "$CLOUD_PROVIDER_OVERRIDE" =~ ^(AWS|AZURE)$ ]]; then
+            CLOUD_PROVIDER="$CLOUD_PROVIDER_OVERRIDE"
+        else
+            echo "ERROR: Invalid CLOUD_PROVIDER_OVERRIDE value: $CLOUD_PROVIDER_OVERRIDE"
+            echo "Supported values: AWS, AZURE"
+            exit 1
+        fi
+    fi
+fi
 
 # Set storage class configuration based on cloud provider
 if [ "$CLOUD_PROVIDER" = "AWS" ]; then
@@ -159,10 +178,18 @@ elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     STORAGE_CLASS_SKU="StandardSSD_LRS"
     echo "Using Azure Disk storage class (provisioner: $STORAGE_CLASS_PROVISIONER, sku: $STORAGE_CLASS_SKU)"
 else
-    # Default to AWS for backward compatibility
-    STORAGE_CLASS_PROVISIONER="ebs.csi.aws.com"
-    STORAGE_CLASS_VOLUME_TYPE="gp3"
-    echo "WARNING: Unknown cloud provider, defaulting to AWS EBS storage class"
+    echo "ERROR: Cloud provider auto-detection failed."
+    echo "Detected provider: $CLOUD_PROVIDER"
+    echo ""
+    echo "Supported providers: AWS (EKS), Azure (AKS)"
+    echo ""
+    echo "To manually specify the cloud provider, set the CLOUD_PROVIDER_OVERRIDE environment variable:"
+    echo "  export CLOUD_PROVIDER_OVERRIDE=AWS    # For AWS EKS clusters"
+    echo "  export CLOUD_PROVIDER_OVERRIDE=AZURE  # For Azure AKS clusters"
+    echo ""
+    echo "Note: Auto-detection should work for all standard EKS and AKS clusters."
+    echo "If detection failed, please verify: kubectl cluster-info"
+    exit 1
 fi
 
 # Phase 8: CSI Driver Check and Installation (Cloud-specific)
