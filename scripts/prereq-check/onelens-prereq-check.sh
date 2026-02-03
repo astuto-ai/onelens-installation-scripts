@@ -639,7 +639,7 @@ check_azure_disk_driver() {
         print_error "Azure Disk CSI driver is not installed"
         echo ""
         echo "To install the Azure Disk CSI driver, run the following command:"
-        echo "curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- <cluster-name> <resource-group>"
+        echo "curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- <cluster-name> <resource-group>"
         echo ""
         echo "Replace '<cluster-name>' with your AKS cluster name and '<resource-group>' with your resource group"
         echo "Alternative: Use the script in scripts/azure-disk-driver-installation/"

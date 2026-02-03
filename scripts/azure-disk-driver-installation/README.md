@@ -6,13 +6,13 @@ Enterprise-ready shell script that automatically enables/installs Azure Disk CSI
 
 ### Method 1: Run directly from the internet
 ```bash
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- my-aks-cluster my-resource-group
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- my-aks-cluster my-resource-group
 ```
 
 ### Method 2: Download and run locally
 ```bash
 # Download the script
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh -o install-azure-disk-csi-driver.sh
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh -o install-azure-disk-csi-driver.sh
 
 # Make it executable
 chmod +x install-azure-disk-csi-driver.sh

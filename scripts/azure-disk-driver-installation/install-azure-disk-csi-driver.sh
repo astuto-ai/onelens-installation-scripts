@@ -9,10 +9,10 @@
 #
 # USAGE:
 #   # Run directly from internet:
-#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- CLUSTER_NAME RESOURCE_GROUP
+#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh | bash -s -- CLUSTER_NAME RESOURCE_GROUP
 #
 #   # Or download and run:
-#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.3.0-azure-disk-driver/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh -o install-azure-disk-csi-driver.sh
+#   curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/azure-disk-driver-installation/install-azure-disk-csi-driver.sh -o install-azure-disk-csi-driver.sh
 #   chmod +x install-azure-disk-csi-driver.sh
 #   ./install-azure-disk-csi-driver.sh CLUSTER_NAME RESOURCE_GROUP
 #

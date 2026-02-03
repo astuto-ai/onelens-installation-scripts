@@ -26,20 +26,27 @@ show_loading() {
 
 # ---------- Usage check ----------
 if [ "$#" -lt 2 ]; then
-  echo "Usage: $0 <cluster-name> <resource-group>"
+  echo "Usage: $0 <cluster-name> <resource-group> [node-pool-name]"
   echo ""
   echo "Arguments:"
   echo "  cluster-name    Name of your AKS cluster"
   echo "  resource-group  Azure resource group containing the cluster"
+  echo "  node-pool-name  Name for the node pool (optional, default: onelenspool)"
   echo ""
-  echo "Example:"
+  echo "Environment Variables:"
+  echo "  NODEPOOL_NAME   Name for the node pool (optional, default: onelenspool)"
+  echo ""
+  echo "Examples:"
   echo "  $0 my-aks-cluster my-resource-group"
+  echo "  $0 my-aks-cluster my-resource-group custom-pool-name"
+  echo "  NODEPOOL_NAME=custom-pool $0 my-aks-cluster my-resource-group"
   exit 1
 fi
 
 CLUSTER_NAME=$1
 RESOURCE_GROUP=$2
-NODEPOOL_NAME="onelenspool"
+# Allow node pool name from command line argument, environment variable, or use default
+NODEPOOL_NAME="${3:-${NODEPOOL_NAME:-onelenspool}}"
 
 # ---------- Check Azure CLI ----------
 echo "Checking Azure CLI..."
