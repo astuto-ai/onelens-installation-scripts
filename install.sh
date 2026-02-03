@@ -588,23 +588,27 @@ if [[ "$CLOUD_PROVIDER" == "AWS" && "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
   fi
 fi
 
-# Append Azure-specific caching mode
-if [[ "$CLOUD_PROVIDER" == "AZURE" && -n "$AZURE_DISK_CACHING_MODE" ]]; then
-  CMD+=" --set onelens-agent.storageClass.azure.cachingMode=\"$AZURE_DISK_CACHING_MODE\""
-fi
 
-# Append Azure-specific tags only if set and running on Azure
-if [[ "$CLOUD_PROVIDER" == "AZURE" && "$AZURE_DISK_TAGS_ENABLED" == "true" && -n "$AZURE_DISK_TAGS" ]]; then
-  echo "Processing Azure Disk tags: $AZURE_DISK_TAGS"
-  CMD+=" --set onelens-agent.storageClass.azure.tags.enabled=true"
-  CMD+=" --set onelens-agent.storageClass.azure.tags.value=\"$AZURE_DISK_TAGS\""
-fi
+# Append Azure-specific settings
+if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
+  # Append Azure-specific caching mode
+  if [[ -n "$AZURE_DISK_CACHING_MODE" ]]; then
+    CMD+=" --set onelens-agent.storageClass.azure.cachingMode=\"$AZURE_DISK_CACHING_MODE\""
+  fi
 
-# Append Azure-specific encryption only if set and running on Azure
-if [[ "$CLOUD_PROVIDER" == "AZURE" && "$AZURE_DISK_ENCRYPTION_ENABLED" == "true" ]]; then
-  CMD+=" --set onelens-agent.storageClass.azure.encryption.enabled=true"
-  if [[ -n "$AZURE_DISK_ENCRYPTION_SET_ID" ]]; then
-    CMD+=" --set onelens-agent.storageClass.azure.encryption.diskEncryptionSetID=\"$AZURE_DISK_ENCRYPTION_SET_ID\""
+  # Append Azure-specific tags only if set
+  if [[ "$AZURE_DISK_TAGS_ENABLED" == "true" && -n "$AZURE_DISK_TAGS" ]]; then
+    echo "Processing Azure Disk tags: $AZURE_DISK_TAGS"
+    CMD+=" --set onelens-agent.storageClass.azure.tags.enabled=true"
+    CMD+=" --set onelens-agent.storageClass.azure.tags.value=\"$AZURE_DISK_TAGS\""
+  fi
+
+  # Append Azure-specific encryption only if set
+  if [[ "$AZURE_DISK_ENCRYPTION_ENABLED" == "true" ]]; then
+    CMD+=" --set onelens-agent.storageClass.azure.encryption.enabled=true"
+    if [[ -n "$AZURE_DISK_ENCRYPTION_SET_ID" ]]; then
+      CMD+=" --set onelens-agent.storageClass.azure.encryption.diskEncryptionSetID=\"$AZURE_DISK_ENCRYPTION_SET_ID\""
+    fi
   fi
 fi
 
