@@ -31,6 +31,15 @@ onelens-agent:
     # Azure-specific parameters (used when provisioner is disk.csi.azure.com)
     azure:
       skuName: StandardSSD_LRS  # Options: Standard_LRS, Premium_LRS, StandardSSD_LRS, UltraSSD_LRS
+      cachingMode: ReadOnly     # Options: None, ReadOnly, ReadWrite
+      # Azure Disk tags (comma-separated key=value pairs)
+      tags:
+        enabled: false
+        value: ""  # Format: "key1=value1,key2=value2"
+      # Azure Disk Encryption using Disk Encryption Set
+      encryption:
+        enabled: false
+        diskEncryptionSetID: ""  # Azure Disk Encryption Set resource ID
     labels:
       Application_Name: "OnelensAgent"
       Application_Owner: "Astuto"
