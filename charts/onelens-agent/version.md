@@ -19,4 +19,8 @@
 | v1.4.1 | Skipped | v1.4.1 |
 | v1.5.0 | Right size the reqs and limits of agent based on available max usage data | v1.5.0 |
 | v1.6.0 | set resources for ksm , gateway , reloader | v1.6.0 |
-| v1.7.0 | Agent Image changes |
+| v1.7.0 | Agent Image changes | v1.7.0 |
+| v1.8.0 | Adaptive KSM and Pushgateway Resource config | v1.8.0 |
+| v1.9.0 | Implement Principle of least privilege | v1.9.0 |
+| v2.0.0 | Multi-cloud support: Add Azure AKS installation support | v2.0.0 |
+| v2.0.1 | Azure AKS support improvements and bug fixes | v2.0.1 |

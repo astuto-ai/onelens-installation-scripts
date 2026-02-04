@@ -1,195 +1,260 @@
 # OneLens Dedicated Node Installation
 
-This directory contains scripts and CloudFormation templates for creating dedicated EKS nodes specifically for OneLens workloads. The solution provides both automated bash script deployment and manual CloudFormation template deployment options.
+This directory contains scripts and templates for creating dedicated Kubernetes nodes specifically for OneLens workloads. The solution supports both **AWS EKS** and **Azure AKS** with automated and manual deployment options.
 
 ## Overview
 
-The OneLens Dedicated Node Installation creates EKS nodegroups with specific configurations:
+The OneLens Dedicated Node Installation creates node groups/pools with specific configurations:
 - **Dedicated nodes** with taints to prevent other workloads from scheduling
 - **Automatic instance sizing** based on current pod count in your cluster
-- **Single AZ deployment** for cost optimization
-- **Pre-configured IAM roles** with necessary EKS worker node policies
-- **ARM64 architecture** support using Amazon Linux 2023
+- **Single node deployment** for cost optimization
+- **Pre-configured permissions** with necessary policies
+- **Multi-cloud support** for AWS EKS and Azure AKS
+
+## 📁 Directory Structure
+
+```
+dedicated-node-installation/
+├── node-group-install.sh      # AWS EKS - Bash script
+├── node-group-install.yaml    # AWS EKS - CloudFormation template
+├── aks-nodepool-install.sh    # Azure AKS - Bash script
+├── aks-nodepool-install.json  # Azure AKS - ARM template
+└── README.md                  # This file
+```
+
+---
 
 ## 🚀 Quick Start
 
-### Method 1: Run directly from the internet
+### AWS EKS
+
+#### Method 1: Run directly from the internet
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/dedicated-node-installation/node-group-install.sh) <cluster_name> <region>
 ```
 
-### Arguments
+#### Method 2: Deploy CloudFormation via AWS Console
+```bash
+# Download the template
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
+
+# Deploy via AWS Console or CLI
+aws cloudformation create-stack \
+  --stack-name onelens-nodegroup \
+  --template-body file://node-group-install.yaml \
+  --parameters ParameterKey=ClusterName,ParameterValue=<cluster-name> \
+               ParameterKey=SubnetId,ParameterValue=<subnet-id> \
+               ParameterKey=InstanceType,ParameterValue=t4g.medium \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+### Azure AKS
+
+#### Method 1: Run directly from the internet
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/dedicated-node-installation/aks-nodepool-install.sh) <cluster_name> <resource_group>
+```
+
+#### Method 2: Deploy ARM template via Azure Portal/CLI
+```bash
+# Download the template
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/main/scripts/dedicated-node-installation/aks-nodepool-install.json -o aks-nodepool-install.json
+
+# Deploy via Azure CLI
+az deployment group create \
+  --resource-group <resource-group> \
+  --template-file aks-nodepool-install.json \
+  --parameters clusterName=<cluster-name> vmSize=Standard_B2s
+```
+
+---
+
+## 📋 Arguments
+
+### AWS EKS Script
 
 | Argument | Description | Required | Example |
 |----------|-------------|----------|---------|
 | `CLUSTER_NAME` | Name of your EKS cluster | ✅ | `my-eks-cluster` |
 | `REGION` | AWS region where cluster is located | ✅ | `us-east-1` |
 
+### Azure AKS Script
 
-## 🔍 What the Script Does
+| Argument | Description | Required | Example |
+|----------|-------------|----------|---------|
+| `CLUSTER_NAME` | Name of your AKS cluster | ✅ | `my-aks-cluster` |
+| `RESOURCE_GROUP` | Azure resource group containing the cluster | ✅ | `my-resource-group` |
 
+---
+
+## 🔍 What the Scripts Do
+
+### AWS EKS Script
 1. **Validates prerequisites** - Checks for AWS CLI, kubectl, and proper configuration
 2. **Creates IAM role** - Sets up EKS worker node role with necessary policies
-3. **Detects subnet** - Automatically finds a suitable public subnet in your cluster
+3. **Detects subnet** - Shows available subnets and lets you select one
 4. **Counts pods** - Determines current workload to size instances appropriately
 5. **Creates nodegroup** - Deploys the EKS nodegroup with proper taints and labels
-6. **Configures isolation** - Applies taints to prevent other workloads from scheduling
-7 **Asks user consent** - Confirms the configuration from the user and gives the ability to reconfigure manually
+6. **Asks user consent** - Confirms the configuration before proceeding
 
+### Azure AKS Script
+1. **Validates prerequisites** - Checks for Azure CLI, kubectl, and login status
+2. **Verifies cluster** - Confirms the AKS cluster exists
+3. **Counts pods** - Determines current workload to size instances appropriately
+4. **Creates node pool** - Deploys the AKS node pool with proper taints and labels
+5. **Asks user consent** - Confirms the configuration before proceeding
 
-### Requested Resource based on cluster size
+---
 
-| Cluster Size | Pod Count | Prometheus | OpenCost | OneLens Agent | Pushgateway | KSM | **Total CPU** | **Total Memory** | **Recommended t4g Instance** |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Small** | <100 | 300m / 1188Mi | 200m / 200Mi | 400m / 400Mi | 100m / 100Mi | 100m / 100Mi | **1100m (1.10)** | **1988Mi (~1.94 GB)** | **t4g.medium** (2 vCPU, 4 GB) |
-| **Medium** | 100-499 | 350m / 1771Mi | 200m / 250Mi | 500m / 500Mi | 100m / 100Mi | 100m / 100Mi | **1250m (1.25)** | **2721Mi (~2.66 GB)** | **t4g.medium** (2 vCPU, 4 GB) |
-| **Large** | 500-999 | 1000m / 3533Mi | 250m / 360Mi | 500m / 500Mi | 100m / 100Mi | 100m / 100Mi | **1950m (1.95)** | **4593Mi (~4.49 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
-| **Extra Large** | 1000-1499 | 1150m / 5400Mi | 250m / 450Mi | 600m / 600Mi | 100m / 100Mi | 100m / 100Mi | **2200m (2.20)** | **6650Mi (~6.49 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
-| **Very Large** | 1500+ | 1500m / 7066Mi | 300m / 600Mi | 700m / 700Mi | 100m / 100Mi | 100m / 100Mi | **2700m (2.70)** | **8566Mi (~8.37 GB)** | **t4g.xlarge** (4 vCPU, 16 GB) |
+## 📊 Recommended Instance Sizing
 
-**Notes:**
+### Based on Cluster Size
 
-- CPU is shown in millicores (m), where 1000m = 1 vCPU
-- Memory is shown in Mebibytes (Mi), where 1024 Mi = 1 GiB
-- Instance recommendations include ~20% overhead for system resources and burstability
-- t4g instances are ARM-based (Graviton2) - ensure your container images support ARM64 architecture
+| Cluster Size | Pod Count | Total CPU | Total Memory | AWS Instance | Azure VM Size |
+|--------------|-----------|-----------|--------------|--------------|---------------|
+| **Small** | < 100 | 1.1 vCPU | ~2 GB | `t4g.medium` | `Standard_B2s` |
+| **Medium** | 100-499 | 1.25 vCPU | ~2.7 GB | `t4g.medium` | `Standard_B2s` |
+| **Large** | 500-999 | 1.95 vCPU | ~4.5 GB | `t4g.xlarge` | `Standard_B4ms` |
+| **Extra Large** | 1000-1499 | 2.2 vCPU | ~6.5 GB | `t4g.xlarge` | `Standard_B4ms` |
+| **Very Large** | 1500+ | 2.7 vCPU | ~8.4 GB | `t4g.xlarge` | `Standard_B4ms` |
 
+### Component Resource Breakdown
 
-The script automatically determines the optimal instance type based on your current pod count:
+| Component | Small | Medium | Large | XL | Very Large |
+|-----------|-------|--------|-------|-----|------------|
+| Prometheus | 300m/1.2Gi | 350m/1.7Gi | 1000m/3.5Gi | 1150m/5.4Gi | 1500m/7Gi |
+| OpenCost | 200m/200Mi | 200m/250Mi | 250m/360Mi | 250m/450Mi | 300m/600Mi |
+| OneLens Agent | 400m/400Mi | 500m/500Mi | 500m/500Mi | 600m/600Mi | 700m/700Mi |
+| Pushgateway | 100m/100Mi | 100m/100Mi | 100m/100Mi | 100m/100Mi | 100m/100Mi |
+| KSM | 100m/100Mi | 100m/100Mi | 100m/100Mi | 100m/100Mi | 100m/100Mi |
 
-| Instance Type | Pod Count Range | Use Case |
-|---------------|-----------------|----------|
-| `t4g.medium` | < 100 pods | Development/testing |
-| `t4g.medium` | 100–499 pods | Small production |
-| `t4g.xlarge` | 500–1499 pods | Medium production |
-| `t4g.xlarge` | 1500+ > pods | Large production |
-
-Upon successful completion, the script will display:
-
-```
-✅ Nodegroup onelens-nodegroup is now ACTIVE in private subnet subnet-005afaa5f6ce9c2d1 with instance type t4g.large and AMI type AL2023_ARM_64_STANDARD. (values change based on your environment)
-```
-
-### Method 2: Deploy CloudFormation template manually via AWS Console
-```bash
-# Download the CloudFormation template
-curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/release/v1.7.0-dedicated-node/scripts/dedicated-node-installation/node-group-install.yaml -o node-group-install.yaml
-
-# Then deploy via AWS Console:
-# 1. Go to AWS CloudFormation Console
-# 2. Create Stack → Upload a template file → Select node-group-install.yaml
-# 3. Provide parameters:
-#    - ClusterName: your-cluster-name
-#    - SubnetId: your-subnet-id
-#    - InstanceType: t4g.small (or choose based on pod count)
-#    - NodeGroupName: your-nodegroup-name (ignore for defaults)
-#    - AMIType: your-ami-id (eg: AL2023_ARM_64_STANDARD)
-#    - RoleName: desired-name (ignore for defaults)
-# 4. Review and create stack
-```
+---
 
 ## 📋 Prerequisites
 
-Before running the script, ensure you have:
+### AWS EKS
 
-- **AWS CLI** installed and configured with appropriate permissions
+- **AWS CLI** installed and configured
 - **kubectl** configured to access your EKS cluster
-- **EKS cluster** running with at least one subnet
 - **IAM permissions** for EKS, IAM, and EC2 operations
 
-### Required IAM Permissions
+```bash
+# Verify AWS CLI
+aws --version
+aws sts get-caller-identity
 
-The user/role running this script needs the following permissions:
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "eks:CreateNodegroup",
-                "eks:DescribeCluster",
-                "eks:DescribeNodegroup",
-                "eks:ListNodegroups"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "iam:CreateRole",
-                "iam:AttachRolePolicy",
-                "iam:GetRole",
-                "iam:PassRole"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ec2:DescribeSubnets",
-                "ec2:DescribeVpcs"
-            ],
-            "Resource": "*"
-        }
-    ]
-}
+# Configure kubectl for EKS
+aws eks update-kubeconfig --name my-cluster --region us-east-1
 ```
 
+### Azure AKS
 
-### CloudFormation Template Usage
+- **Azure CLI** installed and logged in
+- **kubectl** configured to access your AKS cluster
+- **Contributor** role on the resource group
 
-The CloudFormation template accepts the following parameters:
+```bash
+# Verify Azure CLI
+az --version
+az account show
+
+# Login to Azure
+az login
+
+# Configure kubectl for AKS
+az aks get-credentials --resource-group my-rg --name my-aks-cluster
+```
+
+---
+
+## 🔧 Template Parameters
+
+### AWS CloudFormation (`node-group-install.yaml`)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ClusterName` | String | - | Name of the EKS cluster |
-| `SubnetId` | AWS::EC2::Subnet::Id | - | Subnet ID where the nodegroup will be created |
-| `InstanceType` | String | `t4g.small` | EC2 instance type for the nodegroup to be selected based on pods count |
-| `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMIType for instance |
-| `RoleName` | String | `onelens-{clustername}-{region}` | Name for the noderole |
+| `SubnetId` | AWS::EC2::Subnet::Id | - | Subnet ID for the nodegroup |
+| `InstanceType` | String | `t4g.small` | EC2 instance type |
+| `AMIType` | String | `AL2023_ARM_64_STANDARD` | AMI type for instances |
+| `RoleName` | String | auto-generated | IAM role name |
 
+### Azure ARM Template (`aks-nodepool-install.json`)
 
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `clusterName` | String | - | Name of the AKS cluster |
+| `nodePoolName` | String | `onelenspool` | Name for the node pool |
+| `vmSize` | String | `Standard_B2s` | Azure VM size |
+| `nodeCount` | Integer | `1` | Number of nodes |
+| `osType` | String | `Linux` | OS type for nodes |
+
+---
 
 ## 🛠 Troubleshooting
 
-### Common Issues
+### AWS EKS
 
 **AWS CLI not configured:**
 ```bash
 aws configure
-# or set environment variables:
+# or set environment variables
 export AWS_ACCESS_KEY_ID=your-access-key
-export AWS_SECRET_ACCESS_KEY=your-secret-key  
+export AWS_SECRET_ACCESS_KEY=your-secret-key
 export AWS_DEFAULT_REGION=us-east-1
 ```
 
 **kubectl not configured:**
 ```bash
-# Update kubeconfig for your EKS cluster
 aws eks update-kubeconfig --name my-cluster --region us-east-1
 ```
 
-**Insufficient permissions:**
+### Azure AKS
+
+**Azure CLI not logged in:**
 ```bash
-# Verify your current permissions
-aws sts get-caller-identity
-aws eks describe-cluster --name my-cluster --region us-east-1
+az login
+az account set --subscription <subscription-id>
 ```
 
+**kubectl not configured:**
+```bash
+az aks get-credentials --resource-group my-rg --name my-aks-cluster
+```
+
+**Node pool creation failed:**
+```bash
+# Check node pool status
+az aks nodepool show --resource-group my-rg --cluster-name my-aks --name onelenspool
+
+# Check cluster events
+kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+```
+
+---
 
 ## 🔗 Related Documentation
 
-- [Amazon EKS Nodegroups](https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
+### AWS
+- [Amazon EKS Managed Node Groups](https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
 - [EKS IAM Roles](https://docs.aws.amazon.com/eks/latest/userguide/worker_node_IAM_role.html)
-- [EKS Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)
 - [CloudFormation User Guide](https://docs.aws.amazon.com/cloudformation/)
+
+### Azure
+- [AKS Node Pools](https://docs.microsoft.com/en-us/azure/aks/use-multiple-node-pools)
+- [AKS Taints and Tolerations](https://docs.microsoft.com/en-us/azure/aks/operator-best-practices-advanced-scheduler)
+- [ARM Templates](https://docs.microsoft.com/en-us/azure/azure-resource-manager/templates/)
+
+### Kubernetes
+- [Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)
+- [Node Selectors](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
+
+---
 
 ## 📞 Support
 
 For issues or questions:
 1. Check the troubleshooting section above
-2. Review AWS EKS console for nodegroup status
-3. Check AWS CloudTrail for API call details
+2. Review cloud provider console for node/pool status
+3. Check cluster events with kubectl
 4. Visit the [GitHub repository](https://github.com/astuto-ai/onelens-installation-scripts)
