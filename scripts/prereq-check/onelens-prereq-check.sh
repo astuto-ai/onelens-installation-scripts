@@ -83,6 +83,11 @@ check_command() {
     fi
 }
 
+# Portable uppercase conversion (works on bash 3.x and 4.x)
+to_uppercase() {
+    echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
 # Detect cloud provider based on cluster endpoint
 detect_cloud_provider() {
     print_step "Detecting cloud provider from cluster endpoint..."
@@ -139,7 +144,7 @@ detect_cloud_provider() {
         fi
     fi
     
-    add_confirmed_detail "Cloud Provider: ${CLOUD_PROVIDER^^}"
+    add_confirmed_detail "Cloud Provider: $(to_uppercase "$CLOUD_PROVIDER")"
     return 0
 }
 
@@ -919,7 +924,7 @@ main() {
     fi
     
     echo ""
-    echo "Running prerequisite checks for ${CLOUD_PROVIDER^^}..."
+    echo "Running prerequisite checks for $(to_uppercase "$CLOUD_PROVIDER")..."
     
     # Check required tools after detecting provider
     check_required_tools
@@ -941,7 +946,7 @@ main() {
     echo ""
     echo "PREREQUISITE CHECK RESULTS:"
     echo "============================"
-    echo "Cloud Provider: ${CLOUD_PROVIDER^^}"
+    echo "Cloud Provider: $(to_uppercase "$CLOUD_PROVIDER")"
     echo "Status: $CHECKS_PASSED/$TOTAL_CHECKS checks passed"
     echo ""
     
