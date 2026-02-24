@@ -1110,11 +1110,13 @@ prometheus-opencost-exporter:
   opencost:    
     exporter:
       cloudProviderApiKey: ""
-      defaultClusterId: 'default-cluster'
+      # NOTE: defaultClusterId is automatically set by install.sh using CLUSTER_NAME environment variable.
+      # If using the chart directly (not via install.sh), you must set it via --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=<cluster-name>
+      defaultClusterId: 'default-cluster'  # Fallback default, always overridden by install.sh
       image:
-        registry: quay.io
-        repository: kubecost1/kubecost-cost-model
-        tag: ""
+        registry: ghcr.io
+        repository: opencost/opencost
+        tag: "1.119.1"
         pullPolicy: IfNotPresent
       replicas: 1
       resources:
@@ -1122,7 +1124,7 @@ prometheus-opencost-exporter:
           cpu: '10m'
           memory: '55Mi'
         limits:
-          cpu: '999m'
+          cpu: '1'
           memory: '1Gi'
       persistence:
         enabled: false

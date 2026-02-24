@@ -359,9 +359,9 @@ prometheus-opencost-exporter:
       cloudProviderApiKey: ""
       defaultClusterId: 'default-cluster'
       image:
-        registry: quay.io
-        repository: kubecost1/kubecost-cost-model
-        tag: ""
+        registry: ghcr.io
+        repository: opencost/opencost
+        tag: "1.119.1"
         pullPolicy: IfNotPresent
       replicas: 1
       resources:
@@ -369,7 +369,7 @@ prometheus-opencost-exporter:
           cpu: '10m'
           memory: '55Mi'
         limits:
-          cpu: '999m'
+          cpu: '1'
           memory: '1Gi'
       persistence:
         enabled: false
