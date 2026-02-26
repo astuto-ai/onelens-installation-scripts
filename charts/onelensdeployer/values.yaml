@@ -174,11 +174,11 @@ job:
     deployment_type: job
   resources:
     requests:
-      cpu: 400m
-      memory: 250Mi
+      cpu: 480m
+      memory: 400Mi
     limits:
-      cpu: 400m
-      memory: 250Mi
+      cpu: 480m
+      memory: 400Mi
 
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []

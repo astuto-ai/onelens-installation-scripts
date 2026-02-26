@@ -115,11 +115,13 @@ if ! command -v kubectl &> /dev/null; then
 fi
 
 # Phase 7: Namespace Validation
+NAMESPACE_EXISTS=false
 if kubectl get namespace onelens-agent &> /dev/null; then
-    echo "Warning: Namespace 'onelens-agent' already exists."
+    echo "Namespace 'onelens-agent' already exists. Skipping creation."
+    NAMESPACE_EXISTS=true
 else
-    echo "Creating namespace 'onelens-agent'..."
-    kubectl create namespace onelens-agent || { echo "Error: Failed to create namespace 'onelens-agent'."; exit 1; }
+    echo "Namespace 'onelens-agent' does not exist. It will be created by helm with --create-namespace flag."
+    NAMESPACE_EXISTS=false
 fi
 
 # Phase 7.5: Detect Cloud Provider
@@ -497,7 +499,13 @@ else
     exit 1
 fi
 
-CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
+# Conditionally add --create-namespace flag only if namespace doesn't exist
+CREATE_NS_FLAG=""
+if [ "$NAMESPACE_EXISTS" = false ]; then
+    CREATE_NS_FLAG="--create-namespace"
+fi
+
+CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.0.1}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
@@ -543,19 +551,28 @@ fi
 # Continue building command
 
 # Append tolerations only if set
-if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
-  for path in \
-    prometheus-opencost-exporter.opencost \
-    prometheus.server \
-    onelens-agent.cronJob \
-    prometheus.prometheus-pushgateway \
-    prometheus.kube-state-metrics; do
-    CMD+=" \
+# Handle both cases: operator=Exists (value can be empty) and operator=Equal (value required)
+if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
+  # For operator=Exists, value is not required. For other operators, value is required.
+  if [[ "$TOLERATION_OPERATOR" == "Exists" ]] || [[ -n "$TOLERATION_VALUE" ]]; then
+    for path in \
+      prometheus-opencost-exporter.opencost \
+      prometheus.server \
+      onelens-agent.cronJob \
+      prometheus.prometheus-pushgateway \
+      prometheus.kube-state-metrics; do
+      CMD+=" \
       --set $path.tolerations[0].key=\"$TOLERATION_KEY\" \
-      --set $path.tolerations[0].operator=\"$TOLERATION_OPERATOR\" \
-      --set $path.tolerations[0].value=\"$TOLERATION_VALUE\" \
+      --set $path.tolerations[0].operator=\"$TOLERATION_OPERATOR\""
+      # Only set value if operator is not "Exists" and value is provided
+      if [[ "$TOLERATION_OPERATOR" != "Exists" && -n "$TOLERATION_VALUE" ]]; then
+        CMD+=" \
+      --set $path.tolerations[0].value=\"$TOLERATION_VALUE\""
+      fi
+      CMD+=" \
       --set $path.tolerations[0].effect=\"$TOLERATION_EFFECT\""
-  done
+    done
+  fi
 fi
 
 # Append nodeSelector only if set
