@@ -67,10 +67,10 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     OPENCOST_MEMORY_LIMIT="320Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="400m"
-    ONELENS_MEMORY_REQUEST="400Mi"
-    ONELENS_CPU_LIMIT="400m"
-    ONELENS_MEMORY_LIMIT="400Mi"
+    ONELENS_CPU_REQUEST="480m"
+    ONELENS_MEMORY_REQUEST="640Mi"
+    ONELENS_CPU_LIMIT="480m"
+    ONELENS_MEMORY_LIMIT="640Mi"
     
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
@@ -87,12 +87,12 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="400Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="500Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="500Mi"
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="800Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="800Mi"
     
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1200m"
@@ -107,12 +107,12 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     OPENCOST_MEMORY_LIMIT="576Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="500Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="500Mi"
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="800Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="800Mi"
     
-elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1380m"
@@ -127,12 +127,12 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     OPENCOST_MEMORY_LIMIT="720Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="600m"
-    ONELENS_MEMORY_REQUEST="600Mi"
-    ONELENS_CPU_LIMIT="600m"
-    ONELENS_MEMORY_LIMIT="600Mi"
+    ONELENS_CPU_REQUEST="720m"
+    ONELENS_MEMORY_REQUEST="960Mi"
+    ONELENS_CPU_LIMIT="720m"
+    ONELENS_MEMORY_LIMIT="960Mi"
     
-else
+    else
     echo "Setting resources for very large cluster (1500+ pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1800m"
@@ -147,10 +147,10 @@ else
     OPENCOST_MEMORY_LIMIT="960Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="700m"
-    ONELENS_MEMORY_REQUEST="700Mi"
-    ONELENS_CPU_LIMIT="700m"
-    ONELENS_MEMORY_LIMIT="700Mi"
+    ONELENS_CPU_REQUEST="840m"
+    ONELENS_MEMORY_REQUEST="1120Mi"
+    ONELENS_CPU_LIMIT="840m"
+    ONELENS_MEMORY_LIMIT="1120Mi"
 fi
 
 ## Other component resources
