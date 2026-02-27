@@ -4,6 +4,10 @@ kind: ServiceAccount
 metadata:
   name: {{ .Values.job.serviceAccount.name }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
 
 --- 
@@ -13,4 +17,8 @@ kind: ServiceAccount
 metadata:
   name: {{ .Values.cronjob.serviceAccount.name }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

@@ -588,6 +588,21 @@ if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
   done
 fi
 
+# Append pod labels to all onelens-agent deployments if DEPLOYMENT_LABELS (JSON) is set.
+# If no labels are passed by the deployer, DEPLOYMENT_LABELS is unset and install runs normally.
+# (Injected by onelensdeployer from globals.labels + job.labels so deployments get the same labels.)
+if [[ -n "${DEPLOYMENT_LABELS:-}" ]]; then
+  if command -v jq &>/dev/null; then
+    for path in prometheus.server prometheus.kube-state-metrics prometheus.prometheus-pushgateway onelens-agent.cronJob prometheus-opencost-exporter; do
+      for key in $(echo "$DEPLOYMENT_LABELS" | jq -r 'keys[]'); do
+        value=$(echo "$DEPLOYMENT_LABELS" | jq -r --arg k "$key" '.[$k]')
+        key_escaped=$(echo "$key" | sed 's/\./\\./g')
+        CMD+=" --set \"${path}.podLabels.${key_escaped}=${value}\""
+      done
+    done
+  fi
+fi
+
 # Append imagePullSecrets only if set
 if [[ -n "$IMAGE_PULL_SECRET" ]]; then
   for path in \
@@ -655,6 +670,16 @@ if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
       CMD+=" --set onelens-agent.storageClass.azure.encryption.diskEncryptionSetID=\"$AZURE_DISK_ENCRYPTION_SET_ID\""
     fi
   fi
+fi
+
+# Apply same labels to namespace if DEPLOYMENT_LABELS is set (e.g. from globals.labels).
+# If the namespace was created by Helm (--create-namespace), it gets these labels; if it already existed, labels are updated.
+if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
+  echo "Applying labels to namespace onelens-agent from DEPLOYMENT_LABELS..."
+  for key in $(echo "$DEPLOYMENT_LABELS" | jq -r 'keys[]'); do
+    value=$(echo "$DEPLOYMENT_LABELS" | jq -r --arg k "$key" '.[$k]')
+    kubectl label namespace onelens-agent "$key=$value" --overwrite
+  done
 fi
 
 # Final execution

@@ -3,6 +3,13 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ .Values.cronjob.name }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.cronjob.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   schedule: "{{ .Values.cronjob.schedule }}"
   concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
@@ -13,6 +20,14 @@ spec:
     spec:
       ttlSecondsAfterFinished: 120
       template:
+        metadata:
+          labels:
+            {{- with .Values.globals.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.cronjob.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
         spec:
           serviceAccountName: {{ .Values.cronjob.serviceAccount.name }}
           {{- with .Values.cronjob.nodeSelector }}

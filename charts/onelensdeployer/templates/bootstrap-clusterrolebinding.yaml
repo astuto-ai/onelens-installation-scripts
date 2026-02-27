@@ -3,6 +3,10 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ .Values.bootstrapRbac.clusterRoleBinding.name }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 subjects:
   # Only bind the installation job service account to bootstrap ClusterRole
   {{- if .Values.job.serviceAccount.enabled }}

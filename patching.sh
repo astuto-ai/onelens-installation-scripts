@@ -169,6 +169,84 @@ KSM_MEMORY_REQUEST="160Mi"
 KSM_CPU_LIMIT="120m"
 KSM_CPU_REQUEST="120m"
 
+# Phase 4.5: Use higher of (patching value, existing value) for each resource
+# If existing in K8s is higher → keep that value (no decrease).
+# If existing in K8s is lower than patching → use patching value (increase to patching level).
+# If no existing value (e.g. first run) or helm/jq unavailable, use patching values as-is.
+_cpu_to_millicores() {
+  local v="$1"
+  if [[ -z "$v" ]]; then echo "0"; return; fi
+  if [[ "$v" =~ ^([0-9]+)m$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "$(awk "BEGIN { printf \"%.0f\", $v * 1000 }")"
+  else
+    echo "0"
+  fi
+}
+_memory_to_mi() {
+  local v="$1"
+  if [[ -z "$v" ]]; then echo "0"; return; fi
+  if [[ "$v" =~ ^([0-9]+)Mi$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  elif [[ "$v" =~ ^([0-9]+)Gi$ ]]; then
+    echo "$(( ${BASH_REMATCH[1]} * 1024 ))"
+  elif [[ "$v" =~ ^([0-9]+)Ki$ ]]; then
+    echo "$(( ${BASH_REMATCH[1]} / 1024 ))"
+  else
+    echo "0"
+  fi
+}
+# Returns the larger of two CPU quantities (as string); if either empty, returns the non-empty one.
+_max_cpu() {
+  local a="$1" b="$2"
+  if [[ -z "$a" && -z "$b" ]]; then echo ""; return; fi
+  if [[ -z "$a" ]]; then echo "$b"; return; fi
+  if [[ -z "$b" ]]; then echo "$a"; return; fi
+  local ma=$(_cpu_to_millicores "$a") mb=$(_cpu_to_millicores "$b")
+  if [[ "$ma" -ge "$mb" ]]; then echo "$a"; else echo "$b"; fi
+}
+_max_memory() {
+  local a="$1" b="$2"
+  if [[ -z "$a" && -z "$b" ]]; then echo ""; return; fi
+  if [[ -z "$a" ]]; then echo "$b"; return; fi
+  if [[ -z "$b" ]]; then echo "$a"; return; fi
+  local ma=$(_memory_to_mi "$a") mb=$(_memory_to_mi "$b")
+  if [[ "$ma" -ge "$mb" ]]; then echo "$a"; else echo "$b"; fi
+}
+
+CURRENT_VALUES=$(helm get values onelens-agent -n onelens-agent -a -o json 2>/dev/null || true)
+
+if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+  echo "Comparing patching values with existing release; will use the higher value for each resource (keep higher existing, or use patching if existing is lower)."
+  _get() { echo "$CURRENT_VALUES" | jq -r "$1 // empty"; }
+  PROMETHEUS_CPU_REQUEST=$(_max_cpu "$PROMETHEUS_CPU_REQUEST" "$(_get '.prometheus.server.resources.requests.cpu')")
+  PROMETHEUS_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_MEMORY_REQUEST" "$(_get '.prometheus.server.resources.requests.memory')")
+  PROMETHEUS_CPU_LIMIT=$(_max_cpu "$PROMETHEUS_CPU_LIMIT" "$(_get '.prometheus.server.resources.limits.cpu')")
+  PROMETHEUS_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_MEMORY_LIMIT" "$(_get '.prometheus.server.resources.limits.memory')")
+  OPENCOST_CPU_REQUEST=$(_max_cpu "$OPENCOST_CPU_REQUEST" "$(_get '.prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu')")
+  OPENCOST_MEMORY_REQUEST=$(_max_memory "$OPENCOST_MEMORY_REQUEST" "$(_get '.prometheus-opencost-exporter.opencost.exporter.resources.requests.memory')")
+  OPENCOST_CPU_LIMIT=$(_max_cpu "$OPENCOST_CPU_LIMIT" "$(_get '.prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu')")
+  OPENCOST_MEMORY_LIMIT=$(_max_memory "$OPENCOST_MEMORY_LIMIT" "$(_get '.prometheus-opencost-exporter.opencost.exporter.resources.limits.memory')")
+  ONELENS_CPU_REQUEST=$(_max_cpu "$ONELENS_CPU_REQUEST" "$(_get '.onelens-agent.resources.requests.cpu')")
+  ONELENS_MEMORY_REQUEST=$(_max_memory "$ONELENS_MEMORY_REQUEST" "$(_get '.onelens-agent.resources.requests.memory')")
+  ONELENS_CPU_LIMIT=$(_max_cpu "$ONELENS_CPU_LIMIT" "$(_get '.onelens-agent.resources.limits.cpu')")
+  ONELENS_MEMORY_LIMIT=$(_max_memory "$ONELENS_MEMORY_LIMIT" "$(_get '.onelens-agent.resources.limits.memory')")
+  PROMETHEUS_PUSHGATEWAY_CPU_REQUEST=$(_max_cpu "$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" "$(_get '.prometheus["prometheus-pushgateway"].resources.requests.cpu')")
+  PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" "$(_get '.prometheus["prometheus-pushgateway"].resources.requests.memory')")
+  PROMETHEUS_PUSHGATEWAY_CPU_LIMIT=$(_max_cpu "$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" "$(_get '.prometheus["prometheus-pushgateway"].resources.limits.cpu')")
+  PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$(_get '.prometheus["prometheus-pushgateway"].resources.limits.memory')")
+  KSM_CPU_REQUEST=$(_max_cpu "$KSM_CPU_REQUEST" "$(_get '.prometheus["kube-state-metrics"].resources.requests.cpu')")
+  KSM_MEMORY_REQUEST=$(_max_memory "$KSM_MEMORY_REQUEST" "$(_get '.prometheus["kube-state-metrics"].resources.requests.memory')")
+  KSM_CPU_LIMIT=$(_max_cpu "$KSM_CPU_LIMIT" "$(_get '.prometheus["kube-state-metrics"].resources.limits.cpu')")
+  KSM_MEMORY_LIMIT=$(_max_memory "$KSM_MEMORY_LIMIT" "$(_get '.prometheus["kube-state-metrics"].resources.limits.memory')")
+  PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST=$(_max_cpu "$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" "$(_get '.prometheus.configmapReload.prometheus.resources.requests.cpu')")
+  PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" "$(_get '.prometheus.configmapReload.prometheus.resources.requests.memory')")
+  PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT=$(_max_cpu "$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" "$(_get '.prometheus.configmapReload.prometheus.resources.limits.cpu')")
+  PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" "$(_get '.prometheus.configmapReload.prometheus.resources.limits.memory')")
+else
+  echo "Using patching values as-is (no existing release values or jq not available)."
+fi
 
 # Phase 5: Helm Upgrade with Dynamic Resource Allocation
 echo "helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts"

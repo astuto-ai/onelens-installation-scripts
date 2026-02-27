@@ -4,6 +4,10 @@ kind: Role
 metadata:
   name: {{ .Values.rbac.role.name }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 rules:
 {{- toYaml .Values.rbac.role.rules | nindent 2 }}
 {{- end }}
