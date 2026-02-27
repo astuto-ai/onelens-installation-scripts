@@ -296,10 +296,10 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     ONELENS_MEMORY_LIMIT="640Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
     
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="100m"
@@ -328,10 +328,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     ONELENS_MEMORY_LIMIT="800Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="100m"
@@ -339,7 +339,7 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PUSHGATEWAY_CPU_LIMIT="100m"
     PUSHGATEWAY_MEMORY_LIMIT="100Mi"
     
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1200m"
@@ -360,10 +360,10 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     ONELENS_MEMORY_LIMIT="800Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="100m"
@@ -371,7 +371,7 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     PUSHGATEWAY_CPU_LIMIT="100m"
     PUSHGATEWAY_MEMORY_LIMIT="100Mi"
     
-elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1380m"
@@ -392,10 +392,10 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     ONELENS_MEMORY_LIMIT="960Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="250m"
-    KSM_MEMORY_REQUEST="400Mi"
-    KSM_CPU_LIMIT="250m"
-    KSM_MEMORY_LIMIT="400Mi"
+    KSM_CPU_REQUEST="300m"
+    KSM_MEMORY_REQUEST="640Mi"
+    KSM_CPU_LIMIT="300m"
+    KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="250m"
@@ -403,7 +403,7 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     PUSHGATEWAY_CPU_LIMIT="250m"
     PUSHGATEWAY_MEMORY_LIMIT="400Mi"
     
-else
+    else
     echo "Setting resources for very large cluster (1500+ pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1800m"
@@ -424,10 +424,10 @@ else
     ONELENS_MEMORY_LIMIT="1120Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="250m"
-    KSM_MEMORY_REQUEST="400Mi"
-    KSM_CPU_LIMIT="250m"
-    KSM_MEMORY_LIMIT="400Mi"
+    KSM_CPU_REQUEST="300m"
+    KSM_MEMORY_REQUEST="640Mi"
+    KSM_CPU_LIMIT="300m"
+    KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="250m"
@@ -507,6 +507,7 @@ fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.0.1}\" \
+    
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
