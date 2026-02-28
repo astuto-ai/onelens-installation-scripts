@@ -189,33 +189,6 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent 
 
 ---
 
-#### 6. Full example (labels + nodeSelector + tolerations Exists, all with dummy values)
-
-```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token \
-  --set job.env.NODE_SELECTOR_KEY=your-node-selector-key \
-  --set job.env.NODE_SELECTOR_VALUE=your-node-selector-value \
-  --set job.env.TOLERATION_KEY=your-toleration-key \
-  --set-string job.env.TOLERATION_VALUE="" \
-  --set job.env.TOLERATION_OPERATOR=Exists \
-  --set job.env.TOLERATION_EFFECT=NoSchedule \
-  --set job.nodeSelector.your-node-selector-key=your-node-selector-value \
-  --set 'job.tolerations[0].key=your-toleration-key' \
-  --set 'job.tolerations[0].operator=Exists' \
-  --set 'job.tolerations[0].effect=NoSchedule' \
-  --set cronjob.nodeSelector.your-node-selector-key=your-node-selector-value \
-  --set 'cronjob.tolerations[0].key=your-toleration-key' \
-  --set 'cronjob.tolerations[0].operator=Exists' \
-  --set 'cronjob.tolerations[0].effect=NoSchedule' \
-  --set globals.labels."company\.com/team"=platform \
-  --set globals.labels."company\.com/env"=prod \
-  --set globals.labels."company\.com/component"=onelens
-```
-
 When you use `globals.labels`, the deployer job also applies those labels to the **namespace** `onelens-agent` (if the namespace is created by Helm or already exists). Labels flow to all deployer resources and to every agent deployment (Prometheus, KSM, Pushgateway, OpenCost, onelens-agent CronJob).
 
 ## 📚 Documentation
