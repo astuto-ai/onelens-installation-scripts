@@ -3,10 +3,25 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ .Values.job.name }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.job.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   backoffLimit: {{ .Values.job.backoffLimit }}
   ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
   template:
+    metadata:
+      labels:
+        {{- with .Values.globals.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.job.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ .Values.job.serviceAccount.name }}
       containers:
@@ -21,6 +36,11 @@ spec:
             {{- range $key, $value := .Values.job.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
+            {{- end }}
+            {{- $deploymentLabels := merge (default dict .Values.globals.labels) (default dict .Values.job.labels) }}
+            {{- if $deploymentLabels }}
+            - name: DEPLOYMENT_LABELS
+              value: {{ $deploymentLabels | toJson | quote }}
             {{- end }}
       restartPolicy: {{ .Values.job.restartPolicy }}
 

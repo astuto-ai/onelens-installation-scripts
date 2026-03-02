@@ -4,6 +4,10 @@ kind: RoleBinding
 metadata:
   name: {{ .Values.rbac.roleBinding.name }}
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.globals.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 subjects:
   # Bind both job and cronjob service accounts to the shared Role
   {{- if .Values.job.serviceAccount.enabled }}

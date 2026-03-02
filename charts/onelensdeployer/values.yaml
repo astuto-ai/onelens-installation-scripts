@@ -1,8 +1,8 @@
-# ==================================================================================
-# BOOTSTRAP RBAC CONFIGURATION (Installation Job Only)
-# ==================================================================================
-# Used ONLY by the installation job to CREATE cluster-scoped resources
-# This is deleted after installation completes (see install.sh cleanup)
+ # ==================================================================================
+ # BOOTSTRAP RBAC CONFIGURATION (Installation Job Only)
+ # ==================================================================================
+ # Used ONLY by the installation job to CREATE cluster-scoped resources
+ # This is deleted after installation completes (see install.sh cleanup)
 bootstrapRbac:
   clusterRole:
     enabled: true
@@ -158,6 +158,13 @@ rbac:
     name: onelensdeployer-clusterrolebinding
 
 # ==================================================================================
+# GLOBAL SETTINGS
+# ==================================================================================
+# Labels that should be applied to ALL resources in this chart (job + cronjob).
+globals:
+  labels: {}
+
+# ==================================================================================
 # INSTALLATION JOB
 # ==================================================================================
 # One-time job that performs initial installation using shared RBAC permissions
@@ -165,20 +172,22 @@ job:
   enabled: true
   name: onelensdeployerjob
   image: public.ecr.aws/w7k6q5m9/onelens-deployer
-  imageTag: v2.0.1
+  imageTag: v2.1.0
   imagePullPolicy: Always
   restartPolicy: Never
   backoffLimit: 2
   ttlSecondsAfterFinished: 300
+  # Labels specific to the installation job
+  labels: {}
   env:
     deployment_type: job
   resources:
     requests:
-      cpu: 400m
-      memory: 250Mi
+      cpu: 600m
+      memory: 400Mi
     limits:
-      cpu: 400m
-      memory: 250Mi
+      cpu: 600m
+      memory: 400Mi
 
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
@@ -201,8 +210,10 @@ cronjob:
   name: onelensupdater
   schedule: "0 2 * * *"
   image: public.ecr.aws/w7k6q5m9/onelens-deployer
-  imageTag: v2.0.1
+  imageTag: v2.1.0
   restartPolicy: Never
+  # Labels specific to the updater cronjob
+  labels: {}
   env:
     deployment_type: cronjob
   resources:

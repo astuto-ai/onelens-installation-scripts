@@ -53,10 +53,10 @@ The core monitoring agent that collects cost and resource utilization data from 
      --set job.env.REGISTRATION_TOKEN="your-registration-token"
    ```
 
-3. **Deploy OneLens Agent:**
+3. **Deploy OneLens Agent** (only if not using the deployer; the deployer installs the agent for you):
    ```bash
    helm upgrade --install onelens-agent onelens/onelens-agent \
-     --namespace onelens-system \
+     --namespace onelens-agent \
      --create-namespace
    ```
 
@@ -77,6 +77,119 @@ The core monitoring agent that collects cost and resource utilization data from 
 | `prometheus.enabled` | Enable Prometheus monitoring | `true` |
 | `prometheus-opencost-exporter.enabled` | Enable cost metrics | `true` |
 | `onelens-agent.cronJob.cronSchedule` | Data collection schedule | `"0 * * * *"` |
+
+### Deployment examples
+
+Use one of the following patterns depending on whether you need labels, nodeSelector, or tolerations. Replace placeholders (`your-cluster-name`, `your-registration-token`, etc.) with your values.
+
+**Labels:** `globals.labels` apply to the namespace, deployer Job/CronJob, and all agent deployments. Use `job.labels` and `cronjob.labels` for labels only on the Job or CronJob (they also flow to deployments when the job runs).
+
+**Tolerations:** Use **Exists** when the taint has no value; use **Equal** when the taint has a key=value.
+
+---
+
+#### 1. Minimal (no labels, no nodeSelector/tolerations)
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=your-cluster-name \
+  --set job.env.REGION=your-aws-region \
+  --set-string job.env.ACCOUNT=your-aws-account-id \
+  --set job.env.REGISTRATION_TOKEN=your-registration-token
+```
+
+---
+
+#### 2. With global labels only (namespace + deployer + all agent components get these labels)
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=your-cluster-name \
+  --set job.env.REGION=your-aws-region \
+  --set-string job.env.ACCOUNT=your-aws-account-id \
+  --set job.env.REGISTRATION_TOKEN=your-registration-token \
+  --set globals.labels."company\.com/team"=platform \
+  --set globals.labels."company\.com/env"=prod \
+  --set globals.labels."company\.com/component"=onelens
+```
+
+---
+
+#### 3. With job and cronjob labels (labels on deployer Job and CronJob; same labels also flow to agent deployments)
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=your-cluster-name \
+  --set job.env.REGION=your-aws-region \
+  --set-string job.env.ACCOUNT=your-aws-account-id \
+  --set job.env.REGISTRATION_TOKEN=your-registration-token \
+  --set job.labels."company\.com/team"=platform \
+  --set job.labels."company\.com/env"=prod \
+  --set cronjob.labels."company\.com/team"=platform \
+  --set cronjob.labels."company\.com/env"=prod
+```
+
+---
+
+#### 4. With nodeSelector and tolerations (Exists — taint has no value)
+
+Use when your node taint is like `key=value:NoSchedule` and you want to match only the key (operator `Exists`), or when the taint has no value.
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=your-cluster-name \
+  --set job.env.REGION=your-aws-region \
+  --set-string job.env.ACCOUNT=your-aws-account-id \
+  --set job.env.REGISTRATION_TOKEN=your-registration-token \
+  --set job.env.NODE_SELECTOR_KEY=your-node-selector-key \
+  --set job.env.NODE_SELECTOR_VALUE=your-node-selector-value \
+  --set job.env.TOLERATION_KEY=your-toleration-key \
+  --set-string job.env.TOLERATION_VALUE="" \
+  --set job.env.TOLERATION_OPERATOR=Exists \
+  --set job.env.TOLERATION_EFFECT=NoSchedule \
+  --set job.nodeSelector.your-node-selector-key=your-node-selector-value \
+  --set 'job.tolerations[0].key=your-toleration-key' \
+  --set 'job.tolerations[0].operator=Exists' \
+  --set 'job.tolerations[0].effect=NoSchedule' \
+  --set cronjob.nodeSelector.your-node-selector-key=your-node-selector-value \
+  --set 'cronjob.tolerations[0].key=your-toleration-key' \
+  --set 'cronjob.tolerations[0].operator=Exists' \
+  --set 'cronjob.tolerations[0].effect=NoSchedule'
+```
+
+---
+
+#### 5. With nodeSelector and tolerations (Equal — taint has key=value)
+
+Use when your node taint has a key and a value (e.g. `dedicated=onelens:NoSchedule`) and you want to match that exact value.
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=your-cluster-name \
+  --set job.env.REGION=your-aws-region \
+  --set-string job.env.ACCOUNT=your-aws-account-id \
+  --set job.env.REGISTRATION_TOKEN=your-registration-token \
+  --set job.env.NODE_SELECTOR_KEY=dedicated \
+  --set job.env.NODE_SELECTOR_VALUE=onelens \
+  --set job.env.TOLERATION_KEY=dedicated \
+  --set job.env.TOLERATION_VALUE=onelens \
+  --set job.env.TOLERATION_OPERATOR=Equal \
+  --set job.env.TOLERATION_EFFECT=NoSchedule \
+  --set job.nodeSelector.dedicated=onelens \
+  --set 'job.tolerations[0].key=dedicated' \
+  --set 'job.tolerations[0].operator=Equal' \
+  --set 'job.tolerations[0].value=onelens' \
+  --set 'job.tolerations[0].effect=NoSchedule' \
+  --set cronjob.nodeSelector.dedicated=onelens \
+  --set 'cronjob.tolerations[0].key=dedicated' \
+  --set 'cronjob.tolerations[0].operator=Equal' \
+  --set 'cronjob.tolerations[0].value=onelens' \
+  --set 'cronjob.tolerations[0].effect=NoSchedule'
+```
+
+---
+
+When you use `globals.labels`, the deployer job also applies those labels to the **namespace** `onelens-agent` (if the namespace is created by Helm or already exists). Labels flow to all deployer resources and to every agent deployment (Prometheus, KSM, Pushgateway, OpenCost, onelens-agent CronJob).
 
 ## 📚 Documentation
 

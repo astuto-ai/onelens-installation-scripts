@@ -115,11 +115,13 @@ if ! command -v kubectl &> /dev/null; then
 fi
 
 # Phase 7: Namespace Validation
+NAMESPACE_EXISTS=false
 if kubectl get namespace onelens-agent &> /dev/null; then
-    echo "Warning: Namespace 'onelens-agent' already exists."
+    echo "Namespace 'onelens-agent' already exists. Skipping creation."
+    NAMESPACE_EXISTS=true
 else
-    echo "Creating namespace 'onelens-agent'..."
-    kubectl create namespace onelens-agent || { echo "Error: Failed to create namespace 'onelens-agent'."; exit 1; }
+    echo "Namespace 'onelens-agent' does not exist. It will be created by helm with --create-namespace flag."
+    NAMESPACE_EXISTS=false
 fi
 
 # Phase 7.5: Detect Cloud Provider
@@ -276,28 +278,28 @@ helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts &
 if [ "$TOTAL_PODS" -lt 100 ]; then
     echo "Setting resources for small cluster (<100 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="300m"
-    PROMETHEUS_MEMORY_REQUEST="1188Mi"
-    PROMETHEUS_CPU_LIMIT="300m"
-    PROMETHEUS_MEMORY_LIMIT="1188Mi"
+    PROMETHEUS_CPU_REQUEST="360m"
+    PROMETHEUS_MEMORY_REQUEST="1901Mi"
+    PROMETHEUS_CPU_LIMIT="360m"
+    PROMETHEUS_MEMORY_LIMIT="1901Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="200m"
-    OPENCOST_MEMORY_REQUEST="200Mi"
-    OPENCOST_CPU_LIMIT="200m"
-    OPENCOST_MEMORY_LIMIT="200Mi"
+    OPENCOST_CPU_REQUEST="240m"
+    OPENCOST_MEMORY_REQUEST="320Mi"
+    OPENCOST_CPU_LIMIT="240m"
+    OPENCOST_MEMORY_LIMIT="320Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="400m"
-    ONELENS_MEMORY_REQUEST="400Mi"
-    ONELENS_CPU_LIMIT="400m"
-    ONELENS_MEMORY_LIMIT="400Mi"
+    ONELENS_CPU_REQUEST="480m"
+    ONELENS_MEMORY_REQUEST="640Mi"
+    ONELENS_CPU_LIMIT="480m"
+    ONELENS_MEMORY_LIMIT="640Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
     
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="100m"
@@ -308,92 +310,92 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="350m"
-    PROMETHEUS_MEMORY_REQUEST="1771Mi"
-    PROMETHEUS_CPU_LIMIT="350m"
-    PROMETHEUS_MEMORY_LIMIT="1771Mi"
+    PROMETHEUS_CPU_REQUEST="420m"
+    PROMETHEUS_MEMORY_REQUEST="2834Mi"
+    PROMETHEUS_CPU_LIMIT="420m"
+    PROMETHEUS_MEMORY_LIMIT="2834Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="200m"
-    OPENCOST_MEMORY_REQUEST="250Mi"
-    OPENCOST_CPU_LIMIT="200m"
-    OPENCOST_MEMORY_LIMIT="250Mi"
-    
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="500Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="500Mi"
-    
-    # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
-
-    # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="100m"
-    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PUSHGATEWAY_CPU_LIMIT="100m"
-    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-    
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
-    echo "Setting resources for large cluster (500-999 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1000m"
-    PROMETHEUS_MEMORY_REQUEST="3533Mi"
-    PROMETHEUS_CPU_LIMIT="1000m"
-    PROMETHEUS_MEMORY_LIMIT="3533Mi"
-    
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="250m"
-    OPENCOST_MEMORY_REQUEST="360Mi"
-    OPENCOST_CPU_LIMIT="250m"
-    OPENCOST_MEMORY_LIMIT="360Mi"
-    
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="500m"
-    ONELENS_MEMORY_REQUEST="500Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="500Mi"
-    
-    # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="100Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="100Mi"
-
-    # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="100m"
-    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PUSHGATEWAY_CPU_LIMIT="100m"
-    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-    
-elif [ "$TOTAL_PODS" -lt 1500 ]; then
-    echo "Setting resources for extra large cluster (1000-1499 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1150m"
-    PROMETHEUS_MEMORY_REQUEST="5400Mi"
-    PROMETHEUS_CPU_LIMIT="1150m"
-    PROMETHEUS_MEMORY_LIMIT="5400Mi"
-    
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="250m"
-    OPENCOST_MEMORY_REQUEST="450Mi"
-    OPENCOST_CPU_LIMIT="250m"
-    OPENCOST_MEMORY_LIMIT="450Mi"
+    OPENCOST_CPU_REQUEST="240m"
+    OPENCOST_MEMORY_REQUEST="400Mi"
+    OPENCOST_CPU_LIMIT="240m"
+    OPENCOST_MEMORY_LIMIT="400Mi"
     
     # OneLens Agent resources
     ONELENS_CPU_REQUEST="600m"
-    ONELENS_MEMORY_REQUEST="600Mi"
+    ONELENS_MEMORY_REQUEST="800Mi"
     ONELENS_CPU_LIMIT="600m"
-    ONELENS_MEMORY_LIMIT="600Mi"
+    ONELENS_MEMORY_LIMIT="800Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="250m"
-    KSM_MEMORY_REQUEST="400Mi"
-    KSM_CPU_LIMIT="250m"
-    KSM_MEMORY_LIMIT="400Mi"
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
+
+    # Pushgateway resources
+    PUSHGATEWAY_CPU_REQUEST="100m"
+    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+    PUSHGATEWAY_CPU_LIMIT="100m"
+    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+    
+    elif [ "$TOTAL_PODS" -lt 1000 ]; then
+    echo "Setting resources for large cluster (500-999 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="1200m"
+    PROMETHEUS_MEMORY_REQUEST="5653Mi"
+    PROMETHEUS_CPU_LIMIT="1200m"
+    PROMETHEUS_MEMORY_LIMIT="5653Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="300m"
+    OPENCOST_MEMORY_REQUEST="576Mi"
+    OPENCOST_CPU_LIMIT="300m"
+    OPENCOST_MEMORY_LIMIT="576Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="600m"
+    ONELENS_MEMORY_REQUEST="800Mi"
+    ONELENS_CPU_LIMIT="600m"
+    ONELENS_MEMORY_LIMIT="800Mi"
+    
+    # KSM resources
+    KSM_CPU_REQUEST="120m"
+    KSM_MEMORY_REQUEST="160Mi"
+    KSM_CPU_LIMIT="120m"
+    KSM_MEMORY_LIMIT="160Mi"
+
+    # Pushgateway resources
+    PUSHGATEWAY_CPU_REQUEST="100m"
+    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+    PUSHGATEWAY_CPU_LIMIT="100m"
+    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+    
+    elif [ "$TOTAL_PODS" -lt 1500 ]; then
+    echo "Setting resources for extra large cluster (1000-1499 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="1380m"
+    PROMETHEUS_MEMORY_REQUEST="8640Mi"
+    PROMETHEUS_CPU_LIMIT="1380m"
+    PROMETHEUS_MEMORY_LIMIT="8640Mi"
+    
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="300m"
+    OPENCOST_MEMORY_REQUEST="720Mi"
+    OPENCOST_CPU_LIMIT="300m"
+    OPENCOST_MEMORY_LIMIT="720Mi"
+    
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="720m"
+    ONELENS_MEMORY_REQUEST="960Mi"
+    ONELENS_CPU_LIMIT="720m"
+    ONELENS_MEMORY_LIMIT="960Mi"
+    
+    # KSM resources
+    KSM_CPU_REQUEST="300m"
+    KSM_MEMORY_REQUEST="640Mi"
+    KSM_CPU_LIMIT="300m"
+    KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="250m"
@@ -401,31 +403,31 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     PUSHGATEWAY_CPU_LIMIT="250m"
     PUSHGATEWAY_MEMORY_LIMIT="400Mi"
     
-else
+    else
     echo "Setting resources for very large cluster (1500+ pods)"
     # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1500m"
-    PROMETHEUS_MEMORY_REQUEST="7066Mi"
-    PROMETHEUS_CPU_LIMIT="1500m"
-    PROMETHEUS_MEMORY_LIMIT="7066Mi"
+    PROMETHEUS_CPU_REQUEST="1800m"
+    PROMETHEUS_MEMORY_REQUEST="11306Mi"
+    PROMETHEUS_CPU_LIMIT="1800m"
+    PROMETHEUS_MEMORY_LIMIT="11306Mi"
     
     # OpenCost resources
-    OPENCOST_CPU_REQUEST="300m"
-    OPENCOST_MEMORY_REQUEST="600Mi"
-    OPENCOST_CPU_LIMIT="300m"
-    OPENCOST_MEMORY_LIMIT="600Mi"
+    OPENCOST_CPU_REQUEST="360m"
+    OPENCOST_MEMORY_REQUEST="960Mi"
+    OPENCOST_CPU_LIMIT="360m"
+    OPENCOST_MEMORY_LIMIT="960Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="700m"
-    ONELENS_MEMORY_REQUEST="700Mi"
-    ONELENS_CPU_LIMIT="700m"
-    ONELENS_MEMORY_LIMIT="700Mi"
+    ONELENS_CPU_REQUEST="840m"
+    ONELENS_MEMORY_REQUEST="1120Mi"
+    ONELENS_CPU_LIMIT="840m"
+    ONELENS_MEMORY_LIMIT="1120Mi"
     
     # KSM resources
-    KSM_CPU_REQUEST="250m"
-    KSM_MEMORY_REQUEST="400Mi"
-    KSM_CPU_LIMIT="250m"
-    KSM_MEMORY_LIMIT="400Mi"
+    KSM_CPU_REQUEST="300m"
+    KSM_MEMORY_REQUEST="640Mi"
+    KSM_CPU_LIMIT="300m"
+    KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="250m"
@@ -497,8 +499,15 @@ else
     exit 1
 fi
 
-CMD="helm upgrade --install onelens-agent -n onelens-agent --create-namespace onelens/onelens-agent \
+# Conditionally add --create-namespace flag only if namespace doesn't exist
+CREATE_NS_FLAG=""
+if [ "$NAMESPACE_EXISTS" = false ]; then
+    CREATE_NS_FLAG="--create-namespace"
+fi
+
+CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.0.1}\" \
+    
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -543,19 +552,28 @@ fi
 # Continue building command
 
 # Append tolerations only if set
-if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_VALUE" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
-  for path in \
-    prometheus-opencost-exporter.opencost \
-    prometheus.server \
-    onelens-agent.cronJob \
-    prometheus.prometheus-pushgateway \
-    prometheus.kube-state-metrics; do
-    CMD+=" \
+# Handle both cases: operator=Exists (value can be empty) and operator=Equal (value required)
+if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
+  # For operator=Exists, value is not required. For other operators, value is required.
+  if [[ "$TOLERATION_OPERATOR" == "Exists" ]] || [[ -n "$TOLERATION_VALUE" ]]; then
+    for path in \
+      prometheus-opencost-exporter.opencost \
+      prometheus.server \
+      onelens-agent.cronJob \
+      prometheus.prometheus-pushgateway \
+      prometheus.kube-state-metrics; do
+      CMD+=" \
       --set $path.tolerations[0].key=\"$TOLERATION_KEY\" \
-      --set $path.tolerations[0].operator=\"$TOLERATION_OPERATOR\" \
-      --set $path.tolerations[0].value=\"$TOLERATION_VALUE\" \
+      --set $path.tolerations[0].operator=\"$TOLERATION_OPERATOR\""
+      # Only set value if operator is not "Exists" and value is provided
+      if [[ "$TOLERATION_OPERATOR" != "Exists" && -n "$TOLERATION_VALUE" ]]; then
+        CMD+=" \
+      --set $path.tolerations[0].value=\"$TOLERATION_VALUE\""
+      fi
+      CMD+=" \
       --set $path.tolerations[0].effect=\"$TOLERATION_EFFECT\""
-  done
+    done
+  fi
 fi
 
 # Append nodeSelector only if set
@@ -568,6 +586,21 @@ if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
     prometheus.kube-state-metrics; do
     CMD+=" --set $path.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
   done
+fi
+
+# Append pod labels to all onelens-agent deployments if DEPLOYMENT_LABELS (JSON) is set.
+# If no labels are passed by the deployer, DEPLOYMENT_LABELS is unset and install runs normally.
+# (Injected by onelensdeployer from globals.labels + job.labels so deployments get the same labels.)
+if [[ -n "${DEPLOYMENT_LABELS:-}" ]]; then
+  if command -v jq &>/dev/null; then
+    for path in prometheus.server prometheus.kube-state-metrics prometheus.prometheus-pushgateway onelens-agent.cronJob prometheus-opencost-exporter; do
+      for key in $(echo "$DEPLOYMENT_LABELS" | jq -r 'keys[]'); do
+        value=$(echo "$DEPLOYMENT_LABELS" | jq -r --arg k "$key" '.[$k]')
+        key_escaped=$(echo "$key" | sed 's/\./\\./g')
+        CMD+=" --set \"${path}.podLabels.${key_escaped}=${value}\""
+      done
+    done
+  fi
 fi
 
 # Append imagePullSecrets only if set
@@ -637,6 +670,16 @@ if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
       CMD+=" --set onelens-agent.storageClass.azure.encryption.diskEncryptionSetID=\"$AZURE_DISK_ENCRYPTION_SET_ID\""
     fi
   fi
+fi
+
+# Apply same labels to namespace if DEPLOYMENT_LABELS is set (e.g. from globals.labels).
+# If the namespace was created by Helm (--create-namespace), it gets these labels; if it already existed, labels are updated.
+if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
+  echo "Applying labels to namespace onelens-agent from DEPLOYMENT_LABELS..."
+  for key in $(echo "$DEPLOYMENT_LABELS" | jq -r 'keys[]'); do
+    value=$(echo "$DEPLOYMENT_LABELS" | jq -r --arg k "$key" '.[$k]')
+    kubectl label namespace onelens-agent "$key=$value" --overwrite
+  done
 fi
 
 # Final execution
