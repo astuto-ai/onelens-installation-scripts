@@ -1,4 +1,5 @@
 FROM alpine:3.18
+# v2.1.1 - force cache bust for install.sh fix
 # Install dependencies
 RUN apk update && apk add --no-cache \
     curl \
