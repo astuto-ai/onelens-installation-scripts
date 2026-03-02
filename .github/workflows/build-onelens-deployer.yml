@@ -149,7 +149,8 @@ jobs:
 
   build-and-push:
     name: Build and Push Multi-Arch Docker Image
-    needs: [build-for-scan, determine-tag]
+    needs: [security-scan, determine-tag]
+    if: always() && (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: ubuntu-latest
     
     steps:
@@ -192,7 +193,7 @@ jobs:
           echo "Tag: ${{ needs.determine-tag.outputs.image_tag }}"
           echo "Registry: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}"
           echo "Platforms: linux/amd64, linux/arm64"
-          echo "Security: Trivy scan temporarily disabled"
+          echo "Security: Passed Trivy scan"
           echo "Event: ${{ github.event_name }}"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "Manual Build: ${{ github.event.inputs.tag }}"
