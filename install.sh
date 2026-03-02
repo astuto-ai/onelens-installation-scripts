@@ -436,7 +436,6 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PUSHGATEWAY_MEMORY_LIMIT="400Mi"
 fi
 
-
 PROMETHEUS_RETENTION="10d"
 
 if [ "$TOTAL_PODS" -lt 100 ]; then
@@ -507,7 +506,6 @@ fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.0.1}\" \
-    
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -588,18 +586,28 @@ if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
   done
 fi
 
-# Append pod labels to all onelens-agent deployments if DEPLOYMENT_LABELS (JSON) is set.
-# If no labels are passed by the deployer, DEPLOYMENT_LABELS is unset and install runs normally.
-# (Injected by onelensdeployer from globals.labels + job.labels so deployments get the same labels.)
+# Append pod labels to all onelens-agent deployments via a temp values file.
+# Using a file avoids shell/eval escaping issues with dots and slashes in label keys.
 if [[ -n "${DEPLOYMENT_LABELS:-}" ]]; then
   if command -v jq &>/dev/null; then
-    for path in prometheus.server prometheus.kube-state-metrics prometheus.prometheus-pushgateway onelens-agent.cronJob prometheus-opencost-exporter; do
-      for key in $(echo "$DEPLOYMENT_LABELS" | jq -r 'keys[]'); do
-        value=$(echo "$DEPLOYMENT_LABELS" | jq -r --arg k "$key" '.[$k]')
-        key_escaped=$(echo "$key" | sed 's/\./\\./g')
-        CMD+=" --set \"${path}.podLabels.${key_escaped}=${value}\""
-      done
-    done
+    echo "Applying podLabels from DEPLOYMENT_LABELS to onelens-agent components..."
+    PODLABELS_FILE=$(mktemp)
+    echo "$DEPLOYMENT_LABELS" | jq '{
+      prometheus: {
+        server: { podLabels: . },
+        "kube-state-metrics": { podLabels: . },
+        "prometheus-pushgateway": { podLabels: . }
+      },
+      "onelens-agent": {
+        cronJob: { podLabels: . }
+      },
+      "prometheus-opencost-exporter": {
+        podLabels: .
+      }
+    }' > "$PODLABELS_FILE"
+    CMD+=" -f $PODLABELS_FILE"
+  else
+    echo "Warning: jq not found, skipping podLabels from DEPLOYMENT_LABELS"
   fi
 fi
 
@@ -648,7 +656,6 @@ if [[ "$CLOUD_PROVIDER" == "AWS" && "$EBS_ENCRYPTION_ENABLED" == "true" ]]; then
   fi
 fi
 
-
 # Append Azure-specific settings
 if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
   # Append Azure-specific caching mode
@@ -683,10 +690,15 @@ if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
 fi
 
 # Final execution
-CMD+=" --wait || { echo \"Error: Helm deployment failed.\"; exit 1; }"
+CMD+=" --wait"
 
 # Run it
 eval "$CMD"
+
+if [ $? -ne 0 ]; then
+    echo "Error: Helm deployment failed."
+    exit 1
+fi
 
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-opencost-exporter -n onelens-agent --timeout=800s || {
     echo "Error: Pods failed to become ready."
