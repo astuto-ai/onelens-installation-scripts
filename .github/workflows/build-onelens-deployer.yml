@@ -118,6 +118,7 @@ jobs:
         run: docker load --input /tmp/image.tar
 
       - name: Run Trivy vulnerability scanner
+        id: trivy-sarif
         uses: aquasecurity/trivy-action@0.30.0
         with:
           image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}'
@@ -127,8 +128,8 @@ jobs:
           exit-code: '0'  # Don't fail here, let table format handle the failure
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
 
