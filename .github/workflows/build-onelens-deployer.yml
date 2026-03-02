@@ -117,29 +117,34 @@ jobs:
       - name: Load Docker image
         run: docker load --input /tmp/image.tar
 
-      - name: Run Trivy vulnerability scanner
-        id: trivy-sarif
-        uses: aquasecurity/trivy-action@0.34.1
-        with:
-          image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Don't fail here, let table format handle the failure
+      - name: Run Trivy vulnerability scanner (table - blocking)
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.49.3 image \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}
+
+      - name: Run Trivy vulnerability scanner (SARIF for Security tab)
+        if: success()
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ${{ github.workspace }}:/output \
+            -w /output \
+            aquasec/trivy:0.49.3 image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}
 
       - name: Upload Trivy scan results to GitHub Security tab
+        if: success() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
-
-      - name: Run Trivy vulnerability scanner (table output - blocking)
-        uses: aquasecurity/trivy-action@0.34.1
-        with:
-          image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'  # This will fail the job if vulnerabilities are found
 
   build-and-push:
     name: Build and Push Multi-Arch Docker Image
