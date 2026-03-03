@@ -62,41 +62,46 @@ jobs:
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             TAG_VERSION="${{ github.event.inputs.tag }}"
             TAG_VERSION="${TAG_VERSION#v}"  # Remove 'v' prefix
-            ONELENSDEPLOYER_VERSION="${TAG_VERSION}-rc"  # Add 'rc' suffix only for onelensdeployer
+            ONELENS_AGENT_VERSION="$TAG_VERSION"
+            ONELENSDEPLOYER_VERSION="${TAG_VERSION}-rc"
             IS_RELEASE="false"
             BRANCH_NAME="helm-manual-${TAG_VERSION}"
             echo "Manual trigger - using version: $TAG_VERSION"
+            echo "onelens-agent version: $ONELENS_AGENT_VERSION"
             echo "onelensdeployer version: $ONELENSDEPLOYER_VERSION"
           else
             TAG="${GITHUB_REF#refs/tags/}"
             TAG_VERSION="${TAG#v}"  # Remove 'v' prefix
-            ONELENSDEPLOYER_VERSION="${TAG_VERSION}-rc"  # Add 'rc' suffix only for onelensdeployer
+            ONELENS_AGENT_VERSION="$TAG_VERSION"
+            ONELENSDEPLOYER_VERSION="${TAG_VERSION}-rc"
             IS_RELEASE="false"
             BRANCH_NAME="helm-rc-${TAG_VERSION}"
             echo "Tag trigger - using version: $TAG_VERSION"
+            echo "onelens-agent version: $ONELENS_AGENT_VERSION"
             echo "onelensdeployer version: $ONELENSDEPLOYER_VERSION"
           fi
           
-          # Read current chart versions (onelens-agent version set after validation) (onelens-agent is not required to match tag; deployer-only releases supported)
           ONELENS_AGENT_CHART_VERSION=$(yq e '.version' charts/${CHART_ONELENS_AGENT}/Chart.yaml)
           ONELENSDEPLOYER_CHART_VERSION=$(yq e '.version' charts/${CHART_ONELENSDEPLOYER}/Chart.yaml)
           
           echo "Version comparison:"
           echo "Tag version: $TAG_VERSION"
-          echo "${CHART_ONELENS_AGENT} chart version: $ONELENS_AGENT_CHART_VERSION (used as-is, no tag match required)"
-          echo "${CHART_ONELENSDEPLOYER} chart version: $ONELENSDEPLOYER_CHART_VERSION (must match tag)"
+          echo "${CHART_ONELENS_AGENT} chart version: $ONELENS_AGENT_CHART_VERSION"
+          echo "${CHART_ONELENSDEPLOYER} chart version: $ONELENSDEPLOYER_CHART_VERSION"
           
-          # Only validate that tag matches onelensdeployer chart (deployer-only releases: no change to onelens-agent Chart.yaml)
-          if [[ "$TAG_VERSION" != "$ONELENSDEPLOYER_CHART_VERSION" ]]; then
-            echo "ERROR: Tag version ($TAG_VERSION) does not match ${CHART_ONELENSDEPLOYER} chart version ($ONELENSDEPLOYER_CHART_VERSION)"
-            echo "Please set charts/onelensdeployer/Chart.yaml version and appVersion to $TAG_VERSION"
+          if [[ "$TAG_VERSION" != "$ONELENS_AGENT_CHART_VERSION" ]]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match ${CHART_ONELENS_AGENT} chart version ($ONELENS_AGENT_CHART_VERSION)"
+            echo "Please ensure tag version and Chart.yaml versions are the same"
             exit 1
           fi
           
-          # Use onelens-agent's current Chart.yaml version (no bump required for deployer-only release)
-          ONELENS_AGENT_VERSION="$ONELENS_AGENT_CHART_VERSION"
+          if [[ "$TAG_VERSION" != "$ONELENSDEPLOYER_CHART_VERSION" ]]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match ${CHART_ONELENSDEPLOYER} chart version ($ONELENSDEPLOYER_CHART_VERSION)"
+            echo "Please ensure tag version and Chart.yaml versions are the same"
+            exit 1
+          fi
           
-          echo "Version validation passed (deployer-only release: onelens-agent stays at $ONELENS_AGENT_VERSION)"
+          echo "Version validation passed"
           
           echo "onelens_agent_version=$ONELENS_AGENT_VERSION" >> $GITHUB_OUTPUT
           echo "onelensdeployer_version=$ONELENSDEPLOYER_VERSION" >> $GITHUB_OUTPUT
