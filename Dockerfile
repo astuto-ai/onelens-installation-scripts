@@ -1,6 +1,6 @@
 FROM alpine:3.18
-# v2.1.1 - force cache bust for install.sh fix
-# Install dependencies
+
+# Install dependencies (this layer is cached across builds)
 RUN apk update && apk add --no-cache \
     curl \
     tar \
@@ -13,8 +13,12 @@ RUN apk update && apk add --no-cache \
     python3 \
     py3-pip \
     aws-cli && \
-    echo "Dependencies installed successful"
+    echo "Dependencies installed successfully"
 
+# CACHE_BUST changes on every CI build (set to git SHA), ensuring
+# install.sh and other scripts are never served from stale Docker cache.
+ARG CACHE_BUST=unknown
+RUN echo "Build: $CACHE_BUST"
 
 COPY install.sh /install.sh
 COPY globalvalues.yaml /globalvalues.yaml
