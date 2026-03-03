@@ -506,7 +506,6 @@ fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.0.1}\" \
-    
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -699,6 +698,21 @@ eval "$CMD"
 if [ $? -ne 0 ]; then
     echo "Error: Helm deployment failed."
     exit 1
+fi
+
+# Patch onelens-agent CronJob to add deployment labels to metadata and pod template.
+# The private onelens-agent-base chart does not support label injection via values,
+# so we patch immediately after Helm install before any scheduled pod runs.
+if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
+    patch_json=$(echo "$DEPLOYMENT_LABELS" | jq '{
+        metadata: {labels: .},
+        spec: {jobTemplate: {spec: {template: {metadata: {labels: .}}}}}
+    }')
+    if kubectl patch cronjob onelens-agent -n onelens-agent --type=merge -p "$patch_json" 2>/dev/null; then
+        echo "Patched onelens-agent CronJob with deployment labels."
+    else
+        echo "Warning: Could not patch onelens-agent CronJob labels (resource may not exist yet)."
+    fi
 fi
 
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-opencost-exporter -n onelens-agent --timeout=800s || {
