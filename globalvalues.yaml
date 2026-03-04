@@ -1110,7 +1110,9 @@ prometheus-opencost-exporter:
   opencost:    
     exporter:
       cloudProviderApiKey: ""
-      defaultClusterId: 'default-cluster'
+      # NOTE: defaultClusterId is automatically set by install.sh using CLUSTER_NAME environment variable.
+      # If using the chart directly (not via install.sh), you must set it via --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=<cluster-name>
+      defaultClusterId: 'default-cluster'  # Fallback default, always overridden by install.sh
       image:
         registry: ghcr.io
         repository: opencost/opencost
@@ -1122,7 +1124,7 @@ prometheus-opencost-exporter:
           cpu: '10m'
           memory: '55Mi'
         limits:
-          cpu: '999m'
+          cpu: '1'
           memory: '1Gi'
       persistence:
         enabled: false
