@@ -184,10 +184,10 @@ job:
   resources:
     requests:
       cpu: 50m
-      memory: 64Mi
+      memory: 256Mi
     limits:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 50m
+      memory: 256Mi
 
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
@@ -219,10 +219,10 @@ cronjob:
   resources:
     requests:
       cpu: 50m
-      memory: 64Mi
+      memory: 256Mi
     limits:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 50m
+      memory: 256Mi
   concurrencyPolicy: "Forbid" # Prevent concurrent job executions
   successfulJobsHistoryLimit: 1 # Number of successful jobs to keep
   failedJobsHistoryLimit: 1 # Number of failed jobs to keep
