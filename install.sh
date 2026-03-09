@@ -504,6 +504,30 @@ if [ "$NAMESPACE_EXISTS" = false ]; then
     CREATE_NS_FLAG="--create-namespace"
 fi
 
+# Phase 9.5: Check existing PVC for prometheus data preservation
+PVC_NAME="onelens-agent-prometheus-server"
+EXISTING_CLAIM_FLAG=""
+if kubectl get pvc "$PVC_NAME" -n onelens-agent &>/dev/null; then
+    PVC_STATUS=$(kubectl get pvc "$PVC_NAME" -n onelens-agent -o jsonpath='{.status.phase}')
+    if [ "$PVC_STATUS" = "Bound" ]; then
+        echo "Found existing Bound PVC '$PVC_NAME' — reusing to preserve prometheus metrics data."
+        EXISTING_CLAIM_FLAG="--set prometheus.server.persistentVolume.existingClaim=$PVC_NAME"
+    else
+        echo "Found existing PVC '$PVC_NAME' in '$PVC_STATUS' state — deleting and letting helm create a fresh one."
+        kubectl delete pvc "$PVC_NAME" -n onelens-agent --wait=false
+    fi
+else
+    echo "No existing PVC '$PVC_NAME' found — helm will create a new one."
+fi
+
+# Phase 9.6: Check helm release state before install
+RELEASE_STATUS=$(helm status onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.info.status' 2>/dev/null || echo "not-found")
+if [ "$RELEASE_STATUS" = "failed" ]; then
+    echo "Helm release 'onelens-agent' is in failed state — uninstalling before reinstall."
+    helm uninstall onelens-agent -n onelens-agent --wait
+    echo "Uninstall complete. Proceeding with fresh install."
+fi
+
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
     --version \"\${RELEASE_VERSION:=2.1.2}\" \
     -f $FILE \
@@ -515,6 +539,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onele
     --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$CLUSTER_NAME\" \
     --set onelens-agent.image.tag=\"$IMAGE_TAG\" \
     --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
+    $EXISTING_CLAIM_FLAG \
     --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
     --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
     --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
