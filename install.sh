@@ -266,17 +266,42 @@ TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
 
 echo "Total number of pods in the cluster: $TOTAL_PODS"
 
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to fetch pod details. Please check if Kubernetes is running and kubectl is configured correctly." >&2
-    exit 1
-fi
-
-echo "Total number of pods in the cluster: $TOTAL_PODS"
-
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
 
-if [ "$TOTAL_PODS" -lt 100 ]; then
-    echo "Setting resources for small cluster (<100 pods)"
+if [ "$TOTAL_PODS" -lt 50 ]; then
+    echo "Setting resources for tiny cluster (<50 pods)"
+    # Prometheus resources
+    PROMETHEUS_CPU_REQUEST="270m"
+    PROMETHEUS_MEMORY_REQUEST="1425Mi"
+    PROMETHEUS_CPU_LIMIT="270m"
+    PROMETHEUS_MEMORY_LIMIT="1425Mi"
+
+    # OpenCost resources
+    OPENCOST_CPU_REQUEST="180m"
+    OPENCOST_MEMORY_REQUEST="240Mi"
+    OPENCOST_CPU_LIMIT="180m"
+    OPENCOST_MEMORY_LIMIT="240Mi"
+
+    # OneLens Agent resources
+    ONELENS_CPU_REQUEST="100m"
+    ONELENS_MEMORY_REQUEST="256Mi"
+    ONELENS_CPU_LIMIT="300m"
+    ONELENS_MEMORY_LIMIT="384Mi"
+
+    # KSM resources
+    KSM_CPU_REQUEST="100m"
+    KSM_MEMORY_REQUEST="128Mi"
+    KSM_CPU_LIMIT="100m"
+    KSM_MEMORY_LIMIT="128Mi"
+
+    # Pushgateway resources
+    PUSHGATEWAY_CPU_REQUEST="50m"
+    PUSHGATEWAY_MEMORY_REQUEST="64Mi"
+    PUSHGATEWAY_CPU_LIMIT="50m"
+    PUSHGATEWAY_MEMORY_LIMIT="64Mi"
+
+elif [ "$TOTAL_PODS" -lt 100 ]; then
+    echo "Setting resources for small cluster (50-99 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="360m"
     PROMETHEUS_MEMORY_REQUEST="1901Mi"
@@ -290,10 +315,10 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     OPENCOST_MEMORY_LIMIT="320Mi"
 
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="100m"
-    ONELENS_MEMORY_REQUEST="256Mi"
-    ONELENS_CPU_LIMIT="300m"
-    ONELENS_MEMORY_LIMIT="384Mi"
+    ONELENS_CPU_REQUEST="125m"
+    ONELENS_MEMORY_REQUEST="320Mi"
+    ONELENS_CPU_LIMIT="375m"
+    ONELENS_MEMORY_LIMIT="480Mi"
 
     # KSM resources
     KSM_CPU_REQUEST="120m"
@@ -322,10 +347,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="400Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="100m"
-    ONELENS_MEMORY_REQUEST="384Mi"
-    ONELENS_CPU_LIMIT="300m"
-    ONELENS_MEMORY_LIMIT="512Mi"
+    ONELENS_CPU_REQUEST="125m"
+    ONELENS_MEMORY_REQUEST="480Mi"
+    ONELENS_CPU_LIMIT="375m"
+    ONELENS_MEMORY_LIMIT="640Mi"
 
     # KSM resources
     KSM_CPU_REQUEST="120m"
@@ -354,10 +379,10 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     OPENCOST_MEMORY_LIMIT="576Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="100m"
-    ONELENS_MEMORY_REQUEST="512Mi"
-    ONELENS_CPU_LIMIT="350m"
-    ONELENS_MEMORY_LIMIT="640Mi"
+    ONELENS_CPU_REQUEST="125m"
+    ONELENS_MEMORY_REQUEST="640Mi"
+    ONELENS_CPU_LIMIT="440m"
+    ONELENS_MEMORY_LIMIT="800Mi"
 
     # KSM resources
     KSM_CPU_REQUEST="120m"
@@ -386,11 +411,11 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     OPENCOST_MEMORY_LIMIT="720Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="100m"
-    ONELENS_MEMORY_REQUEST="640Mi"
-    ONELENS_CPU_LIMIT="400m"
-    ONELENS_MEMORY_LIMIT="768Mi"
-    
+    ONELENS_CPU_REQUEST="125m"
+    ONELENS_MEMORY_REQUEST="800Mi"
+    ONELENS_CPU_LIMIT="500m"
+    ONELENS_MEMORY_LIMIT="960Mi"
+
     # KSM resources
     KSM_CPU_REQUEST="300m"
     KSM_MEMORY_REQUEST="640Mi"
@@ -418,10 +443,10 @@ else
     OPENCOST_MEMORY_LIMIT="960Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="150m"
-    ONELENS_MEMORY_REQUEST="768Mi"
-    ONELENS_CPU_LIMIT="450m"
-    ONELENS_MEMORY_LIMIT="1024Mi"
+    ONELENS_CPU_REQUEST="190m"
+    ONELENS_MEMORY_REQUEST="960Mi"
+    ONELENS_CPU_LIMIT="565m"
+    ONELENS_MEMORY_LIMIT="1280Mi"
     
     # KSM resources
     KSM_CPU_REQUEST="300m"
@@ -438,7 +463,10 @@ fi
 
 PROMETHEUS_RETENTION="10d"
 
-if [ "$TOTAL_PODS" -lt 100 ]; then
+if [ "$TOTAL_PODS" -lt 50 ]; then
+    PROMETHEUS_RETENTION_SIZE="4GB"
+    PROMETHEUS_VOLUME_SIZE="8Gi"
+elif [ "$TOTAL_PODS" -lt 100 ]; then
     PROMETHEUS_RETENTION_SIZE="6GB"
     PROMETHEUS_VOLUME_SIZE="10Gi"
 elif [ "$TOTAL_PODS" -lt 500 ]; then
