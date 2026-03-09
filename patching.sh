@@ -43,9 +43,83 @@ if ! command -v kubectl &> /dev/null; then
 fi
 
 # Phase 4: Cluster Pod Count and Resource Allocation
-TOTAL_PODS=$(kubectl get pods --all-namespaces --no-headers 2>/dev/null | wc -l)
 
-echo "Total number of pods in the cluster: $TOTAL_PODS"
+# Helper: multiply a memory string (e.g., "384Mi") by a float multiplier, round up
+apply_memory_multiplier() {
+    local mem_str="$1"
+    local multiplier="$2"
+    local mem_val="${mem_str%Mi}"
+    local result=$(echo "$mem_val $multiplier" | awk '{printf "%d", int($1 * $2 + 0.99)}')
+    echo "${result}Mi"
+}
+
+# --- Pod count: use desired/max replicas from workload controllers ---
+echo "Calculating cluster pod capacity from workload controllers..."
+
+# Get all HPA targets with their maxReplicas
+HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+
+# Deployment replicas: use HPA maxReplicas if HPA targets the deployment, else spec.replicas
+DEPLOY_PODS=$(kubectl get deployments --all-namespaces -o json 2>/dev/null | jq --argjson hpa "$HPA_JSON" '
+    [.items[] | . as $dep |
+        ($hpa.items[] |
+            select(.metadata.namespace == $dep.metadata.namespace and
+                   .spec.scaleTargetRef.kind == "Deployment" and
+                   .spec.scaleTargetRef.name == $dep.metadata.name) |
+            .spec.maxReplicas
+        ) // ($dep.spec.replicas // 0)
+    ] | add // 0
+' 2>/dev/null || echo "0")
+
+# StatefulSet replicas: use HPA maxReplicas if HPA targets it, else spec.replicas
+STS_PODS=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null | jq --argjson hpa "$HPA_JSON" '
+    [.items[] | . as $sts |
+        ($hpa.items[] |
+            select(.metadata.namespace == $sts.metadata.namespace and
+                   .spec.scaleTargetRef.kind == "StatefulSet" and
+                   .spec.scaleTargetRef.name == $sts.metadata.name) |
+            .spec.maxReplicas
+        ) // ($sts.spec.replicas // 0)
+    ] | add // 0
+' 2>/dev/null || echo "0")
+
+# DaemonSet pods: each DS runs one pod per node
+NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+NUM_DAEMONSETS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+DS_PODS=$((NUM_NODES * NUM_DAEMONSETS))
+
+DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
+
+# Apply 25% buffer for Jobs, CronJobs, and burst scaling
+TOTAL_PODS=$(echo "$DESIRED_PODS" | awk '{printf "%d", int($1 * 1.25 + 0.99)}')
+
+# Fallback: if desired pods calculation returned 0 or failed, use running pod count
+if [ "$TOTAL_PODS" -le 0 ]; then
+    echo "WARNING: Could not calculate desired pods from workload controllers. Falling back to running pod count."
+    TOTAL_PODS=$(kubectl get pods --all-namespaces --no-headers 2>/dev/null | wc -l)
+fi
+
+echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
+echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
+
+# --- Label density measurement ---
+echo "Measuring label density across pods..."
+AVG_LABELS=$(kubectl get pods --all-namespaces -o json 2>/dev/null | jq '[.items[].metadata.labels | length] | add / length | floor' 2>/dev/null || echo "0")
+
+if [ "$AVG_LABELS" -le 0 ] 2>/dev/null; then
+    echo "WARNING: Could not measure label density. Using default multiplier 1.3x."
+    LABEL_MULTIPLIER="1.3"
+elif [ "$AVG_LABELS" -le 7 ]; then
+    LABEL_MULTIPLIER="1.0"
+elif [ "$AVG_LABELS" -le 12 ]; then
+    LABEL_MULTIPLIER="1.3"
+elif [ "$AVG_LABELS" -le 17 ]; then
+    LABEL_MULTIPLIER="1.6"
+else
+    LABEL_MULTIPLIER="2.0"
+fi
+
+echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
 
 if [ "$TOTAL_PODS" -lt 50 ]; then
     echo "Setting resources for tiny cluster (<50 pods)"
@@ -133,9 +207,9 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
 
     # KSM resources
     KSM_CPU_REQUEST="120m"
-    KSM_MEMORY_REQUEST="160Mi"
+    KSM_MEMORY_REQUEST="256Mi"
     KSM_CPU_LIMIT="120m"
-    KSM_MEMORY_LIMIT="160Mi"
+    KSM_MEMORY_LIMIT="256Mi"
 
     # Pushgateway resources
     PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
@@ -165,9 +239,9 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
 
     # KSM resources
     KSM_CPU_REQUEST="120m"
-    KSM_MEMORY_REQUEST="160Mi"
+    KSM_MEMORY_REQUEST="384Mi"
     KSM_CPU_LIMIT="120m"
-    KSM_MEMORY_LIMIT="160Mi"
+    KSM_MEMORY_LIMIT="384Mi"
 
     # Pushgateway resources
     PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
@@ -238,6 +312,28 @@ else
     PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="400Mi"
     PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
     PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
+fi
+
+# Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
+if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
+    echo "Applying label density multiplier (${LABEL_MULTIPLIER}x) to memory values..."
+
+    # Prometheus memory
+    PROMETHEUS_MEMORY_REQUEST=$(apply_memory_multiplier "$PROMETHEUS_MEMORY_REQUEST" "$LABEL_MULTIPLIER")
+    PROMETHEUS_MEMORY_LIMIT=$(apply_memory_multiplier "$PROMETHEUS_MEMORY_LIMIT" "$LABEL_MULTIPLIER")
+
+    # KSM memory
+    KSM_MEMORY_REQUEST=$(apply_memory_multiplier "$KSM_MEMORY_REQUEST" "$LABEL_MULTIPLIER")
+    KSM_MEMORY_LIMIT=$(apply_memory_multiplier "$KSM_MEMORY_LIMIT" "$LABEL_MULTIPLIER")
+
+    # OneLens Agent memory
+    ONELENS_MEMORY_REQUEST=$(apply_memory_multiplier "$ONELENS_MEMORY_REQUEST" "$LABEL_MULTIPLIER")
+    ONELENS_MEMORY_LIMIT=$(apply_memory_multiplier "$ONELENS_MEMORY_LIMIT" "$LABEL_MULTIPLIER")
+
+    echo "Adjusted resources after label multiplier:"
+    echo "  Prometheus: ${PROMETHEUS_MEMORY_REQUEST} request / ${PROMETHEUS_MEMORY_LIMIT} limit"
+    echo "  KSM: ${KSM_MEMORY_REQUEST} request / ${KSM_MEMORY_LIMIT} limit"
+    echo "  OneLens Agent: ${ONELENS_MEMORY_REQUEST} request / ${ONELENS_MEMORY_LIMIT} limit"
 fi
 
 ## Other component resources
