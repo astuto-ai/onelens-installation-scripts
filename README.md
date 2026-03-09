@@ -6,169 +6,261 @@
 [![Helm Charts](https://img.shields.io/badge/Helm-Charts-0F1689?logo=helm)](https://astuto-ai.github.io/onelens-installation-scripts/)
 [![Docker](https://img.shields.io/badge/Docker-Multi--Arch-2496ED?logo=docker)](https://gallery.ecr.aws/w7k6q5m9/onelens-deployer)
 
-## 📋 Overview
+## Table of Contents
 
-OneLens Installation Scripts provides automated deployment tools for setting up comprehensive Kubernetes cost monitoring and optimization infrastructure. This repository contains Helm charts and automation scripts to deploy OneLens agents and supporting monitoring stack.
+- [Overview](#overview)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start) — install in 3 steps
+- [Configuration Reference](#configuration-reference) — all helm parameters with examples
+- [Upgrade](#upgrade)
+- [Uninstall](#uninstall)
+- [Troubleshooting](docs/troubleshooting.md) — common issues, diagnostic commands, operations
+- [How It Works](#how-it-works)
+- [Documentation](#documentation)
+- [Support](#support)
 
-## 🏗️ Components
+## Overview
 
-### 🚀 OneLens Deployer
-A Kubernetes job orchestrator that handles the initial setup and configuration of OneLens infrastructure in your cluster.
+OneLens deploys a monitoring stack into your Kubernetes cluster to collect cost and resource utilization data. The deployment consists of two parts:
 
-**Features:**
-- One-time setup jobs
-- Cluster configuration automation
-- Cross-platform Docker images (AMD64/ARM64)
+1. **OneLens Deployer** (this chart) - A Kubernetes Job that installs and configures the monitoring stack. A daily CronJob keeps it updated.
+2. **OneLens Agent** (installed by the deployer) - The monitoring stack: OneLens Agent, Prometheus, OpenCost, and Kube-State-Metrics.
 
-### 📊 OneLens Agent
-The core monitoring agent that collects cost and resource utilization data from your Kubernetes cluster.
+You only install the **deployer** chart. It handles everything else.
 
-**Includes:**
-- **OneLens Agent**: Main cost monitoring and optimization agent
-- **Prometheus**: Metrics collection and storage
-- **OpenCost Exporter**: Kubernetes cost metrics calculation
-- **Custom Storage Classes**: Optimized storage configurations
+## Prerequisites
 
-## 🚀 Quick Start
-
-### Prerequisites
 - Kubernetes cluster (1.25+)
 - Helm 3.0+
-- kubectl configured for your cluster
+- `kubectl` configured for your cluster
+- AWS EBS CSI driver (for AWS EKS clusters) or Azure Disk CSI driver (for AKS clusters)
+- Minimum node resources available: 50m CPU and 256Mi memory for the deployer job
 
-### Installation
+Run the pre-requisite checker to validate your environment before installing. It checks connectivity, tools, Kubernetes version, and CSI driver status:
 
-1. **Add the OneLens Helm repository:**
-   ```bash
-   helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
-   helm repo update
-   ```
+```bash
+curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/prereq-check/onelens-prereq-check.sh | bash
+```
 
-2. **Deploy OneLens Deployer:**
-   ```bash
-   helm upgrade --install onelensdeployer onelens/onelensdeployer \
-     --set job.env.CLUSTER_NAME=your-cluster-name \
-     --set job.env.REGION=your-aws-region \
-     --set-string job.env.ACCOUNT=your-aws-account-id \
-     --set job.env.REGISTRATION_TOKEN="your-registration-token"
-   ```
+## Quick Start
 
-3. **Deploy OneLens Agent** (only if not using the deployer; the deployer installs the agent for you):
-   ```bash
-   helm upgrade --install onelens-agent onelens/onelens-agent \
-     --namespace onelens-agent \
-     --create-namespace
-   ```
+### 1. Add the Helm repository
 
-### Configuration
+OneLens charts are hosted on a public Helm repository. Add it to your local Helm client so you can install charts from it:
 
-#### OneLens Deployer Configuration
+```bash
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
+helm repo update
+```
+
+### 2. Install
+
+This installs the OneLens deployer, which registers your cluster and sets up the full monitoring stack. You only need to do this once per cluster — running it again on an already-connected cluster will fail at registration.
+
+Your Kubernetes clusters are automatically discovered and visible in the OneLens console. Navigate to the cluster you want to connect, and the console provides a ready-to-use install command with the `REGISTRATION_TOKEN` pre-filled. Copy and run it directly, or use the template below:
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
+```
+
+Add any optional parameters (encryption, labels, tolerations) from the [Configuration Reference](#configuration-reference) below.
+
+### 3. Verify installation
+
+```bash
+# Check all pods are running
+kubectl get pods -n onelens-agent
+
+# Expected pods (all should be Running):
+#   onelens-agent-prometheus-server-*        - Metrics storage
+#   onelens-agent-kube-state-metrics-*       - Kubernetes object metrics
+#   onelens-agent-prometheus-opencost-*      - Cost metrics
+#   onelens-agent-prometheus-pushgateway-*   - Metrics push endpoint
+#
+# Note: The onelens-agent pod is a CronJob that runs hourly by default.
+# It collects metrics from Prometheus and sends them to the OneLens API.
+# It will not appear until its first scheduled run. To trigger it immediately,
+# see step 4 below.
+```
+
+### 4. Trigger a manual data collection (optional)
+
+```bash
+kubectl create job manual-trigger --from=cronjob/onelens-agent -n onelens-agent
+```
+
+---
+
+## Configuration Reference
+
+All parameters below are passed via `--set` flags during `helm upgrade --install`. Examples are shown with each section so you can copy-paste and adapt.
+
+- [Required Parameters](#required-parameters) — cluster name, region, account, token
+- [Storage Encryption](#storage-encryption) — encrypt Prometheus persistent volumes (AWS EBS / Azure Disk)
+- [Volume Tags](#volume-tags) — apply custom tags to persistent volumes for cost tracking
+- [Node Scheduling](#node-scheduling) — run OneLens pods on dedicated or specific nodes
+- [Labels](#labels) — apply custom labels to all OneLens resources
+- [Other](#other) — image pull secrets, CronJob schedule, suspend updater
+
+### Required Parameters
+
+| Parameter | Description |
+|---|---|
+| `job.env.CLUSTER_NAME` | Your Kubernetes cluster name |
+| `job.env.REGION` | Cloud region (e.g., `us-east-1`, `centralindia`) |
+| `job.env.ACCOUNT` | Cloud account ID (use `--set-string` to preserve leading zeros) |
+| `job.env.REGISTRATION_TOKEN` | Registration token from OneLens platform |
+
+<details>
+<summary><strong>AWS EKS example</strong></summary>
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-eks-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token
+```
+
+</details>
+
+<details>
+<summary><strong>Azure AKS example</strong></summary>
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-aks-cluster \
+  --set job.env.REGION=centralindia \
+  --set-string job.env.ACCOUNT=your-subscription-id \
+  --set job.env.REGISTRATION_TOKEN=your-token
+```
+
+</details>
+
+### Storage Encryption
+
+OneLens creates a StorageClass for Prometheus persistent volumes. You can enable encryption on these volumes.
+
+<details>
+<summary><strong>AWS EBS</strong></summary>
+
 | Parameter | Description | Default |
-|-----------|-------------|---------|
-| `job.env.CLUSTER_NAME` | Your Kubernetes cluster name | `""` |
-| `job.env.REGION` | AWS region where cluster is located | `""` |
-| `job.env.ACCOUNT` | AWS account ID | `""` |
-| `job.env.REGISTRATION_TOKEN` | OneLens registration token | `""` |
+|---|---|---|
+| `job.env.EBS_ENCRYPTION_ENABLED` | Enable EBS volume encryption | `false` |
+| `job.env.EBS_ENCRYPTION_KEY` | Custom KMS key ARN (omit to use AWS default `aws/ebs` key) | `""` |
 
-#### OneLens Agent Configuration
+Encrypt with the default AWS-managed key (`aws/ebs`):
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-eks-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.EBS_ENCRYPTION_ENABLED=true
+```
+
+Encrypt with a customer-managed KMS key:
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-eks-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.EBS_ENCRYPTION_ENABLED=true \
+  --set job.env.EBS_ENCRYPTION_KEY=arn:aws:kms:us-east-1:123456789012:key/your-key-id
+```
+
+</details>
+
+<details>
+<summary><strong>Azure Disk</strong></summary>
+
 | Parameter | Description | Default |
-|-----------|-------------|---------|
-| `onelens-agent.enabled` | Enable OneLens agent | `true` |
-| `prometheus.enabled` | Enable Prometheus monitoring | `true` |
-| `prometheus-opencost-exporter.enabled` | Enable cost metrics | `true` |
-| `onelens-agent.cronJob.cronSchedule` | Data collection schedule | `"0 * * * *"` |
-
-### Deployment examples
-
-Use one of the following patterns depending on whether you need labels, nodeSelector, or tolerations. Replace placeholders (`your-cluster-name`, `your-registration-token`, etc.) with your values.
-
-**Labels:** `globals.labels` apply to the namespace, deployer Job/CronJob, and all agent deployments. Use `job.labels` and `cronjob.labels` for labels only on the Job or CronJob (they also flow to deployments when the job runs).
-
-**Tolerations:** Use **Exists** when the taint has no value; use **Equal** when the taint has a key=value.
-
----
-
-#### 1. Minimal (no labels, no nodeSelector/tolerations)
+|---|---|---|
+| `job.env.AZURE_DISK_ENCRYPTION_ENABLED` | Enable Azure Disk encryption | `false` |
+| `job.env.AZURE_DISK_ENCRYPTION_SET_ID` | Azure Disk Encryption Set resource ID | `""` |
+| `job.env.AZURE_DISK_CACHING_MODE` | Disk caching mode (`None`, `ReadOnly`, `ReadWrite`) | `ReadOnly` |
 
 ```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-aks-cluster \
+  --set job.env.REGION=centralindia \
+  --set-string job.env.ACCOUNT=your-subscription-id \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.AZURE_DISK_ENCRYPTION_ENABLED=true \
+  --set job.env.AZURE_DISK_ENCRYPTION_SET_ID=/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<des-name>
 ```
 
----
+</details>
 
-#### 2. With global labels only (namespace + deployer + all agent components get these labels)
+### Volume Tags
+
+Apply custom tags to the persistent volumes created by OneLens. Useful for cost tracking and compliance.
+
+<details>
+<summary><strong>AWS EBS</strong></summary>
+
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.EBS_TAGS_ENABLED` | Enable custom tags on EBS volumes | `false` |
+| `job.env.EBS_TAGS` | Comma-separated `key=value` pairs | `""` |
 
 ```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token \
-  --set globals.labels."company\.com/team"=platform \
-  --set globals.labels."company\.com/env"=prod \
-  --set globals.labels."company\.com/component"=onelens
+  --set job.env.EBS_TAGS_ENABLED=true \
+  --set job.env.EBS_TAGS="env=prod,team=platform,cost-center=engineering"
 ```
 
----
+</details>
 
-#### 3. With job and cronjob labels (labels on deployer Job and CronJob; same labels also flow to agent deployments)
+<details>
+<summary><strong>Azure Disk</strong></summary>
+
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.AZURE_DISK_TAGS_ENABLED` | Enable custom tags on Azure Disks | `false` |
+| `job.env.AZURE_DISK_TAGS` | Comma-separated `key=value` pairs | `""` |
 
 ```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token \
-  --set job.labels."company\.com/team"=platform \
-  --set job.labels."company\.com/env"=prod \
-  --set cronjob.labels."company\.com/team"=platform \
-  --set cronjob.labels."company\.com/env"=prod
+  --set job.env.AZURE_DISK_TAGS_ENABLED=true \
+  --set job.env.AZURE_DISK_TAGS="env=prod,team=platform,cost-center=engineering"
 ```
 
----
+</details>
 
-#### 4. With nodeSelector and tolerations (Exists — taint has no value)
+### Node Scheduling
 
-Use when your node taint is like `key=value:NoSchedule` and you want to match only the key (operator `Exists`), or when the taint has no value.
+Schedule OneLens pods on specific nodes using nodeSelector and tolerations. The `job.env.*` parameters apply to the **agent pods** (Prometheus, KSM, OpenCost, etc.). To also schedule the **deployer job/cronjob** on the same nodes, set `job.tolerations`, `job.nodeSelector`, `cronjob.tolerations`, and `cronjob.nodeSelector` as shown in the example.
 
-```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token \
-  --set job.env.NODE_SELECTOR_KEY=your-node-selector-key \
-  --set job.env.NODE_SELECTOR_VALUE=your-node-selector-value \
-  --set job.env.TOLERATION_KEY=your-toleration-key \
-  --set-string job.env.TOLERATION_VALUE="" \
-  --set job.env.TOLERATION_OPERATOR=Exists \
-  --set job.env.TOLERATION_EFFECT=NoSchedule \
-  --set job.nodeSelector.your-node-selector-key=your-node-selector-value \
-  --set 'job.tolerations[0].key=your-toleration-key' \
-  --set 'job.tolerations[0].operator=Exists' \
-  --set 'job.tolerations[0].effect=NoSchedule' \
-  --set cronjob.nodeSelector.your-node-selector-key=your-node-selector-value \
-  --set 'cronjob.tolerations[0].key=your-toleration-key' \
-  --set 'cronjob.tolerations[0].operator=Exists' \
-  --set 'cronjob.tolerations[0].effect=NoSchedule'
-```
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.NODE_SELECTOR_KEY` | Node selector label key (applied to all agent pods) | `""` |
+| `job.env.NODE_SELECTOR_VALUE` | Node selector label value | `""` |
+| `job.env.TOLERATION_KEY` | Toleration key (applied to all agent pods) | `""` |
+| `job.env.TOLERATION_VALUE` | Toleration value (leave empty for `Exists` operator) | `""` |
+| `job.env.TOLERATION_OPERATOR` | `Equal` or `Exists` | `""` |
+| `job.env.TOLERATION_EFFECT` | `NoSchedule`, `PreferNoSchedule`, or `NoExecute` | `""` |
 
----
-
-#### 5. With nodeSelector and tolerations (Equal — taint has key=value)
-
-Use when your node taint has a key and a value (e.g. `dedicated=onelens:NoSchedule`) and you want to match that exact value.
+**Example** — nodes tainted with `dedicated=onelens:NoSchedule`:
 
 ```bash
-helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=your-cluster-name \
-  --set job.env.REGION=your-aws-region \
-  --set-string job.env.ACCOUNT=your-aws-account-id \
-  --set job.env.REGISTRATION_TOKEN=your-registration-token \
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token \
   --set job.env.NODE_SELECTOR_KEY=dedicated \
   --set job.env.NODE_SELECTOR_VALUE=onelens \
   --set job.env.TOLERATION_KEY=dedicated \
@@ -187,78 +279,120 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer -n onelens-agent 
   --set 'cronjob.tolerations[0].effect=NoSchedule'
 ```
 
----
+For taints without a value (e.g., `dedicated:NoSchedule`), use `Exists` operator and omit the value:
 
-When you use `globals.labels`, the deployer job also applies those labels to the **namespace** `onelens-agent` (if the namespace is created by Helm or already exists). Labels flow to all deployer resources and to every agent deployment (Prometheus, KSM, Pushgateway, OpenCost, onelens-agent CronJob).
-
-## 📚 Documentation
-
-- [🏗️ CI/CD Architecture](docs/ci-cd-architecture.md) - Complete CI/CD pipeline documentation
-- [⚡ Quick Reference](docs/quick-reference.md) - Fast commands and troubleshooting
-- [📖 Release Process](docs/release-process.md) - How to create new releases
-- [🔄 CI/CD Flow](docs/ci-cd-flow.md) - Understanding the automation pipeline
-- [⚙️ Configuration Guide](docs/configuration.md) - Detailed configuration options
-- [🔧 Development Guide](docs/development.md) - Contributing and development setup
-
-## 🛠️ Scripts & Tools
-
-- [🔍 Pre-requisite Checker](scripts/prereq-check/README.md) - Automated environment validation script
-- [📦 Tools Installation Guide](scripts/prereq-check/tools-installation.md) - Step-by-step installation for required tools
-
-## 🔄 Architecture
-
-```mermaid
-graph TB
-    subgraph "OneLens Installation"
-        A[OneLens Deployer] --> B[Cluster Setup]
-        B --> C[OneLens Agent Deployment]
-    end
-    
-    subgraph "Monitoring Stack"
-        C --> D[OneLens Agent]
-        D --> E[Prometheus]
-        D --> F[OpenCost Exporter]
-        E --> G[Metrics Storage]
-        F --> G
-    end
-    
-    subgraph "Data Flow"
-        G --> H[Cost Analysis]
-        H --> I[OneLens Platform]
-    end
+```bash
+  --set job.env.TOLERATION_OPERATOR=Exists \
+  --set-string job.env.TOLERATION_VALUE="" \
+  --set 'job.tolerations[0].operator=Exists'
 ```
 
-## 🏷️ Versioning
+### Labels
 
-This project follows [Semantic Versioning](https://semver.org/). Version history and release notes are available in:
-- [OneLens Agent Versions](charts/onelens-agent/version.md)
-- [Release Tags](https://github.com/astuto-ai/onelens-installation-scripts/releases)
+Apply custom labels to OneLens resources. Useful for organizational policies that require specific labels on all resources.
 
-## 🤝 Contributing
+| Parameter | Description | Default |
+|---|---|---|
+| `globals.labels` | Applied to namespace, deployer job/cronjob, and all agent pods | `{}` |
+| `job.labels` | Additional labels only on the deployer job | `{}` |
+| `cronjob.labels` | Additional labels only on the updater cronjob | `{}` |
 
-We welcome contributions! Please see our [Development Guide](docs/development.md) for details on:
-- Setting up development environment
-- Running tests
-- Submitting pull requests
+```bash
+  --set globals.labels."company\.com/team"=platform \
+  --set globals.labels."company\.com/env"=prod
+```
 
+### Other
 
-## 📞 Support
-
-- 📧 Email: support@astuto.ai
-- 📖 Documentation: [OneLens Docs](https://docs.onelens.cloud/integrations/kubernetes/onelens-agent/onboarding-a-k8s-cluster)
-- 🐛 Issues: [GitHub Issues](https://github.com/astuto-ai/onelens-installation-scripts/issues)
-
-## 🚀 What's Next?
-
-After installation, your cluster will be monitored by OneLens. Visit the OneLens platform to:
-- View real-time cost analytics
-- Get optimization recommendations
-- Set up cost alerts and budgets
-- Analyze resource utilization trends
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.IMAGE_PULL_SECRET` | Image pull secret name for private registries | `""` |
+| `cronjob.schedule` | Updater CronJob schedule | `"0 2 * * *"` |
+| `cronjob.suspend` | Suspend the daily updater | `false` |
 
 ---
 
-**Made with ❤️ by the OneLens Team**
+## Upgrade
 
+To upgrade to a newer version:
 
+```bash
+helm repo update
+helm upgrade onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent \
+  --version <new-version> \
+  --reuse-values
+```
 
+The deployer job will re-run and upgrade the agent stack to the matching version.
+
+## Uninstall
+
+```bash
+# Remove the deployer
+helm uninstall onelensdeployer -n onelens-agent
+
+# Remove the agent stack (installed by the deployer)
+helm uninstall onelens-agent -n onelens-agent
+
+# Optionally delete the namespace and all resources
+kubectl delete namespace onelens-agent
+```
+
+Note: PersistentVolumeClaims are retained by default (`helm.sh/resource-policy: keep`). To also delete Prometheus data:
+
+```bash
+kubectl delete pvc -n onelens-agent --all
+```
+
+## Troubleshooting
+
+See the [Troubleshooting Guide](docs/troubleshooting.md) for common issues, diagnostic commands, and operational procedures.
+
+---
+
+## How It Works
+
+```
+helm install onelensdeployer
+    |
+    v
+[Deployer Job] -- runs install.sh inside a pod
+    |              - detects cloud provider (AWS/Azure)
+    |              - registers cluster with OneLens API
+    |              - sizes resources based on pod count
+    |              - creates StorageClass, RBAC, namespace
+    |              - runs: helm install onelens-agent
+    v
+[OneLens Agent Stack]
+    - Prometheus (metrics collection + storage)
+    - Kube-State-Metrics (Kubernetes object metrics)
+    - OpenCost (cost calculation)
+    - OneLens Agent (data processing + upload to OneLens platform)
+    - Pushgateway (metrics push endpoint)
+    |
+    v
+[Daily Updater CronJob] -- runs patching.sh
+    - re-evaluates cluster size
+    - adjusts resource allocations
+    - applies configuration updates
+```
+
+## Documentation
+
+- [CI/CD Architecture](docs/ci-cd-architecture.md) - Complete CI/CD pipeline documentation
+- [Quick Reference](docs/quick-reference.md) - Fast commands and troubleshooting
+- [Release Process](docs/release-process.md) - How to create new releases
+- [Configuration Guide](docs/configuration.md) - Detailed configuration options
+
+## Scripts & Tools
+
+- [Pre-requisite Checker](scripts/prereq-check/README.md) - Validate your environment before installation
+- [EBS Driver Installation](scripts/ebs-driver-installation/) - Install AWS EBS CSI driver with IAM roles
+- [Dedicated Node Setup](scripts/dedicated-node-installation/) - Create tainted node pools for OneLens
+
+## Support
+
+- Email: support@astuto.ai
+- Documentation: [OneLens Docs](https://docs.onelens.cloud/integrations/kubernetes/onelens-agent/onboarding-a-k8s-cluster)
+- Issues: [GitHub Issues](https://github.com/astuto-ai/onelens-installation-scripts/issues)
