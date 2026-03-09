@@ -282,31 +282,31 @@ if [ "$TOTAL_PODS" -lt 100 ]; then
     PROMETHEUS_MEMORY_REQUEST="1901Mi"
     PROMETHEUS_CPU_LIMIT="360m"
     PROMETHEUS_MEMORY_LIMIT="1901Mi"
-    
+
     # OpenCost resources
     OPENCOST_CPU_REQUEST="240m"
     OPENCOST_MEMORY_REQUEST="320Mi"
     OPENCOST_CPU_LIMIT="240m"
     OPENCOST_MEMORY_LIMIT="320Mi"
-    
+
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="480m"
-    ONELENS_MEMORY_REQUEST="640Mi"
-    ONELENS_CPU_LIMIT="480m"
-    ONELENS_MEMORY_LIMIT="640Mi"
-    
+    ONELENS_CPU_REQUEST="100m"
+    ONELENS_MEMORY_REQUEST="256Mi"
+    ONELENS_CPU_LIMIT="300m"
+    ONELENS_MEMORY_LIMIT="384Mi"
+
     # KSM resources
     KSM_CPU_REQUEST="120m"
     KSM_MEMORY_REQUEST="160Mi"
     KSM_CPU_LIMIT="120m"
     KSM_MEMORY_LIMIT="160Mi"
-    
+
     # Pushgateway resources
     PUSHGATEWAY_CPU_REQUEST="100m"
     PUSHGATEWAY_MEMORY_REQUEST="100Mi"
     PUSHGATEWAY_CPU_LIMIT="100m"
     PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-    
+
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
     # Prometheus resources
@@ -322,11 +322,11 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="400Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="600m"
-    ONELENS_MEMORY_REQUEST="800Mi"
-    ONELENS_CPU_LIMIT="600m"
-    ONELENS_MEMORY_LIMIT="800Mi"
-    
+    ONELENS_CPU_REQUEST="100m"
+    ONELENS_MEMORY_REQUEST="384Mi"
+    ONELENS_CPU_LIMIT="300m"
+    ONELENS_MEMORY_LIMIT="512Mi"
+
     # KSM resources
     KSM_CPU_REQUEST="120m"
     KSM_MEMORY_REQUEST="160Mi"
@@ -338,8 +338,8 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PUSHGATEWAY_MEMORY_REQUEST="100Mi"
     PUSHGATEWAY_CPU_LIMIT="100m"
     PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-    
-    elif [ "$TOTAL_PODS" -lt 1000 ]; then
+
+elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1200m"
@@ -354,11 +354,11 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="576Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="600m"
-    ONELENS_MEMORY_REQUEST="800Mi"
-    ONELENS_CPU_LIMIT="600m"
-    ONELENS_MEMORY_LIMIT="800Mi"
-    
+    ONELENS_CPU_REQUEST="100m"
+    ONELENS_MEMORY_REQUEST="512Mi"
+    ONELENS_CPU_LIMIT="350m"
+    ONELENS_MEMORY_LIMIT="640Mi"
+
     # KSM resources
     KSM_CPU_REQUEST="120m"
     KSM_MEMORY_REQUEST="160Mi"
@@ -370,8 +370,8 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PUSHGATEWAY_MEMORY_REQUEST="100Mi"
     PUSHGATEWAY_CPU_LIMIT="100m"
     PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-    
-    elif [ "$TOTAL_PODS" -lt 1500 ]; then
+
+elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1380m"
@@ -386,10 +386,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="720Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="720m"
-    ONELENS_MEMORY_REQUEST="960Mi"
-    ONELENS_CPU_LIMIT="720m"
-    ONELENS_MEMORY_LIMIT="960Mi"
+    ONELENS_CPU_REQUEST="100m"
+    ONELENS_MEMORY_REQUEST="640Mi"
+    ONELENS_CPU_LIMIT="400m"
+    ONELENS_MEMORY_LIMIT="768Mi"
     
     # KSM resources
     KSM_CPU_REQUEST="300m"
@@ -402,8 +402,8 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     PUSHGATEWAY_MEMORY_REQUEST="400Mi"
     PUSHGATEWAY_CPU_LIMIT="250m"
     PUSHGATEWAY_MEMORY_LIMIT="400Mi"
-    
-    else
+
+else
     echo "Setting resources for very large cluster (1500+ pods)"
     # Prometheus resources
     PROMETHEUS_CPU_REQUEST="1800m"
@@ -418,10 +418,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     OPENCOST_MEMORY_LIMIT="960Mi"
     
     # OneLens Agent resources
-    ONELENS_CPU_REQUEST="840m"
-    ONELENS_MEMORY_REQUEST="1120Mi"
-    ONELENS_CPU_LIMIT="840m"
-    ONELENS_MEMORY_LIMIT="1120Mi"
+    ONELENS_CPU_REQUEST="150m"
+    ONELENS_MEMORY_REQUEST="768Mi"
+    ONELENS_CPU_LIMIT="450m"
+    ONELENS_MEMORY_LIMIT="1024Mi"
     
     # KSM resources
     KSM_CPU_REQUEST="300m"
