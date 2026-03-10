@@ -369,10 +369,10 @@ if [ "$TOTAL_PODS" -lt 50 ]; then
     KSM_MEMORY_LIMIT="128Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="50m"
-    PUSHGATEWAY_MEMORY_REQUEST="64Mi"
-    PUSHGATEWAY_CPU_LIMIT="50m"
-    PUSHGATEWAY_MEMORY_LIMIT="64Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="50m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="64Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="50m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="64Mi"
 
 elif [ "$TOTAL_PODS" -lt 100 ]; then
     echo "Setting resources for small cluster (50-99 pods)"
@@ -401,10 +401,10 @@ elif [ "$TOTAL_PODS" -lt 100 ]; then
     KSM_MEMORY_LIMIT="160Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="100m"
-    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PUSHGATEWAY_CPU_LIMIT="100m"
-    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
 elif [ "$TOTAL_PODS" -lt 500 ]; then
     echo "Setting resources for medium cluster (100-499 pods)"
@@ -433,10 +433,10 @@ elif [ "$TOTAL_PODS" -lt 500 ]; then
     KSM_MEMORY_LIMIT="256Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="100m"
-    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PUSHGATEWAY_CPU_LIMIT="100m"
-    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
 elif [ "$TOTAL_PODS" -lt 1000 ]; then
     echo "Setting resources for large cluster (500-999 pods)"
@@ -465,10 +465,10 @@ elif [ "$TOTAL_PODS" -lt 1000 ]; then
     KSM_MEMORY_LIMIT="384Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="100m"
-    PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PUSHGATEWAY_CPU_LIMIT="100m"
-    PUSHGATEWAY_MEMORY_LIMIT="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
 elif [ "$TOTAL_PODS" -lt 1500 ]; then
     echo "Setting resources for extra large cluster (1000-1499 pods)"
@@ -497,10 +497,10 @@ elif [ "$TOTAL_PODS" -lt 1500 ]; then
     KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="250m"
-    PUSHGATEWAY_MEMORY_REQUEST="400Mi"
-    PUSHGATEWAY_CPU_LIMIT="250m"
-    PUSHGATEWAY_MEMORY_LIMIT="400Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="250m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="400Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
 
 else
     echo "Setting resources for very large cluster (1500+ pods)"
@@ -529,10 +529,10 @@ else
     KSM_MEMORY_LIMIT="640Mi"
 
     # Pushgateway resources
-    PUSHGATEWAY_CPU_REQUEST="250m"
-    PUSHGATEWAY_MEMORY_REQUEST="400Mi"
-    PUSHGATEWAY_CPU_LIMIT="250m"
-    PUSHGATEWAY_MEMORY_LIMIT="400Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="250m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="400Mi"
+    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
+    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
 fi
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
@@ -680,10 +680,10 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onele
     --set prometheus.kube-state-metrics.resources.requests.memory=\"$KSM_MEMORY_REQUEST\" \
     --set prometheus.kube-state-metrics.resources.limits.cpu=\"$KSM_CPU_LIMIT\" \
     --set prometheus.kube-state-metrics.resources.limits.memory=\"$KSM_MEMORY_LIMIT\" \
-    --set prometheus.prometheus-pushgateway.resources.requests.cpu=\"$PUSHGATEWAY_CPU_REQUEST\" \
-    --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PUSHGATEWAY_MEMORY_REQUEST\" \
-    --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PUSHGATEWAY_CPU_LIMIT\" \
-    --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PUSHGATEWAY_MEMORY_LIMIT\" \
+    --set prometheus.prometheus-pushgateway.resources.requests.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST\" \
+    --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST\" \
+    --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT\" \
+    --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT\" \
     --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
     --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
     --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
