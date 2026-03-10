@@ -336,6 +336,13 @@ if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
     echo "  OneLens Agent: ${ONELENS_MEMORY_REQUEST} request / ${ONELENS_MEMORY_LIMIT} limit"
 fi
 
+# Configmap-reload sidecar: fixed small footprint, does not scale with cluster size.
+# Enforce desired state every run to correct any manual or chart-default drift.
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST="10m"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="32Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT="10m"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="32Mi"
+
 # Phase 4.5: Use higher of (patching value, existing value) for each resource
 # If existing in K8s is higher → keep that value (no decrease).
 # If existing in K8s is lower than patching → use patching value (increase to patching level).
@@ -455,6 +462,10 @@ helm upgrade onelens-agent onelens/onelens-agent \
   --set prometheus.kube-state-metrics.resources.requests.memory="$KSM_MEMORY_REQUEST" \
   --set prometheus.kube-state-metrics.resources.limits.cpu="$KSM_CPU_LIMIT" \
   --set prometheus.kube-state-metrics.resources.limits.memory="$KSM_MEMORY_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.requests.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.requests.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" \
+  --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
+  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
 
 if [ $? -eq 0 ]; then
     echo "Upgrade completed successfully with dynamic resource allocation based on $TOTAL_PODS pods."
