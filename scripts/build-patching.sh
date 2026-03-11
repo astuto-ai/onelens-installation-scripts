@@ -1,16 +1,9 @@
 #!/bin/bash
-# scripts/build-patching.sh — Embed lib/resource-sizing.sh into patching.sh
+# scripts/build-patching.sh — Build a self-contained patching.sh
 #
-# Reads src/patching.sh (the source file you edit during development).
-# Replaces the source line between BEGIN_EMBED/END_EMBED markers
-# with the actual content of lib/resource-sizing.sh.
-# Output: patching.sh at repo root (self-contained, ready for GitHub tag).
-#
-# Development workflow:
-#   - Always edit src/patching.sh (has source line, clean library calls)
-#   - Run this script to produce the root patching.sh (build artifact)
-#   - CI runs this before tagging a release
-#   - Backend fetches root patching.sh from GitHub — works standalone
+# Embeds lib/resource-sizing.sh into src/patching.sh, replacing the
+# source line between BEGIN_EMBED/END_EMBED markers with actual content.
+# Output: patching.sh at repo root.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

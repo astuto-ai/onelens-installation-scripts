@@ -261,8 +261,7 @@ echo "Persistent storage for Prometheus is ENABLED."
 
 # Phase 9: Cluster Pod Count and Resource Allocation
 
-# Source shared resource sizing library (functions: apply_memory_multiplier,
-# select_resource_tier, select_retention_tier, count_deploy_pods, etc.)
+# Source shared resource sizing library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/resource-sizing.sh"
 
