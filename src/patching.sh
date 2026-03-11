@@ -199,8 +199,51 @@ echo ""
 # Phase 5.5: Prometheus PV recovery — detect and fix broken volume
 # If the underlying disk (EBS/Azure) was deleted, the PVC stays bound to a ghost PV.
 # Prometheus pod gets stuck in ContainerCreating with FailedAttachVolume/FailedMount.
+# However, if the pod was already running when the disk was deleted, it keeps running
+# (volume is cached in kernel VFS) but TSDB writes fail silently. Data collection breaks
+# but kubectl shows the pod as Running and PV/PVC as Bound — no visible error.
+# To detect this: query Prometheus health endpoint. If unhealthy and pod is Running,
+# restart the pod to surface the FailedMount, then the recovery logic handles it.
 # Recovery: delete the broken PVC so helm upgrade recreates it using the existing
 # StorageClass (onelens-sc), which preserves encryption and KMS settings from install.
+
+echo "Checking Prometheus health..."
+
+# Get the Prometheus service endpoint
+PROM_SVC=$(kubectl get svc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+PROM_POD_PRE=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+PROM_POD_STATUS_PRE=""
+if [ -n "$PROM_POD_PRE" ]; then
+    PROM_POD_STATUS_PRE=$(kubectl get pod "$PROM_POD_PRE" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+fi
+
+if [ -n "$PROM_SVC" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
+    # Pod is Running — check if Prometheus is actually healthy
+    PROM_HEALTH=$(curl -sf --max-time 5 "http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy" 2>/dev/null || true)
+    if [ -z "$PROM_HEALTH" ]; then
+        echo "Prometheus health check failed (pod is Running but not responding)."
+        echo "Restarting pod to surface potential volume mount failure..."
+        kubectl delete pod "$PROM_POD_PRE" -n onelens-agent --grace-period=10 2>/dev/null || true
+
+        # Wait for old pod to terminate and new pod to attempt mount
+        echo "Waiting for pod restart..."
+        for _rw in 1 2 3 4 5 6; do
+            sleep 10
+            NEW_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                | grep 'prometheus-server' | grep -v 'Terminating' | awk '{print $1; exit}' || true)
+            if [ -n "$NEW_POD" ] && [ "$NEW_POD" != "$PROM_POD_PRE" ]; then
+                NEW_POD_STATUS=$(kubectl get pod "$NEW_POD" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                echo "New pod '$NEW_POD': status=$NEW_POD_STATUS"
+                # If Running, it remounted fine — was a transient issue
+                # If Pending/ContainerCreating, volume mount is failing — recovery will handle
+                break
+            fi
+            echo "Waiting for new pod... (attempt $_rw/6)"
+        done
+    else
+        echo "Prometheus is healthy."
+    fi
+fi
 
 echo "Checking Prometheus persistent volume health..."
 PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
