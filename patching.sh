@@ -693,7 +693,10 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "PV is in '$PV_STATUS' state but no volume errors on pod. Skipping recovery."
                 fi
             else
+                CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+                CURRENT_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
                 echo "Prometheus PV '$BOUND_PV' is healthy (status: $PV_STATUS)."
+                echo "PVC: name=$PROM_PVC_NAME size=$CURRENT_PVC_SIZE storageClass=$CURRENT_PVC_SC"
             fi
         fi
     else
