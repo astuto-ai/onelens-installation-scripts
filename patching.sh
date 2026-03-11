@@ -1,14 +1,11 @@
 #!/bin/bash
 # Phase 1: Prerequisite Checks
-echo "Step 0: Checking prerequisites..."
+echo "Checking prerequisites..."
 
-# Define versions
 HELM_VERSION="v3.13.2"
 KUBECTL_VERSION="v1.28.2"
 
-# # Detect architecture
 ARCH=$(uname -m)
-
 if [[ "$ARCH" == "x86_64" ]]; then
     ARCH_TYPE="amd64"
 elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
@@ -18,29 +15,22 @@ else
     exit 1
 fi
 
-echo "Detected architecture: $ARCH_TYPE"
-
-# Phase 2: Install Helm
-echo "Installing Helm for $ARCH_TYPE..."
+# Phase 2: Install Helm and kubectl (quiet)
+echo "Installing helm ${HELM_VERSION} and kubectl ${KUBECTL_VERSION} (${ARCH_TYPE})..."
 curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
-    tar -xzvf helm.tar.gz && \
+    tar -xzf helm.tar.gz && \
     mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
     rm -rf linux-${ARCH_TYPE} helm.tar.gz
 
-helm version
-
-# Phase 3: Install kubectl
-echo "Installing kubectl for $ARCH_TYPE..."
-curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
+curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" -o kubectl && \
     chmod +x kubectl && \
     mv kubectl /usr/local/bin/kubectl
 
-kubectl version --client
-
-if ! command -v kubectl &> /dev/null; then
-    echo "Error: kubectl not found. Please install kubectl."
+if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
+    echo "Error: helm or kubectl installation failed."
     exit 1
 fi
+echo "Tools ready: helm $(helm version --short 2>/dev/null), kubectl $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'unknown')"
 
 # Phase 4: Cluster Pod Count and Resource Allocation
 
@@ -614,8 +604,8 @@ fi
 CURRENT_IMAGE_TAG="v${CURRENT_CHART_VERSION}"
 echo "Current chart version: $CURRENT_CHART_VERSION, image tag: $CURRENT_IMAGE_TAG"
 
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts
-helm repo update
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
+helm repo update >/dev/null 2>&1
 
 # Perform the upgrade with dynamically calculated resource values
 helm upgrade onelens-agent onelens/onelens-agent \
@@ -656,7 +646,28 @@ if [ $? -ne 0 ]; then
     echo "Upgrade failed and was automatically rolled back by --atomic flag"
     echo "--- Pod Status After Rollback ---"
     kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || true
+    echo "--- Events After Rollback ---"
+    kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || true
     exit 1
+fi
+
+# Wait for pods to stabilize after upgrade
+echo "Waiting for pods to stabilize..."
+STABLE=false
+for i in 1 2 3 4 5 6; do
+    sleep 10
+    NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | grep -v 'Completed' \
+        | grep -v -E '([0-9]+)/\1\s+Running' || true)
+    if [ -z "$NOT_READY" ]; then
+        STABLE=true
+        echo "All pods stable after $((i * 10))s"
+        break
+    fi
+    echo "Check $i/6: some pods not ready yet..."
+done
+if [ "$STABLE" != "true" ]; then
+    echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
 echo ""
@@ -684,7 +695,6 @@ echo "  requests: cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST memory=$PROMETHEU
 echo "  limits:   cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
 echo "Image tag: $CURRENT_IMAGE_TAG"
 
-# Pod status after upgrade
 echo "--- Pod Status After Upgrade ---"
 kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
 
