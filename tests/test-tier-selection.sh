@@ -42,14 +42,12 @@ assert_all_resource_vars() {
 # select_resource_tier — boundary tests with full variable verification
 ###############################################################################
 
-# Helper: call select_resource_tier without subshell (so globals are set in current shell)
-# Captures the echoed tier name via a temp file
-_TIER_TMP=$(mktemp)
+# Helper: call select_resource_tier (sets TIER global variable)
 call_tier() {
-    select_resource_tier "$1" > "$_TIER_TMP"
+    select_resource_tier "$1"
 }
 get_tier() {
-    cat "$_TIER_TMP"
+    echo "$TIER"
 }
 
 echo ""
@@ -149,7 +147,6 @@ call_tier 5000
 assert_eq "$(get_tier)" "very-large" "5000 pods -> very-large tier"
 
 # Cleanup
-rm -f "$_TIER_TMP"
 
 ###############################################################################
 # select_retention_tier — boundary tests

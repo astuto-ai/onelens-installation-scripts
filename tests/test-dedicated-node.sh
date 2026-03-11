@@ -103,7 +103,7 @@ done <<< "$patching_resource_sets"
 ###############################################################################
 # Test 6: Tolerations survive patching-style upgrade (reuse-values + resource --set)
 ###############################################################################
-select_resource_tier 200 >/dev/null
+select_resource_tier 200
 RENDERED_BOTH=$(helm template test-release onelens/onelens-agent \
     --version "$CHART_VERSION" \
     --set prometheus.server.tolerations[0].key="dedicated" \

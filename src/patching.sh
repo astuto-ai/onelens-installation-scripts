@@ -75,7 +75,7 @@ LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
 
 # --- Resource tier selection ---
-TIER=$(select_resource_tier "$TOTAL_PODS")
+select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
@@ -268,7 +268,7 @@ for i in 1 2 3 4 5 6; do
     sleep 10
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         | grep -v 'Completed' \
-        | grep -v -E '([0-9]+)/\1\s+Running' || true)
+        | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
     if [ -z "$NOT_READY" ]; then
         STABLE=true
         echo "All pods stable after $((i * 10))s"

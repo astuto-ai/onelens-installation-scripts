@@ -110,7 +110,7 @@ extract_container_resource() {
 echo ""
 echo "--- Test 1: Tiny tier resource values in rendered YAML ---"
 
-select_resource_tier 25 >/dev/null
+select_resource_tier 25
 select_retention_tier 25
 
 RENDERED=$(render_with_resources)
@@ -227,7 +227,7 @@ fi
 echo ""
 echo "--- Test 6: Large tier resource values in rendered YAML ---"
 
-select_resource_tier 800 >/dev/null
+select_resource_tier 800
 select_retention_tier 800
 
 RENDERED_LARGE=$(render_with_resources)

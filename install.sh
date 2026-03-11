@@ -304,7 +304,7 @@ echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULT
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
 
 # --- Resource tier selection ---
-TIER=$(select_resource_tier "$TOTAL_PODS")
+select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent

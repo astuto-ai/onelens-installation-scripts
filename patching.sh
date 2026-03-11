@@ -213,7 +213,7 @@ normalize_chart_version() {
 
 # select_resource_tier "$total_pods"
 # Set ALL global resource variables based on pod-count thresholds.
-# Echoes the tier name for logging.
+# Sets TIER variable with the tier name. Must be called without $() subshell.
 select_resource_tier() {
     local total_pods="$1"
 
@@ -244,7 +244,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="50m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="64Mi"
 
-        echo "tiny"
+        TIER="tiny"
 
     elif [ "$total_pods" -lt 100 ]; then
         # ── Small ──
@@ -273,7 +273,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
-        echo "small"
+        TIER="small"
 
     elif [ "$total_pods" -lt 500 ]; then
         # ── Medium ──
@@ -302,7 +302,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
-        echo "medium"
+        TIER="medium"
 
     elif [ "$total_pods" -lt 1000 ]; then
         # ── Large ──
@@ -331,7 +331,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
 
-        echo "large"
+        TIER="large"
 
     elif [ "$total_pods" -lt 1500 ]; then
         # ── Extra Large ──
@@ -360,7 +360,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
 
-        echo "extra-large"
+        TIER="extra-large"
 
     else
         # ── Very Large (1500+) ──
@@ -389,7 +389,7 @@ select_resource_tier() {
         PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
 
-        echo "very-large"
+        TIER="very-large"
     fi
 }
 
@@ -465,7 +465,7 @@ LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
 
 # --- Resource tier selection ---
-TIER=$(select_resource_tier "$TOTAL_PODS")
+select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
@@ -658,7 +658,7 @@ for i in 1 2 3 4 5 6; do
     sleep 10
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         | grep -v 'Completed' \
-        | grep -v -E '([0-9]+)/\1\s+Running' || true)
+        | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
     if [ -z "$NOT_READY" ]; then
         STABLE=true
         echo "All pods stable after $((i * 10))s"
