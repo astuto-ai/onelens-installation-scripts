@@ -607,12 +607,15 @@ if [ -n "$PROM_POD_PRE" ]; then
     PROM_POD_STATUS_PRE=$(kubectl get pod "$PROM_POD_PRE" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
 fi
 
-if [ -n "$PROM_SVC" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
-    # Pod is Running — check if Prometheus is actually healthy
-    PROM_HEALTH=$(curl -sf --max-time 5 "http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy" 2>/dev/null || true)
-    if [ -z "$PROM_HEALTH" ]; then
-        echo "Prometheus health check failed (pod is Running but not responding)."
-        echo "Restarting pod to surface potential volume mount failure..."
+if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
+    # Pod is Running — check for TSDB I/O errors in logs (indicates underlying disk is gone).
+    # The /-/healthy and /-/ready endpoints still return 200 even when disk is deleted,
+    # because Prometheus HTTP server runs from memory. Only TSDB logs reveal the truth.
+    TSDB_ERRORS=$(kubectl logs "$PROM_POD_PRE" -n onelens-agent -c prometheus-server --tail=50 2>/dev/null \
+        | grep -c 'input/output error' || true)
+    if [ "$TSDB_ERRORS" -gt 0 ] 2>/dev/null; then
+        echo "Prometheus pod is Running but has $TSDB_ERRORS TSDB I/O errors — underlying disk is gone."
+        echo "Restarting pod to surface volume mount failure..."
         kubectl delete pod "$PROM_POD_PRE" -n onelens-agent --grace-period=10 2>/dev/null || true
 
         # Wait for old pod to terminate and new pod to attempt mount
@@ -631,7 +634,7 @@ if [ -n "$PROM_SVC" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
             echo "Waiting for new pod... (attempt $_rw/6)"
         done
     else
-        echo "Prometheus is healthy."
+        echo "Prometheus TSDB is healthy (no I/O errors)."
     fi
 fi
 
