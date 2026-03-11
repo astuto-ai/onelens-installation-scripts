@@ -69,16 +69,8 @@ assert_eq "$patching_retention" "0" "patching.sh does NOT call select_retention_
 # ---------------------------------------------------------------------------
 # Test 8: Helm --set resource paths in patching.sh are a subset of install.sh
 # ---------------------------------------------------------------------------
-install_resource_sets=$(grep -oE '\-\-set [a-zA-Z][-a-zA-Z0-9._\[\]]*\.resources\.[a-z.]*' "$ROOT/install.sh" 2>/dev/null | sed 's/--set //' | sort -u || true)
-patching_resource_sets=$(grep -oE '\-\-set [a-zA-Z][-a-zA-Z0-9._\[\]]*\.resources\.[a-z.]*' "$ROOT/src/patching.sh" 2>/dev/null | sed 's/--set //' | sort -u || true)
-
-# Fallback to broader regex if needed
-if [ -z "$install_resource_sets" ]; then
-    install_resource_sets=$(grep 'resources\.' "$ROOT/install.sh" | grep -oE '[a-zA-Z][-a-zA-Z0-9._]*\.resources\.(requests|limits)\.(cpu|memory)' | sort -u || true)
-fi
-if [ -z "$patching_resource_sets" ]; then
-    patching_resource_sets=$(grep 'resources\.' "$ROOT/src/patching.sh" | grep -oE '[a-zA-Z][-a-zA-Z0-9._]*\.resources\.(requests|limits)\.(cpu|memory)' | sort -u || true)
-fi
+install_resource_sets=$(grep -- '--set' "$ROOT/install.sh" | grep -oE '[a-zA-Z][-a-zA-Z0-9._]*\.resources\.(requests|limits)\.(cpu|memory)' | sort -u || true)
+patching_resource_sets=$(grep -- '--set' "$ROOT/src/patching.sh" | grep -oE '[a-zA-Z][-a-zA-Z0-9._]*\.resources\.(requests|limits)\.(cpu|memory)' | sort -u || true)
 
 if [ -n "$patching_resource_sets" ] && [ -n "$install_resource_sets" ]; then
     missing=$(comm -23 <(echo "$patching_resource_sets") <(echo "$install_resource_sets"))
