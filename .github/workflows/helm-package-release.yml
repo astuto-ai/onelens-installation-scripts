@@ -233,6 +233,8 @@ jobs:
             **Source Code:** ${{ env.GITHUB_REPO_URL }}
             
             **Merge this PR to publish to GitHub Pages Helm repository.**
+          committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           assignees: ${{ github.actor }}
           draft: false
           delete-branch: true
