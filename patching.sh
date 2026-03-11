@@ -617,21 +617,30 @@ if [ -n "$PROM_PVC_NAME" ]; then
             # Log the old PVC details before deleting
             OLD_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
             OLD_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
+            PVC_STATUS=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
             echo "PV '$BOUND_PV' referenced by PVC '$PROM_PVC_NAME' does not exist."
-            echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC"
+            echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC status=$PVC_STATUS"
 
-            # Check 2: Confirm pod is stuck with volume errors
+            # Check 2: Confirm PVC is in Lost state, or pod is not running due to volume issues
+            # When PV is deleted, PVC goes to "Lost" and pod gets FailedScheduling (not even FailedMount).
             PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
-            VOLUME_ERRORS=""
+            POD_STATUS=""
+            POD_ISSUES=""
             if [ -n "$PROM_POD" ]; then
-                VOLUME_ERRORS=$(kubectl describe pod "$PROM_POD" -n onelens-agent 2>/dev/null | grep -E 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+                POD_STATUS=$(kubectl get pod "$PROM_POD" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                POD_ISSUES=$(kubectl describe pod "$PROM_POD" -n onelens-agent 2>/dev/null \
+                    | grep -E 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed|FailedScheduling|bound to non-existent' || true)
             fi
 
-            if [ -n "$VOLUME_ERRORS" ]; then
-                echo "Pod '$PROM_POD' has volume mount errors:"
-                echo "$VOLUME_ERRORS"
+            # Recovery if: PVC is Lost, OR pod has volume/scheduling errors, OR pod is not Running
+            if [ "$PVC_STATUS" = "Lost" ] || [ -n "$POD_ISSUES" ] || [ "$POD_STATUS" = "Pending" ]; then
+                echo "Prometheus pod: status=$POD_STATUS"
+                if [ -n "$POD_ISSUES" ]; then
+                    echo "Pod issues:"
+                    echo "$POD_ISSUES"
+                fi
 
-                # Check 3: Verify StorageClass exists (helm upgrade will recreate if missing, but good to log)
+                # Verify StorageClass exists (helm upgrade will recreate if missing, but good to log)
                 SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
                 if [ -n "$SC_EXISTS" ]; then
                     echo "StorageClass 'onelens-sc' exists — new PVC will use same encryption/provisioner settings."
@@ -655,7 +664,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "WARNING: PVC still exists after delete attempt. It may have finalizers. Helm upgrade will proceed anyway."
                 fi
             else
-                echo "PV is missing but no volume mount errors on pod. Skipping PVC deletion (pod may not use PV or issue is different)."
+                echo "PV is missing but PVC is '$PVC_STATUS' and pod is '$POD_STATUS'. Skipping recovery."
             fi
         else
             # PV exists — check if it's in a failed state
@@ -667,13 +676,21 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC"
 
                 PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
-                VOLUME_ERRORS=""
+                POD_STATUS=""
+                POD_ISSUES=""
                 if [ -n "$PROM_POD" ]; then
-                    VOLUME_ERRORS=$(kubectl describe pod "$PROM_POD" -n onelens-agent 2>/dev/null | grep -E 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+                    POD_STATUS=$(kubectl get pod "$PROM_POD" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                    POD_ISSUES=$(kubectl describe pod "$PROM_POD" -n onelens-agent 2>/dev/null \
+                        | grep -E 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed|FailedScheduling|bound to non-existent' || true)
                 fi
 
-                if [ -n "$VOLUME_ERRORS" ]; then
-                    echo "Pod has volume mount errors. Deleting broken PV and PVC..."
+                if [ -n "$POD_ISSUES" ] || [ "$POD_STATUS" = "Pending" ] || [ "$POD_STATUS" != "Running" ]; then
+                    echo "Prometheus pod: status=$POD_STATUS"
+                    if [ -n "$POD_ISSUES" ]; then
+                        echo "Pod issues:"
+                        echo "$POD_ISSUES"
+                    fi
+                    echo "Deleting broken PV and PVC..."
 
                     SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
                     if [ -n "$SC_EXISTS" ]; then
@@ -690,7 +707,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
                     PV_RECOVERY_DONE=true
                 else
-                    echo "PV is in '$PV_STATUS' state but no volume errors on pod. Skipping recovery."
+                    echo "PV is in '$PV_STATUS' state but pod is '$POD_STATUS'. Skipping recovery."
                 fi
             else
                 CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
