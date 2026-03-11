@@ -5,7 +5,6 @@
 # Reads the version from the VERSION file at the repo root and updates:
 #   - charts/onelens-agent/Chart.yaml (version, appVersion, dependency version)
 #   - charts/onelensdeployer/Chart.yaml (version, appVersion)
-#   - charts/onelensdeployer/values.yaml (job.imageTag, cronjob.imageTag)
 #   - globalvalues.yaml (onelens-agent.image.tag)
 #   - install.sh (RELEASE_VERSION defaults)
 #
@@ -55,13 +54,6 @@ if [[ -f "$DEPLOYER_CHART" ]]; then
     sedi "s/^version: .*/version: ${VERSION}/" "$DEPLOYER_CHART"
     sedi "s/^appVersion: .*/appVersion: ${VERSION}/" "$DEPLOYER_CHART"
     echo "  Updated $DEPLOYER_CHART"
-fi
-
-# --- charts/onelensdeployer/values.yaml (imageTag for job and cronjob) ---
-DEPLOYER_VALUES="${REPO_ROOT}/charts/onelensdeployer/values.yaml"
-if [[ -f "$DEPLOYER_VALUES" ]]; then
-    sedi "s/imageTag: v[0-9][0-9.]*/imageTag: v${VERSION}/g" "$DEPLOYER_VALUES"
-    echo "  Updated $DEPLOYER_VALUES"
 fi
 
 # --- globalvalues.yaml (only the onelens-agent image tag, not third-party images) ---

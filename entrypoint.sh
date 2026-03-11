@@ -99,29 +99,45 @@ elif [ "$deployment_type" = "cronjob" ]; then
   PATCH_OUTPUT=$(cat "$PATCH_LOG_FILE")
   rm -f "$PATCH_LOG_FILE"
 
-  # Truncate log to 10000 chars if needed
+  # Truncate detailed logs to 10000 chars if needed
   if [ ${#PATCH_OUTPUT} -gt 10000 ]; then
       PATCH_OUTPUT="[truncated]...${PATCH_OUTPUT: -9900}"
   fi
 
+  # Extract the summary line from patching output (last "Patching complete." line)
+  PATCH_SUMMARY=$(echo "$PATCH_OUTPUT" | grep '^Patching complete\.' | tail -1)
+
   if [ "$PATCH_EXIT" -eq 0 ]; then
-      # Report successful patching with full log
+      # logs: high-level summary for quick view
+      # patching_logs: full detailed output for debugging
       current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      SUMMARY_LOG="SUCCESS: ${PATCH_SUMMARY:-Patching completed successfully}"
       payload=$(jq -n \
           --arg reg_id "$REGISTRATION_ID" \
           --arg token "$CLUSTER_TOKEN" \
-          --arg logs "$PATCH_OUTPUT" \
+          --arg logs "$SUMMARY_LOG" \
+          --arg patching_logs "$PATCH_OUTPUT" \
           --arg prev "$current_version" \
           --arg curr "$patching_version" \
           --arg ts "$current_timestamp" \
-          '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_enabled: false, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts}}')
+          '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, patching_enabled: false, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts}}')
       curl -s --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
           --header 'Content-Type: application/json' \
           --data "$payload" >/dev/null
       exit 0
   else
-      # Report failed patching with full log for remote debugging
-      update_cluster_logs "Patching failed (exit code $PATCH_EXIT). Output: $PATCH_OUTPUT"
+      # logs: high-level failure message
+      # patching_logs: full output for remote debugging
+      FAIL_LOG="FAILED (exit $PATCH_EXIT): ${PATCH_SUMMARY:-Patching failed}"
+      payload=$(jq -n \
+          --arg reg_id "$REGISTRATION_ID" \
+          --arg token "$CLUSTER_TOKEN" \
+          --arg logs "$FAIL_LOG" \
+          --arg patching_logs "$PATCH_OUTPUT" \
+          '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs}}')
+      curl -s --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
+          --header 'Content-Type: application/json' \
+          --data "$payload" >/dev/null
       exit 1
   fi
 else
