@@ -259,20 +259,23 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 fi
 
                 echo "Deleting broken PVC '$PROM_PVC_NAME' to allow volume recreation..."
-                # Remove the helm resource-policy annotation so kubectl delete works
+                # Remove finalizers and annotations that block deletion
+                kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
                 kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
                 kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
 
-                # Wait briefly for PVC deletion to propagate
-                sleep 5
-                PVC_STILL_EXISTS=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
-                if [ -z "$PVC_STILL_EXISTS" ]; then
-                    echo "PVC deleted successfully. Helm upgrade will create a new PVC and volume."
-                    RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
-                    PV_RECOVERY_DONE=true
-                else
-                    echo "WARNING: PVC still exists after delete attempt. It may have finalizers. Helm upgrade will proceed anyway."
-                fi
+                # Wait for PVC deletion to complete
+                for _w in 1 2 3 4 5 6; do
+                    sleep 5
+                    PVC_STILL_EXISTS=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
+                    if [ -z "$PVC_STILL_EXISTS" ]; then
+                        echo "PVC fully deleted."
+                        break
+                    fi
+                    echo "Waiting for PVC deletion... (attempt $_w/6)"
+                done
+                RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
+                PV_RECOVERY_DONE=true
             else
                 echo "PV is missing but PVC is '$PVC_STATUS' and pod is '$POD_STATUS'. Skipping recovery."
             fi
@@ -309,11 +312,23 @@ if [ -n "$PROM_PVC_NAME" ]; then
                         echo "StorageClass 'onelens-sc' not found — helm upgrade will recreate it from release values."
                     fi
 
+                    # Remove finalizers first — PV/PVC with finalizers get stuck in Terminating
+                    kubectl patch pv "$BOUND_PV" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+                    kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
                     kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
-                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
                     kubectl delete pv "$BOUND_PV" --wait=false 2>/dev/null || true
-                    sleep 5
-                    echo "Broken PV and PVC deleted. Helm upgrade will create fresh volume."
+                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
+                    # Wait for deletion to complete
+                    for _w in 1 2 3 4 5 6; do
+                        sleep 5
+                        PVC_GONE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
+                        PV_GONE=$(kubectl get pv "$BOUND_PV" --no-headers 2>/dev/null || true)
+                        if [ -z "$PVC_GONE" ] && [ -z "$PV_GONE" ]; then
+                            echo "PV and PVC fully deleted."
+                            break
+                        fi
+                        echo "Waiting for PV/PVC deletion... (attempt $_w/6)"
+                    done
                     RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
                     PV_RECOVERY_DONE=true
                 else
@@ -348,11 +363,23 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     fi
 
                     echo "Deleting broken PV and PVC..."
+                    # Remove finalizers first — PV/PVC with finalizers get stuck in Terminating
+                    kubectl patch pv "$BOUND_PV" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+                    kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
                     kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
-                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
                     kubectl delete pv "$BOUND_PV" --wait=false 2>/dev/null || true
-                    sleep 5
-                    echo "Broken PV and PVC deleted. Helm upgrade will create fresh volume."
+                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
+                    # Wait for deletion to complete
+                    for _w in 1 2 3 4 5 6; do
+                        sleep 5
+                        PVC_GONE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
+                        PV_GONE=$(kubectl get pv "$BOUND_PV" --no-headers 2>/dev/null || true)
+                        if [ -z "$PVC_GONE" ] && [ -z "$PV_GONE" ]; then
+                            echo "PV and PVC fully deleted."
+                            break
+                        fi
+                        echo "Waiting for PV/PVC deletion... (attempt $_w/6)"
+                    done
                     RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
                     PV_RECOVERY_DONE=true
                 else
