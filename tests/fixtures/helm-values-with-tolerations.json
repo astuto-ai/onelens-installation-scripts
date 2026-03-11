@@ -1,0 +1,42 @@
+{
+  "prometheus": {
+    "server": {
+      "resources": {"requests": {"cpu": "420m", "memory": "2834Mi"}, "limits": {"cpu": "420m", "memory": "2834Mi"}},
+      "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "onelens", "effect": "NoSchedule"}],
+      "nodeSelector": {"dedicated": "onelens"}
+    },
+    "kube-state-metrics": {
+      "resources": {"requests": {"cpu": "120m", "memory": "256Mi"}, "limits": {"cpu": "120m", "memory": "256Mi"}},
+      "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "onelens", "effect": "NoSchedule"}],
+      "nodeSelector": {"dedicated": "onelens"}
+    },
+    "prometheus-pushgateway": {
+      "resources": {"requests": {"cpu": "100m", "memory": "100Mi"}, "limits": {"cpu": "100m", "memory": "100Mi"}},
+      "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "onelens", "effect": "NoSchedule"}],
+      "nodeSelector": {"dedicated": "onelens"}
+    },
+    "configmapReload": {
+      "prometheus": {
+        "resources": {"requests": {"cpu": "100m", "memory": "100Mi"}, "limits": {"cpu": "100m", "memory": "100Mi"}}
+      }
+    }
+  },
+  "prometheus-opencost-exporter": {
+    "opencost": {
+      "exporter": {
+        "resources": {"requests": {"cpu": "240m", "memory": "400Mi"}, "limits": {"cpu": "240m", "memory": "400Mi"}},
+        "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "onelens", "effect": "NoSchedule"}],
+        "nodeSelector": {"dedicated": "onelens"}
+      }
+    }
+  },
+  "onelens-agent": {
+    "resources": {"requests": {"cpu": "125m", "memory": "480Mi"}, "limits": {"cpu": "375m", "memory": "640Mi"}},
+    "cronJob": {
+      "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "onelens", "effect": "NoSchedule"}],
+      "nodeSelector": {"dedicated": "onelens"}
+    },
+    "image": {"tag": "v2.1.3"},
+    "secrets": {"API_BASE_URL": "https://api-in.onelens.cloud"}
+  }
+}

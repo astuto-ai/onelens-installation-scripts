@@ -18,6 +18,7 @@ spec:
   suspend: {{ .Values.cronjob.suspend }}
   jobTemplate:
     spec:
+      backoffLimit: {{ .Values.cronjob.backoffLimit }}
       ttlSecondsAfterFinished: 120
       template:
         metadata:

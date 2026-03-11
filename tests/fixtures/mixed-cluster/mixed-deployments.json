@@ -1,0 +1,9 @@
+{
+  "items": [
+    {"metadata": {"name": "frontend", "namespace": "app"}, "spec": {"replicas": 3}},
+    {"metadata": {"name": "backend", "namespace": "app"}, "spec": {"replicas": 5}},
+    {"metadata": {"name": "gateway", "namespace": "infra"}, "spec": {"replicas": 2}},
+    {"metadata": {"name": "cron-runner", "namespace": "jobs"}, "spec": {"replicas": 1}},
+    {"metadata": {"name": "monitoring", "namespace": "infra"}, "spec": {"replicas": 1}}
+  ]
+}

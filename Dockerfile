@@ -21,6 +21,7 @@ ARG CACHE_BUST=unknown
 RUN echo "Build: $CACHE_BUST"
 
 COPY install.sh /install.sh
+COPY lib/ /lib/
 COPY globalvalues.yaml /globalvalues.yaml
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

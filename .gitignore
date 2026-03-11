@@ -1,2 +1,4 @@
-# Internal documentation - not for public repo
 internalwiki/
+
+# Build output directory (legacy)
+dist/

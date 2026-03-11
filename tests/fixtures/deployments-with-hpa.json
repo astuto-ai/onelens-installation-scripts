@@ -1,0 +1,6 @@
+{
+  "items": [
+    {"metadata": {"name": "web", "namespace": "default"}, "spec": {"replicas": 3}},
+    {"metadata": {"name": "api", "namespace": "default"}, "spec": {"replicas": 2}}
+  ]
+}
