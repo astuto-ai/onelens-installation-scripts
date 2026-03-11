@@ -542,7 +542,61 @@ else
   echo "Using patching values as-is (no existing release values or jq not available)."
 fi
 
-# Phase 5: Helm Upgrade with Dynamic Resource Allocation
+# Phase 5: Capture pre-patch state for diagnostics
+
+echo ""
+echo "========== PRE-PATCH STATE =========="
+
+# Helm release info
+echo "--- Helm Release ---"
+helm list -n onelens-agent --no-headers 2>/dev/null || echo "(helm list failed)"
+
+# Pod status in onelens-agent namespace
+echo "--- Pod Status (onelens-agent namespace) ---"
+kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
+
+# Node summary
+echo "--- Nodes ---"
+NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+echo "Total nodes: $NODE_COUNT"
+kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,STATUS:.status.conditions[-1].type,VERSION:.status.nodeInfo.kubeletVersion' 2>/dev/null || true
+
+# Current resource configuration from helm values
+echo "--- Current Resource Configuration ---"
+if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+  echo "Prometheus server:"
+  echo "  requests: cpu=$(_get '.prometheus.server.resources.requests.cpu') memory=$(_get '.prometheus.server.resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.prometheus.server.resources.limits.cpu') memory=$(_get '.prometheus.server.resources.limits.memory')"
+  echo "OpenCost exporter:"
+  echo "  requests: cpu=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.cpu') memory=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu') memory=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory')"
+  echo "OneLens Agent:"
+  echo "  requests: cpu=$(_get '.["onelens-agent"].resources.requests.cpu') memory=$(_get '.["onelens-agent"].resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.["onelens-agent"].resources.limits.cpu') memory=$(_get '.["onelens-agent"].resources.limits.memory')"
+  echo "KSM:"
+  echo "  requests: cpu=$(_get '.prometheus["kube-state-metrics"].resources.requests.cpu') memory=$(_get '.prometheus["kube-state-metrics"].resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.prometheus["kube-state-metrics"].resources.limits.cpu') memory=$(_get '.prometheus["kube-state-metrics"].resources.limits.memory')"
+  echo "Pushgateway:"
+  echo "  requests: cpu=$(_get '.prometheus["prometheus-pushgateway"].resources.requests.cpu') memory=$(_get '.prometheus["prometheus-pushgateway"].resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.prometheus["prometheus-pushgateway"].resources.limits.cpu') memory=$(_get '.prometheus["prometheus-pushgateway"].resources.limits.memory')"
+  echo "Configmap-reload:"
+  echo "  requests: cpu=$(_get '.prometheus.configmapReload.prometheus.resources.requests.cpu') memory=$(_get '.prometheus.configmapReload.prometheus.resources.requests.memory')"
+  echo "  limits:   cpu=$(_get '.prometheus.configmapReload.prometheus.resources.limits.cpu') memory=$(_get '.prometheus.configmapReload.prometheus.resources.limits.memory')"
+  echo "Image tags:"
+  echo "  onelens-agent: $(_get '.["onelens-agent"].image.tag')"
+  echo "  opencost: $(_get '.["prometheus-opencost-exporter"].opencost.exporter.image.tag')"
+else
+  echo "(helm values not available or jq missing)"
+fi
+
+# Events in our namespace (catches OOMKilled, CrashLoopBackOff, etc.)
+echo "--- Recent Events (onelens-agent namespace, last 10) ---"
+kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || echo "(no events)"
+
+echo "========== END PRE-PATCH STATE =========="
+echo ""
+
+# Phase 6: Helm Upgrade with Dynamic Resource Allocation
 
 # Resolve chart version and image tag from the currently deployed release
 CURRENT_CHART_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//')
@@ -598,11 +652,45 @@ helm upgrade onelens-agent onelens/onelens-agent \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
 
-if [ $? -eq 0 ]; then
-    echo "Upgrade completed successfully with dynamic resource allocation based on $TOTAL_PODS pods."
-else
+if [ $? -ne 0 ]; then
     echo "Upgrade failed and was automatically rolled back by --atomic flag"
+    echo "--- Pod Status After Rollback ---"
+    kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || true
     exit 1
 fi
 
-echo "Patching complete with dynamic resource allocation based on $TOTAL_PODS pods."
+echo ""
+echo "========== POST-PATCH STATE =========="
+
+echo "--- Applied Resource Configuration ---"
+echo "Tier: $TIER | Pods: $TOTAL_PODS | Label multiplier: ${LABEL_MULTIPLIER}x"
+echo "Prometheus server:"
+echo "  requests: cpu=$PROMETHEUS_CPU_REQUEST memory=$PROMETHEUS_MEMORY_REQUEST"
+echo "  limits:   cpu=$PROMETHEUS_CPU_LIMIT memory=$PROMETHEUS_MEMORY_LIMIT"
+echo "OpenCost exporter:"
+echo "  requests: cpu=$OPENCOST_CPU_REQUEST memory=$OPENCOST_MEMORY_REQUEST"
+echo "  limits:   cpu=$OPENCOST_CPU_LIMIT memory=$OPENCOST_MEMORY_LIMIT"
+echo "OneLens Agent:"
+echo "  requests: cpu=$ONELENS_CPU_REQUEST memory=$ONELENS_MEMORY_REQUEST"
+echo "  limits:   cpu=$ONELENS_CPU_LIMIT memory=$ONELENS_MEMORY_LIMIT"
+echo "KSM:"
+echo "  requests: cpu=$KSM_CPU_REQUEST memory=$KSM_MEMORY_REQUEST"
+echo "  limits:   cpu=$KSM_CPU_LIMIT memory=$KSM_MEMORY_LIMIT"
+echo "Pushgateway:"
+echo "  requests: cpu=$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST memory=$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST"
+echo "  limits:   cpu=$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT memory=$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
+echo "Configmap-reload:"
+echo "  requests: cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST"
+echo "  limits:   cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
+echo "Image tag: $CURRENT_IMAGE_TAG"
+
+# Pod status after upgrade
+echo "--- Pod Status After Upgrade ---"
+kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
+
+echo "--- Helm Release After Upgrade ---"
+helm list -n onelens-agent --no-headers 2>/dev/null || true
+
+echo "========== END POST-PATCH STATE =========="
+echo ""
+echo "Patching complete. Chart: $CURRENT_CHART_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
