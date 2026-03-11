@@ -320,10 +320,47 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "PV is in '$PV_STATUS' state but pod is '$POD_STATUS'. Skipping recovery."
                 fi
             else
-                CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
-                CURRENT_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
-                echo "Prometheus PV '$BOUND_PV' is healthy (status: $PV_STATUS)."
-                echo "PVC: name=$PROM_PVC_NAME size=$CURRENT_PVC_SIZE storageClass=$CURRENT_PVC_SC"
+                # PV exists and status looks fine — but underlying disk may be deleted.
+                # Check if pod has FailedMount errors (EBS gone but PV/PVC still show Bound).
+                PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+                POD_STATUS=""
+                MOUNT_ERRORS=""
+                if [ -n "$PROM_POD" ]; then
+                    POD_STATUS=$(kubectl get pod "$PROM_POD" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                    MOUNT_ERRORS=$(kubectl describe pod "$PROM_POD" -n onelens-agent 2>/dev/null \
+                        | grep -E 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+                fi
+
+                if [ -n "$MOUNT_ERRORS" ] && [ "$POD_STATUS" != "Running" ]; then
+                    OLD_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+                    OLD_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
+                    echo "PV '$BOUND_PV' exists (status: $PV_STATUS) but underlying disk is gone."
+                    echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC"
+                    echo "Prometheus pod: status=$POD_STATUS"
+                    echo "Mount errors:"
+                    echo "$MOUNT_ERRORS"
+
+                    SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
+                    if [ -n "$SC_EXISTS" ]; then
+                        echo "StorageClass 'onelens-sc' exists — new PVC will use same encryption/provisioner settings."
+                    else
+                        echo "StorageClass 'onelens-sc' not found — helm upgrade will recreate it from release values."
+                    fi
+
+                    echo "Deleting broken PV and PVC..."
+                    kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
+                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
+                    kubectl delete pv "$BOUND_PV" --wait=false 2>/dev/null || true
+                    sleep 5
+                    echo "Broken PV and PVC deleted. Helm upgrade will create fresh volume."
+                    RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
+                    PV_RECOVERY_DONE=true
+                else
+                    CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+                    CURRENT_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
+                    echo "Prometheus PV '$BOUND_PV' is healthy (status: $PV_STATUS)."
+                    echo "PVC: name=$PROM_PVC_NAME size=$CURRENT_PVC_SIZE storageClass=$CURRENT_PVC_SC"
+                fi
             fi
         fi
     else
