@@ -107,39 +107,93 @@ PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="32Mi"
 PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT="10m"
 PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="32Mi"
 
-# Phase 4.5: Use higher of (patching value, existing value) for each resource
-# If existing in K8s is higher → keep that value (no decrease).
-# If existing in K8s is lower than patching → use patching value (increase to patching level).
-# If no existing value (e.g. first run) or helm/jq unavailable, use patching values as-is.
-# Note: _max_cpu, _max_memory, _cpu_to_millicores, _memory_to_mi are provided by the library.
+# Phase 4.5: Read customer-specific values from existing release
+# These are values the customer set during install that must be preserved.
+# Everything else (images, configs, resources) comes fresh from the chart.
 
 CURRENT_VALUES=$(helm get values onelens-agent -n onelens-agent -a -o json 2>/dev/null || true)
 
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
-  echo "Comparing patching values with existing release; will use the higher value for each resource (keep higher existing, or use patching if existing is lower)."
+  echo "Reading customer-specific values from existing release..."
   _get() { echo "$CURRENT_VALUES" | jq -r "$1 // empty"; }
-  PROMETHEUS_CPU_REQUEST=$(_max_cpu "$PROMETHEUS_CPU_REQUEST" "$(_get '.prometheus.server.resources.requests.cpu')")
-  PROMETHEUS_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_MEMORY_REQUEST" "$(_get '.prometheus.server.resources.requests.memory')")
-  PROMETHEUS_CPU_LIMIT=$(_max_cpu "$PROMETHEUS_CPU_LIMIT" "$(_get '.prometheus.server.resources.limits.cpu')")
-  PROMETHEUS_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_MEMORY_LIMIT" "$(_get '.prometheus.server.resources.limits.memory')")
-  OPENCOST_CPU_REQUEST=$(_max_cpu "$OPENCOST_CPU_REQUEST" "$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.cpu')")
-  OPENCOST_MEMORY_REQUEST=$(_max_memory "$OPENCOST_MEMORY_REQUEST" "$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory')")
-  OPENCOST_CPU_LIMIT=$(_max_cpu "$OPENCOST_CPU_LIMIT" "$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu')")
-  OPENCOST_MEMORY_LIMIT=$(_max_memory "$OPENCOST_MEMORY_LIMIT" "$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory')")
-  ONELENS_CPU_REQUEST=$(_max_cpu "$ONELENS_CPU_REQUEST" "$(_get '.["onelens-agent"].resources.requests.cpu')")
-  ONELENS_MEMORY_REQUEST=$(_max_memory "$ONELENS_MEMORY_REQUEST" "$(_get '.["onelens-agent"].resources.requests.memory')")
-  ONELENS_CPU_LIMIT=$(_max_cpu "$ONELENS_CPU_LIMIT" "$(_get '.["onelens-agent"].resources.limits.cpu')")
-  ONELENS_MEMORY_LIMIT=$(_max_memory "$ONELENS_MEMORY_LIMIT" "$(_get '.["onelens-agent"].resources.limits.memory')")
-  PROMETHEUS_PUSHGATEWAY_CPU_REQUEST=$(_max_cpu "$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" "$(_get '.prometheus["prometheus-pushgateway"].resources.requests.cpu')")
-  PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" "$(_get '.prometheus["prometheus-pushgateway"].resources.requests.memory')")
-  PROMETHEUS_PUSHGATEWAY_CPU_LIMIT=$(_max_cpu "$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" "$(_get '.prometheus["prometheus-pushgateway"].resources.limits.cpu')")
-  PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$(_get '.prometheus["prometheus-pushgateway"].resources.limits.memory')")
-  KSM_CPU_REQUEST=$(_max_cpu "$KSM_CPU_REQUEST" "$(_get '.prometheus["kube-state-metrics"].resources.requests.cpu')")
-  KSM_MEMORY_REQUEST=$(_max_memory "$KSM_MEMORY_REQUEST" "$(_get '.prometheus["kube-state-metrics"].resources.requests.memory')")
-  KSM_CPU_LIMIT=$(_max_cpu "$KSM_CPU_LIMIT" "$(_get '.prometheus["kube-state-metrics"].resources.limits.cpu')")
-  KSM_MEMORY_LIMIT=$(_max_memory "$KSM_MEMORY_LIMIT" "$(_get '.prometheus["kube-state-metrics"].resources.limits.memory')")
+
+  # Identity values (set during install, never change)
+  CLUSTER_NAME=$(_get '.["onelens-agent"].env.CLUSTER_NAME')
+  ACCOUNT_ID=$(_get '.["onelens-agent"].env.ACCOUNT_ID')
+  API_BASE_URL=$(_get '.["onelens-agent"].secrets.API_BASE_URL')
+  CLUSTER_TOKEN=$(_get '.["onelens-agent"].secrets.CLUSTER_TOKEN')
+  REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
+  DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
+  PVC_ENABLED=$(_get '.prometheus.server.persistentVolume.enabled')
+
+  # Detect cloud provider from existing StorageClass provisioner
+  SC_PROVISIONER=$(_get '.["onelens-agent"].storageClass.provisioner')
+
+  echo "  Cluster: $CLUSTER_NAME | Cloud: $SC_PROVISIONER | PVC: $PVC_ENABLED"
+
+  # Extract complex customer values (tolerations, nodeSelector, podLabels) into temp file
+  # These are hard to pass via --set due to arrays and special characters in keys
+  CUSTOMER_VALUES_FILE=$(mktemp)
+  echo "$CURRENT_VALUES" | jq '{
+    prometheus: {
+      server: {
+        tolerations: (.prometheus.server.tolerations // []),
+        nodeSelector: (.prometheus.server.nodeSelector // {}),
+        podLabels: (.prometheus.server.podLabels // {})
+      },
+      "kube-state-metrics": {
+        tolerations: (.prometheus["kube-state-metrics"].tolerations // []),
+        nodeSelector: (.prometheus["kube-state-metrics"].nodeSelector // {}),
+        podLabels: (.prometheus["kube-state-metrics"].podLabels // {})
+      },
+      "prometheus-pushgateway": {
+        tolerations: (.prometheus["prometheus-pushgateway"].tolerations // []),
+        nodeSelector: (.prometheus["prometheus-pushgateway"].nodeSelector // {}),
+        podLabels: (.prometheus["prometheus-pushgateway"].podLabels // {})
+      }
+    },
+    "prometheus-opencost-exporter": {
+      opencost: {
+        tolerations: (.["prometheus-opencost-exporter"].opencost.tolerations // []),
+        nodeSelector: (.["prometheus-opencost-exporter"].opencost.nodeSelector // {})
+      },
+      podLabels: (.["prometheus-opencost-exporter"].podLabels // {})
+    },
+    "onelens-agent": {
+      cronJob: {
+        tolerations: (.["onelens-agent"].cronJob.tolerations // []),
+        nodeSelector: (.["onelens-agent"].cronJob.nodeSelector // {}),
+        podLabels: (.["onelens-agent"].cronJob.podLabels // {})
+      },
+      storageClass: (.["onelens-agent"].storageClass // {})
+    }
+  }' > "$CUSTOMER_VALUES_FILE" 2>/dev/null || true
+
+  # Read PVC size from existing PVC (not from helm values — PVC may have been resized)
+  EXISTING_PVC_SIZE=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+      -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+  if [ -z "$EXISTING_PVC_SIZE" ]; then
+      EXISTING_PVC_SIZE=$(_get '.prometheus.server.persistentVolume.size')
+  fi
 else
-  echo "Using patching values as-is (no existing release values or jq not available)."
+  echo "WARNING: Could not read existing release values. Using defaults."
+  CLUSTER_NAME=""
+  ACCOUNT_ID=""
+  API_BASE_URL="https://api-in.onelens.cloud"
+  CLUSTER_TOKEN=""
+  REGISTRATION_ID=""
+  DEFAULT_CLUSTER_ID=""
+  PVC_ENABLED="true"
+  SC_PROVISIONER=""
+  CUSTOMER_VALUES_FILE=""
+  EXISTING_PVC_SIZE=""
+fi
+
+# Validate required identity values
+if [ -z "$CLUSTER_TOKEN" ] || [ -z "$REGISTRATION_ID" ]; then
+    echo "ERROR: Could not read CLUSTER_TOKEN or REGISTRATION_ID from existing release."
+    echo "These are required for helm upgrade. Check if onelens-agent is installed."
+    exit 1
 fi
 
 # Phase 5: Capture pre-patch state for diagnostics
@@ -284,7 +338,7 @@ _do_pv_recovery() {
         echo "  1. kubectl patch pvc $pvc_name -n onelens-agent -p '{\"metadata\":{\"finalizers\":null}}'"
         echo "  2. kubectl delete pvc $pvc_name -n onelens-agent"
     fi
-    echo "  Then re-run patching or: helm upgrade onelens-agent onelens/onelens-agent --reuse-values -n onelens-agent"
+    echo "  Then re-run patching to apply the upgrade."
     if [ -n "$old_size" ]; then
         echo ""
         echo "Note: Current PVC size is $old_size. Ensure helm values match if PVC was resized outside helm."
@@ -399,21 +453,30 @@ fi
 
 # Phase 6: Helm Upgrade with Dynamic Resource Allocation
 
-# Resolve chart version and image tag from the currently deployed release
-CURRENT_CHART_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//')
-if [ -z "$CURRENT_CHART_VERSION" ] || [ "$CURRENT_CHART_VERSION" = "null" ]; then
-    echo "ERROR: Could not determine current chart version from helm release."
-    exit 1
+# Select retention tier based on pod count (sets PROMETHEUS_RETENTION, PROMETHEUS_RETENTION_SIZE, PROMETHEUS_VOLUME_SIZE)
+select_retention_tier "$TOTAL_PODS"
+echo "Retention tier: retention=$PROMETHEUS_RETENTION retentionSize=$PROMETHEUS_RETENTION_SIZE volumeSize=$PROMETHEUS_VOLUME_SIZE"
+
+# Use existing PVC size if larger than tier default (PVC may have been manually resized)
+if [ -n "$EXISTING_PVC_SIZE" ]; then
+    EXISTING_SIZE_GI=$(echo "$EXISTING_PVC_SIZE" | sed 's/Gi//')
+    TIER_SIZE_GI=$(echo "$PROMETHEUS_VOLUME_SIZE" | sed 's/Gi//')
+    if [ "$EXISTING_SIZE_GI" -gt "$TIER_SIZE_GI" ] 2>/dev/null; then
+        echo "Existing PVC size ($EXISTING_PVC_SIZE) is larger than tier default ($PROMETHEUS_VOLUME_SIZE). Keeping existing size."
+        PROMETHEUS_VOLUME_SIZE="$EXISTING_PVC_SIZE"
+    fi
 fi
 
-# Normalize and validate version using library function
-if ! CURRENT_CHART_VERSION=$(normalize_chart_version "$CURRENT_CHART_VERSION"); then
-    echo "ERROR: Chart version '$CURRENT_CHART_VERSION' is not a valid semver. Skipping patching."
-    exit 1
+# Check for existing bound PVC to preserve data across upgrades
+EXISTING_CLAIM_FLAG=""
+PVC_NAME="onelens-agent-prometheus-server"
+if kubectl get pvc "$PVC_NAME" -n onelens-agent &>/dev/null; then
+    PVC_STATUS=$(kubectl get pvc "$PVC_NAME" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    if [ "$PVC_STATUS" = "Bound" ]; then
+        echo "Found existing Bound PVC '$PVC_NAME' — reusing to preserve prometheus data."
+        EXISTING_CLAIM_FLAG="--set prometheus.server.persistentVolume.existingClaim=$PVC_NAME"
+    fi
 fi
-
-CURRENT_IMAGE_TAG="v${CURRENT_CHART_VERSION}"
-echo "Current chart version: $CURRENT_CHART_VERSION, image tag: $CURRENT_IMAGE_TAG"
 
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
 helm repo update >/dev/null 2>&1
@@ -424,40 +487,78 @@ if [ "$_PV_NEEDS_MANUAL_FIX" = "true" ]; then
     exit 1
 fi
 
-# Perform the upgrade with dynamically calculated resource values
-helm upgrade onelens-agent onelens/onelens-agent \
-  --version="$CURRENT_CHART_VERSION" \
-  --reuse-values \
+# Build helm upgrade command
+# Key design: NO --reuse-values, NO --version
+#   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
+#   - Customer values file preserves tolerations, nodeSelector, podLabels, storageClass
+#   - --set overrides for identity, resources, retention, PVC
+#   - Without --version, helm uses latest chart from repo (auto-converge to latest)
+HELM_CMD="helm upgrade onelens-agent onelens/onelens-agent \
+  -f /globalvalues.yaml \
   --history-max 200 \
   --atomic \
   --timeout=5m \
-  --namespace onelens-agent \
-  --set prometheus.server.resources.requests.cpu="$PROMETHEUS_CPU_REQUEST" \
-  --set prometheus.server.resources.requests.memory="$PROMETHEUS_MEMORY_REQUEST" \
-  --set prometheus.server.resources.limits.cpu="$PROMETHEUS_CPU_LIMIT" \
-  --set prometheus.server.resources.limits.memory="$PROMETHEUS_MEMORY_LIMIT" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu="$OPENCOST_CPU_REQUEST" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory="$OPENCOST_MEMORY_REQUEST" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu="$OPENCOST_CPU_LIMIT" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory="$OPENCOST_MEMORY_LIMIT" \
-  --set onelens-agent.resources.requests.cpu="$ONELENS_CPU_REQUEST" \
-  --set onelens-agent.resources.requests.memory="$ONELENS_MEMORY_REQUEST" \
-  --set onelens-agent.resources.limits.cpu="$ONELENS_CPU_LIMIT" \
-  --set onelens-agent.resources.limits.memory="$ONELENS_MEMORY_LIMIT" \
-  --set onelens-agent.image.tag="$CURRENT_IMAGE_TAG" \
-  --set onelens-agent.secrets.API_BASE_URL="https://api-in.onelens.cloud" \
-  --set prometheus.prometheus-pushgateway.resources.requests.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" \
-  --set prometheus.prometheus-pushgateway.resources.requests.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
-  --set prometheus.prometheus-pushgateway.resources.limits.cpu="$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" \
-  --set prometheus.prometheus-pushgateway.resources.limits.memory="$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" \
-  --set prometheus.kube-state-metrics.resources.requests.cpu="$KSM_CPU_REQUEST" \
-  --set prometheus.kube-state-metrics.resources.requests.memory="$KSM_MEMORY_REQUEST" \
-  --set prometheus.kube-state-metrics.resources.limits.cpu="$KSM_CPU_LIMIT" \
-  --set prometheus.kube-state-metrics.resources.limits.memory="$KSM_MEMORY_LIMIT" \
-  --set prometheus.configmapReload.prometheus.resources.requests.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" \
-  --set prometheus.configmapReload.prometheus.resources.requests.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" \
-  --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
-  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
+  --namespace onelens-agent"
+
+# Apply customer values (tolerations, nodeSelector, podLabels, storageClass)
+if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
+    HELM_CMD="$HELM_CMD -f $CUSTOMER_VALUES_FILE"
+fi
+
+# Identity values (preserved from existing release)
+HELM_CMD="$HELM_CMD \
+  --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
+  --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT_ID\" \
+  --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
+  --set onelens-agent.secrets.CLUSTER_TOKEN=\"$CLUSTER_TOKEN\" \
+  --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\" \
+  --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$DEFAULT_CLUSTER_ID\""
+
+# PVC settings
+HELM_CMD="$HELM_CMD \
+  --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
+  $EXISTING_CLAIM_FLAG \
+  --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+
+# StorageClass provisioner (preserve cloud provider setting from install)
+if [ -n "$SC_PROVISIONER" ]; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=\"$SC_PROVISIONER\""
+fi
+
+# Retention settings
+HELM_CMD="$HELM_CMD \
+  --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
+  --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\""
+
+# Resource allocations (dynamically calculated based on cluster size)
+HELM_CMD="$HELM_CMD \
+  --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
+  --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
+  --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
+  --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$OPENCOST_CPU_REQUEST\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$OPENCOST_MEMORY_REQUEST\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$OPENCOST_CPU_LIMIT\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$OPENCOST_MEMORY_LIMIT\" \
+  --set onelens-agent.resources.requests.cpu=\"$ONELENS_CPU_REQUEST\" \
+  --set onelens-agent.resources.requests.memory=\"$ONELENS_MEMORY_REQUEST\" \
+  --set onelens-agent.resources.limits.cpu=\"$ONELENS_CPU_LIMIT\" \
+  --set onelens-agent.resources.limits.memory=\"$ONELENS_MEMORY_LIMIT\" \
+  --set prometheus.prometheus-pushgateway.resources.requests.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST\" \
+  --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST\" \
+  --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT\" \
+  --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT\" \
+  --set prometheus.kube-state-metrics.resources.requests.cpu=\"$KSM_CPU_REQUEST\" \
+  --set prometheus.kube-state-metrics.resources.requests.memory=\"$KSM_MEMORY_REQUEST\" \
+  --set prometheus.kube-state-metrics.resources.limits.cpu=\"$KSM_CPU_LIMIT\" \
+  --set prometheus.kube-state-metrics.resources.limits.memory=\"$KSM_MEMORY_LIMIT\" \
+  --set prometheus.configmapReload.prometheus.resources.requests.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST\" \
+  --set prometheus.configmapReload.prometheus.resources.requests.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST\" \
+  --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
+  --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
+
+echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
+eval "$HELM_CMD"
 
 if [ $? -ne 0 ]; then
     echo "Upgrade failed and was automatically rolled back by --atomic flag"
@@ -466,6 +567,11 @@ if [ $? -ne 0 ]; then
     echo "--- Events After Rollback ---"
     kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || true
     exit 1
+fi
+
+# Clean up temp file
+if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
+    rm -f "$CUSTOMER_VALUES_FILE"
 fi
 
 # Wait for pods to stabilize after upgrade
@@ -487,11 +593,15 @@ if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
+# Get the chart version that was actually deployed
+DEPLOYED_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//' || echo "unknown")
+
 echo ""
 echo "========== POST-PATCH STATE =========="
 
-echo "--- Applied Resource Configuration ---"
-echo "Tier: $TIER | Pods: $TOTAL_PODS | Label multiplier: ${LABEL_MULTIPLIER}x"
+echo "--- Applied Configuration ---"
+echo "Chart: $DEPLOYED_VERSION | Tier: $TIER | Pods: $TOTAL_PODS | Labels: ${LABEL_MULTIPLIER}x"
+echo "Retention: $PROMETHEUS_RETENTION | RetentionSize: $PROMETHEUS_RETENTION_SIZE | VolumeSize: $PROMETHEUS_VOLUME_SIZE"
 echo "Prometheus server:"
 echo "  requests: cpu=$PROMETHEUS_CPU_REQUEST memory=$PROMETHEUS_MEMORY_REQUEST"
 echo "  limits:   cpu=$PROMETHEUS_CPU_LIMIT memory=$PROMETHEUS_MEMORY_LIMIT"
@@ -510,7 +620,6 @@ echo "  limits:   cpu=$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT memory=$PROMETHEUS_PUSHG
 echo "Configmap-reload:"
 echo "  requests: cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST"
 echo "  limits:   cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
-echo "Image tag: $CURRENT_IMAGE_TAG"
 
 echo "--- Pod Status After Upgrade ---"
 kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
@@ -520,4 +629,4 @@ helm list -n onelens-agent --no-headers 2>/dev/null || true
 
 echo "========== END POST-PATCH STATE =========="
 echo ""
-echo "Patching complete. Chart: $CURRENT_CHART_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
+echo "Patching complete. Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"

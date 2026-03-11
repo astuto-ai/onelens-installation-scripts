@@ -26,7 +26,7 @@ spec:
       serviceAccountName: {{ .Values.job.serviceAccount.name }}
       containers:
         - name: {{ .Values.job.name }}
-          image: {{ .Values.job.image }}:{{ .Values.job.imageTag }}
+          image: {{ .Values.job.image }}:v{{ .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.job.imagePullPolicy }}
           {{- with .Values.job.resources }}
           resources:

@@ -58,13 +58,13 @@ patching_cmr=$(grep 'CONFIGMAP_RELOAD' "$ROOT/src/patching.sh" | grep -E '(REQUE
 assert_eq "$install_cmr" "$patching_cmr" "configmap-reload values match"
 
 # ---------------------------------------------------------------------------
-# Test 7: install.sh calls select_retention_tier, patching.sh does NOT
+# Test 7: Both scripts call select_retention_tier
 # ---------------------------------------------------------------------------
 install_retention=$(grep -c 'select_retention_tier' "$ROOT/install.sh" || true)
 assert_gt "$install_retention" "0" "install.sh calls select_retention_tier"
 
 patching_retention=$(grep -c 'select_retention_tier' "$ROOT/src/patching.sh" || true)
-assert_eq "$patching_retention" "0" "patching.sh does NOT call select_retention_tier (relies on --reuse-values)"
+assert_gt "$patching_retention" "0" "patching.sh calls select_retention_tier"
 
 # ---------------------------------------------------------------------------
 # Test 8: Helm --set resource paths in patching.sh are a subset of install.sh
@@ -89,16 +89,16 @@ end_marker=$(grep -c 'END_EMBED' "$ROOT/src/patching.sh" || true)
 assert_gt "$end_marker" "0" "patching.sh has END_EMBED marker"
 
 # ---------------------------------------------------------------------------
-# Test 10: Patching.sh uses normalize_chart_version from library
+# Test 10: Patching.sh does NOT use normalize_chart_version (no version pinning)
 # ---------------------------------------------------------------------------
 patching_ncv=$(grep -c 'normalize_chart_version' "$ROOT/src/patching.sh" || true)
-assert_gt "$patching_ncv" "0" "patching.sh uses normalize_chart_version from library"
+assert_eq "$patching_ncv" "0" "patching.sh does not pin chart version (uses latest)"
 
 # ---------------------------------------------------------------------------
-# Test 11: Patching.sh has --reuse-values flag
+# Test 11: Patching.sh does NOT use --reuse-values (uses explicit value files)
 # ---------------------------------------------------------------------------
-reuse_count=$(grep -c -- '--reuse-values' "$ROOT/src/patching.sh" || true)
-assert_gt "$reuse_count" "0" "patching uses --reuse-values"
+reuse_count=$(grep -v '^#' "$ROOT/src/patching.sh" | grep -c -- '--reuse-values' || true)
+assert_eq "$reuse_count" "0" "patching does not use --reuse-values (uses -f globalvalues.yaml + customer overrides)"
 
 # ---------------------------------------------------------------------------
 # Test 12: Patching.sh does NOT have --create-namespace
