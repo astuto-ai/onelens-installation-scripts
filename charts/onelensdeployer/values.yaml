@@ -209,6 +209,7 @@ cronjob:
   image: public.ecr.aws/w7k6q5m9/onelens-deployer
   imageTag: v2.1.3
   restartPolicy: Never
+  backoffLimit: 1 # Max 2 attempts per scheduled run (1 retry)
   # Labels specific to the updater cronjob
   labels: {}
   env:
