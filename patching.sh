@@ -649,8 +649,40 @@ if [ -z "$PROM_PVC_NAME" ]; then
     PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
 fi
 
-PV_RECOVERY_DONE=false
-RECOVERED_PVC_SIZE=""
+
+_PV_NEEDS_MANUAL_FIX=false
+
+# _do_pv_recovery "$pvc_name" "$pv_name" "$old_size"
+# Logs PV recovery error with manual remediation steps.
+# We intentionally do NOT have cluster-scoped delete/patch permissions on PVs
+# because that would grant access to ALL PVs in the cluster (security concern).
+# PV recovery must be performed manually by the customer or support team.
+_do_pv_recovery() {
+    local pvc_name="$1" pv_name="$2" old_size="$3"
+
+    echo ""
+    echo "ERROR: Prometheus PV recovery required — manual intervention needed."
+    echo "The deployer does not have permissions to delete/patch PersistentVolumes (cluster-scoped security restriction)."
+    echo ""
+    echo "Manual remediation steps:"
+    if [ -n "$pv_name" ]; then
+        echo "  1. kubectl patch pv $pv_name -p '{\"metadata\":{\"finalizers\":null}}'"
+        echo "  2. kubectl delete pv $pv_name"
+        echo "  3. kubectl patch pvc $pvc_name -n onelens-agent -p '{\"metadata\":{\"finalizers\":null}}'"
+        echo "  4. kubectl delete pvc $pvc_name -n onelens-agent"
+    else
+        echo "  1. kubectl patch pvc $pvc_name -n onelens-agent -p '{\"metadata\":{\"finalizers\":null}}'"
+        echo "  2. kubectl delete pvc $pvc_name -n onelens-agent"
+    fi
+    echo "  Then re-run patching or: helm upgrade onelens-agent onelens/onelens-agent --reuse-values -n onelens-agent"
+    if [ -n "$old_size" ]; then
+        echo ""
+        echo "Note: Current PVC size is $old_size. Ensure helm values match if PVC was resized outside helm."
+    fi
+    echo ""
+    return 1
+}
+
 if [ -n "$PROM_PVC_NAME" ]; then
     # Get the PV name this PVC is bound to
     BOUND_PV=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
@@ -686,32 +718,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "$POD_ISSUES"
                 fi
 
-                # Verify StorageClass exists (helm upgrade will recreate if missing, but good to log)
-                SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
-                if [ -n "$SC_EXISTS" ]; then
-                    echo "StorageClass 'onelens-sc' exists — new PVC will use same encryption/provisioner settings."
-                else
-                    echo "StorageClass 'onelens-sc' not found — helm upgrade will recreate it from release values."
-                fi
-
-                echo "Deleting broken PVC '$PROM_PVC_NAME' to allow volume recreation..."
-                # Remove finalizers and annotations that block deletion
-                kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-                kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
-                kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
-
-                # Wait for PVC deletion to complete
-                for _w in 1 2 3 4 5 6; do
-                    sleep 5
-                    PVC_STILL_EXISTS=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
-                    if [ -z "$PVC_STILL_EXISTS" ]; then
-                        echo "PVC fully deleted."
-                        break
-                    fi
-                    echo "Waiting for PVC deletion... (attempt $_w/6)"
-                done
-                RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
-                PV_RECOVERY_DONE=true
+                _do_pv_recovery "$PROM_PVC_NAME" "" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
             else
                 echo "PV is missing but PVC is '$PVC_STATUS' and pod is '$POD_STATUS'. Skipping recovery."
             fi
@@ -739,34 +746,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                         echo "Pod issues:"
                         echo "$POD_ISSUES"
                     fi
-                    echo "Deleting broken PV and PVC..."
-
-                    SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
-                    if [ -n "$SC_EXISTS" ]; then
-                        echo "StorageClass 'onelens-sc' exists — new PVC will use same encryption/provisioner settings."
-                    else
-                        echo "StorageClass 'onelens-sc' not found — helm upgrade will recreate it from release values."
-                    fi
-
-                    # Remove finalizers first — PV/PVC with finalizers get stuck in Terminating
-                    kubectl patch pv "$BOUND_PV" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-                    kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-                    kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
-                    kubectl delete pv "$BOUND_PV" --wait=false 2>/dev/null || true
-                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
-                    # Wait for deletion to complete
-                    for _w in 1 2 3 4 5 6; do
-                        sleep 5
-                        PVC_GONE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
-                        PV_GONE=$(kubectl get pv "$BOUND_PV" --no-headers 2>/dev/null || true)
-                        if [ -z "$PVC_GONE" ] && [ -z "$PV_GONE" ]; then
-                            echo "PV and PVC fully deleted."
-                            break
-                        fi
-                        echo "Waiting for PV/PVC deletion... (attempt $_w/6)"
-                    done
-                    RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
-                    PV_RECOVERY_DONE=true
+                    _do_pv_recovery "$PROM_PVC_NAME" "$BOUND_PV" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
                 else
                     echo "PV is in '$PV_STATUS' state but pod is '$POD_STATUS'. Skipping recovery."
                 fi
@@ -791,33 +771,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "Mount errors:"
                     echo "$MOUNT_ERRORS"
 
-                    SC_EXISTS=$(kubectl get storageclass onelens-sc --no-headers 2>/dev/null || true)
-                    if [ -n "$SC_EXISTS" ]; then
-                        echo "StorageClass 'onelens-sc' exists — new PVC will use same encryption/provisioner settings."
-                    else
-                        echo "StorageClass 'onelens-sc' not found — helm upgrade will recreate it from release values."
-                    fi
-
-                    echo "Deleting broken PV and PVC..."
-                    # Remove finalizers first — PV/PVC with finalizers get stuck in Terminating
-                    kubectl patch pv "$BOUND_PV" -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-                    kubectl patch pvc "$PROM_PVC_NAME" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
-                    kubectl annotate pvc "$PROM_PVC_NAME" -n onelens-agent helm.sh/resource-policy- 2>/dev/null || true
-                    kubectl delete pv "$BOUND_PV" --wait=false 2>/dev/null || true
-                    kubectl delete pvc "$PROM_PVC_NAME" -n onelens-agent --wait=false 2>/dev/null || true
-                    # Wait for deletion to complete
-                    for _w in 1 2 3 4 5 6; do
-                        sleep 5
-                        PVC_GONE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent --no-headers 2>/dev/null || true)
-                        PV_GONE=$(kubectl get pv "$BOUND_PV" --no-headers 2>/dev/null || true)
-                        if [ -z "$PVC_GONE" ] && [ -z "$PV_GONE" ]; then
-                            echo "PV and PVC fully deleted."
-                            break
-                        fi
-                        echo "Waiting for PV/PVC deletion... (attempt $_w/6)"
-                    done
-                    RECOVERED_PVC_SIZE="$OLD_PVC_SIZE"
-                    PV_RECOVERY_DONE=true
+                    _do_pv_recovery "$PROM_PVC_NAME" "$BOUND_PV" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
                 else
                     CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
                     CURRENT_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
@@ -854,17 +808,13 @@ echo "Current chart version: $CURRENT_CHART_VERSION, image tag: $CURRENT_IMAGE_T
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
 helm repo update >/dev/null 2>&1
 
-# Build PV recovery override if volume was recreated
-# This ensures the new PVC gets the actual size from the cluster, not just the helm release value,
-# in case the customer resized the volume outside of helm.
-PV_SIZE_OVERRIDE=""
-if [ "$PV_RECOVERY_DONE" = "true" ] && [ -n "$RECOVERED_PVC_SIZE" ]; then
-    echo "Overriding PVC size to match previous volume: $RECOVERED_PVC_SIZE"
-    PV_SIZE_OVERRIDE="--set-string prometheus.server.persistentVolume.size=$RECOVERED_PVC_SIZE"
+if [ "$_PV_NEEDS_MANUAL_FIX" = "true" ]; then
+    echo "Skipping helm upgrade — Prometheus PV requires manual recovery first."
+    echo "After manual recovery, re-run patching to apply resource updates."
+    exit 1
 fi
 
 # Perform the upgrade with dynamically calculated resource values
-# shellcheck disable=SC2086
 helm upgrade onelens-agent onelens/onelens-agent \
   --version="$CURRENT_CHART_VERSION" \
   --reuse-values \
@@ -897,8 +847,7 @@ helm upgrade onelens-agent onelens/onelens-agent \
   --set prometheus.configmapReload.prometheus.resources.requests.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST" \
   --set prometheus.configmapReload.prometheus.resources.requests.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST" \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu="$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT" \
-  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT" \
-  $PV_SIZE_OVERRIDE
+  --set prometheus.configmapReload.prometheus.resources.limits.memory="$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
 
 if [ $? -ne 0 ]; then
     echo "Upgrade failed and was automatically rolled back by --atomic flag"
@@ -930,20 +879,6 @@ fi
 
 echo ""
 echo "========== POST-PATCH STATE =========="
-
-if [ "$PV_RECOVERY_DONE" = "true" ]; then
-    echo "--- PV Recovery ---"
-    echo "Prometheus volume was recreated. Historical TSDB data was lost."
-    NEW_PVC_NAME=$(kubectl get pvc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
-    if [ -n "$NEW_PVC_NAME" ]; then
-        NEW_PVC_SIZE=$(kubectl get pvc "$NEW_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
-        NEW_PVC_SC=$(kubectl get pvc "$NEW_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
-        NEW_PVC_STATUS=$(kubectl get pvc "$NEW_PVC_NAME" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
-        echo "New PVC: name=$NEW_PVC_NAME size=$NEW_PVC_SIZE storageClass=$NEW_PVC_SC status=$NEW_PVC_STATUS"
-    else
-        echo "WARNING: No new Prometheus PVC found after recovery."
-    fi
-fi
 
 echo "--- Applied Resource Configuration ---"
 echo "Tier: $TIER | Pods: $TOTAL_PODS | Label multiplier: ${LABEL_MULTIPLIER}x"

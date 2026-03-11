@@ -78,11 +78,14 @@ rbac:
           - nodes/metrics
           - nodes/proxy
           - persistentvolumeclaims
-          - persistentvolumes
           - pods
           - replicationcontrollers
           - resourcequotas
           - services
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources:
+          - persistentvolumes
         verbs: ["get", "list", "watch"]
       - apiGroups: ["apps"]
         resources:
