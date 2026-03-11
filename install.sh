@@ -23,8 +23,8 @@ send_logs() {
     curl -X POST "$API_BASE_URL/v1/kubernetes/registration" \
         -H "Content-Type: application/json" \
         -d "{
-            \"registration_id\": \"$REGISTRATION_ID\",
-            \"cluster_token\": \"$CLUSTER_TOKEN\",
+            \"registration_id\": \"$registration_id\",
+            \"cluster_token\": \"$cluster_token\",
             \"status\": \"FAILED\",
             \"logs\": \"$logs\"
         }"
@@ -34,15 +34,44 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=2.1.5}"
+: "${RELEASE_VERSION:=2.1.4}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
 
 # Export the variables so they are available in the environment
 export RELEASE_VERSION IMAGE_TAG API_BASE_URL TOKEN PVC_ENABLED
+if [ -z "${REGISTRATION_TOKEN:-}" ]; then
+    echo "Error: REGISTRATION_TOKEN is not set"
+    exit 1
+else
+    echo "REGISTRATION_TOKEN is set"
+fi
 
-# Phase 3: Prerequisite Checks (moved before registration — needed for upgrade detection)
+# Phase 3: API Registration
+response=$(curl -X POST \
+  "$API_BASE_URL/v1/kubernetes/registration" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"registration_token\": \"$REGISTRATION_TOKEN\",
+    \"cluster_name\": \"$CLUSTER_NAME\",
+    \"account_id\": \"$ACCOUNT\",
+    \"region\": \"$REGION\",
+    \"agent_version\": \"$RELEASE_VERSION\"
+  }")
+
+REGISTRATION_ID=$(echo $response | jq -r '.data.registration_id')
+CLUSTER_TOKEN=$(echo $response | jq -r '.data.cluster_token')
+
+if [[ -n "$REGISTRATION_ID" && "$REGISTRATION_ID" != "null" && -n "$CLUSTER_TOKEN" && "$CLUSTER_TOKEN" != "null" ]]; then
+    echo "Both REGISTRATION_ID and CLUSTER_TOKEN have values."
+else
+    echo "One or both of REGISTRATION_ID and CLUSTER_TOKEN are empty or null."
+    exit 1
+fi
+sleep 2
+
+# Phase 4: Prerequisite Checks
 echo "Step 0: Checking prerequisites..."
 
 # Define versions
@@ -63,6 +92,7 @@ fi
 
 echo "Detected architecture: $ARCH_TYPE"
 
+# Phase 5: Install Helm
 echo "Installing Helm for $ARCH_TYPE..."
 curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
     tar -xzvf helm.tar.gz && \
@@ -71,6 +101,7 @@ curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" 
 
 helm version
 
+# Phase 6: Install kubectl
 echo "Installing kubectl for $ARCH_TYPE..."
 curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
     chmod +x kubectl && \
@@ -83,66 +114,7 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
-# Phase 3.5: Detect existing installation
-# If onelens-agent is already installed, read credentials from the existing secret
-# and skip registration. This allows the deployer job to handle both first-time
-# installs and upgrades of existing clusters.
-IS_UPGRADE=false
-EXISTING_SECRET_JSON=$(kubectl get secret onelens-agent-secrets -n onelens-agent -o json 2>/dev/null || true)
-
-if [ -n "$EXISTING_SECRET_JSON" ]; then
-    EXISTING_REG_ID=$(echo "$EXISTING_SECRET_JSON" | jq -r '.data.REGISTRATION_ID // empty' 2>/dev/null | base64 -d 2>/dev/null || true)
-    EXISTING_CLUSTER_TOKEN=$(echo "$EXISTING_SECRET_JSON" | jq -r '.data.CLUSTER_TOKEN // empty' 2>/dev/null | base64 -d 2>/dev/null || true)
-
-    unset EXISTING_SECRET_JSON
-
-    if [ -n "$EXISTING_REG_ID" ] && [ "$EXISTING_REG_ID" != "null" ] && [ -n "$EXISTING_CLUSTER_TOKEN" ] && [ "$EXISTING_CLUSTER_TOKEN" != "null" ]; then
-        IS_UPGRADE=true
-        REGISTRATION_ID="$EXISTING_REG_ID"
-        CLUSTER_TOKEN="$EXISTING_CLUSTER_TOKEN"
-        echo "Existing installation detected. Credentials read from onelens-agent-secrets."
-        echo "Skipping registration."
-    else
-        echo "ERROR: onelens-agent-secrets exists but credentials are incomplete."
-        echo "Cannot re-register (API rejects already-connected clusters)."
-        echo "To fix: ensure the secret has valid REGISTRATION_ID and CLUSTER_TOKEN values."
-        exit 1
-    fi
-fi
-
-# Phase 4: API Registration (skip for upgrades)
-if [ "$IS_UPGRADE" != "true" ]; then
-    if [ -z "${REGISTRATION_TOKEN:-}" ]; then
-        echo "Error: REGISTRATION_TOKEN is not set"
-        exit 1
-    else
-        echo "REGISTRATION_TOKEN is set"
-    fi
-
-    response=$(curl -X POST \
-      "$API_BASE_URL/v1/kubernetes/registration" \
-      -H "Content-Type: application/json" \
-      -d "{
-        \"registration_token\": \"$REGISTRATION_TOKEN\",
-        \"cluster_name\": \"$CLUSTER_NAME\",
-        \"account_id\": \"$ACCOUNT\",
-        \"region\": \"$REGION\",
-        \"agent_version\": \"$RELEASE_VERSION\"
-      }")
-
-    REGISTRATION_ID=$(echo $response | jq -r '.data.registration_id')
-    CLUSTER_TOKEN=$(echo $response | jq -r '.data.cluster_token')
-
-    if [[ -n "$REGISTRATION_ID" && "$REGISTRATION_ID" != "null" && -n "$CLUSTER_TOKEN" && "$CLUSTER_TOKEN" != "null" ]]; then
-        echo "Both REGISTRATION_ID and CLUSTER_TOKEN have values."
-    else
-        echo "One or both of REGISTRATION_ID and CLUSTER_TOKEN are empty or null."
-        exit 1
-    fi
-    sleep 2
-fi
-
-# Phase 5: Namespace Validation
+# Phase 7: Namespace Validation
 NAMESPACE_EXISTS=false
 if kubectl get namespace onelens-agent &> /dev/null; then
     echo "Namespace 'onelens-agent' already exists. Skipping creation."
@@ -152,12 +124,12 @@ else
     NAMESPACE_EXISTS=false
 fi
 
-# Phase 5.5: Detect Cloud Provider
+# Phase 7.5: Detect Cloud Provider
 # Step 1: Always try auto-detection first (most reliable method)
 detect_cloud_provider() {
     local cluster_endpoint
     cluster_endpoint=$(kubectl cluster-info 2>/dev/null | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
-
+    
     # Primary detection: Check cluster endpoint URL
     # EKS: Always has *.eks.amazonaws.com (100% reliable)
     # AKS: Always has *.azmk8s.io (100% reliable)
@@ -222,14 +194,14 @@ else
     exit 1
 fi
 
-# Phase 6: CSI Driver Check and Installation (Cloud-specific)
+# Phase 8: CSI Driver Check and Installation (Cloud-specific)
 check_ebs_driver() {
     local retries=1
     local count=0
 
     while [ $count -le $retries ]; do
         echo "Checking if EBS CSI driver is installed (Attempt $((count+1))/$((retries+1)))..."
-
+        
         if kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver --ignore-not-found | grep -q "ebs-csi"; then
             echo "EBS CSI driver is installed."
             return 0
@@ -254,19 +226,19 @@ check_ebs_driver() {
 
 check_azure_disk_driver() {
     echo "Checking if Azure Disk CSI driver is installed..."
-
+    
     # Check if Azure Disk CSI driver is installed (it's typically pre-installed on AKS)
     if kubectl get csidriver disk.csi.azure.com &> /dev/null; then
         echo "Azure Disk CSI driver is installed."
         return 0
     fi
-
+    
     # Check if default storage class exists (AKS typically has this)
     if kubectl get storageclass | grep -q "disk.csi.azure.com"; then
         echo "Azure Disk storage class is available."
         return 0
     fi
-
+    
     echo "WARNING: Azure Disk CSI driver may not be fully configured."
     echo "For AKS clusters, this is typically pre-installed."
     echo "If you encounter storage issues, run: az aks update -g <rg> -n <cluster> --enable-disk-driver"
@@ -287,7 +259,7 @@ fi
 
 echo "Persistent storage for Prometheus is ENABLED."
 
-# Phase 7: Cluster Pod Count and Resource Allocation
+# Phase 9: Cluster Pod Count and Resource Allocation
 
 # Source shared resource sizing library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -366,7 +338,7 @@ PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="32Mi"
 # --- Retention and volume sizing ---
 select_retention_tier "$TOTAL_PODS"
 
-# Phase 8: Helm Deployment
+# Phase 10: Helm Deployment
 check_var() {
     if [ -z "${!1:-}" ]; then
         echo "Error: $1 is not set"
@@ -415,7 +387,7 @@ if [ "$NAMESPACE_EXISTS" = false ]; then
     CREATE_NS_FLAG="--create-namespace"
 fi
 
-# Phase 7.5: Check existing PVC for prometheus data preservation
+# Phase 9.5: Check existing PVC for prometheus data preservation
 PVC_NAME="onelens-agent-prometheus-server"
 EXISTING_CLAIM_FLAG=""
 if kubectl get pvc "$PVC_NAME" -n onelens-agent &>/dev/null; then
@@ -431,7 +403,7 @@ else
     echo "No existing PVC '$PVC_NAME' found — helm will create a new one."
 fi
 
-# Phase 7.6: Check helm release state before install
+# Phase 9.6: Check helm release state before install
 RELEASE_STATUS=$(helm status onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.info.status' 2>/dev/null || echo "not-found")
 if [ "$RELEASE_STATUS" = "failed" ]; then
     echo "Helm release 'onelens-agent' is in failed state — uninstalling before reinstall."
@@ -440,7 +412,7 @@ if [ "$RELEASE_STATUS" = "failed" ]; then
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=2.1.5}\" \
+    --version \"\${RELEASE_VERSION:=2.1.4}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
@@ -568,17 +540,17 @@ if [[ "$CLOUD_PROVIDER" == "AWS" && "$EBS_TAGS_ENABLED" == "true" && -n "$EBS_TA
   echo "Processing EBS tags: $EBS_TAGS"
   # Enable volume tags
   CMD+=" --set onelens-agent.storageClass.volumeTags.enabled=true"
-
+  
   # Parse comma-separated key=value pairs
   IFS=',' read -ra TAG_PAIRS <<< "$EBS_TAGS"
   for tag_pair in "${TAG_PAIRS[@]}"; do
     # Trim whitespace
     tag_pair=$(echo "$tag_pair" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
+    
     # Split on first '=' to handle values that might contain '='
     tag_key=$(echo "$tag_pair" | cut -d'=' -f1)
     tag_value=$(echo "$tag_pair" | cut -d'=' -f2-)
-
+    
     if [[ -n "$tag_key" && -n "$tag_value" ]]; then
       echo "Adding EBS tag: $tag_key=$tag_value"
       CMD+=" --set onelens-agent.storageClass.volumeTags.tags.$tag_key=\"$tag_value\""
@@ -661,29 +633,11 @@ kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-open
     false
 }
 
-# Verify all pods in the namespace are running and ready
-echo "Verifying all pods in onelens-agent namespace..."
-STABLE=false
-for i in 1 2 3 4 5 6; do
-    sleep 10
-    NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -v 'Completed' \
-        | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
-    if [ -z "$NOT_READY" ]; then
-        STABLE=true
-        echo "All pods stable after $((i * 10))s"
-        break
-    fi
-    echo "Check $i/6: some pods not ready yet..."
-done
-if [ "$STABLE" != "true" ]; then
-    echo "WARNING: Not all pods stabilized within 60s. Current status:"
-    kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
-fi
+# Phase 11: Finalization
+echo "Installation complete."
 
-# Phase 9: Finalization
-echo "Deployment complete."
-
+echo " Printing $REGISTRATION_ID"
+echo "Printing $CLUSTER_TOKEN"
 curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
     -H "Content-Type: application/json" \
     -d "{
@@ -691,18 +645,17 @@ curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
         \"cluster_token\": \"$CLUSTER_TOKEN\",
         \"status\": \"CONNECTED\"
     }"
-sleep 60
-
 echo "To verify deployment: kubectl get pods -n onelens-agent"
+sleep 60
 
 # Cleanup bootstrap RBAC resources (used only for initial installation)
 echo "Cleaning up bootstrap RBAC resources..."
-kubectl delete clusterrolebinding onelensdeployer-bootstrap-clusterrolebinding 2>/dev/null || true
-kubectl delete clusterrole onelensdeployer-bootstrap-clusterrole 2>/dev/null || true
+kubectl delete clusterrolebinding onelensdeployer-bootstrap-clusterrolebinding || true
+kubectl delete clusterrole onelensdeployer-bootstrap-clusterrole || true
 
 # Cleanup installation job resources
 echo "Cleaning up installation job resources..."
 kubectl delete job onelensdeployerjob -n onelens-agent || true
 kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
 
-echo "Cleanup complete. Ongoing RBAC resources retained for cronjob updates."
+echo "Bootstrap cleanup complete. Ongoing RBAC resources retained for cronjob updates."

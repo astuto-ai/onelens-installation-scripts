@@ -146,22 +146,14 @@ jobs:
         run: |
           ONELENS_AGENT_VERSION="${{ needs.validate-and-determine-version.outputs.onelens_agent_version }}"
           ONELENSDEPLOYER_VERSION="${{ needs.validate-and-determine-version.outputs.onelensdeployer_version }}"
-          IS_RELEASE="${{ needs.validate-and-determine-version.outputs.is_release }}"
           mkdir -p packaged-charts
-
-          # Skip onelens-agent for release (stable) trigger — the RC run already
-          # published the identical chart (onelens-agent never gets -rc suffix).
-          # Packaging it again causes merge conflicts on the gh-pages PR.
-          if [[ "$IS_RELEASE" != "true" ]]; then
-            echo "Packaging ${{ env.CHART_ONELENS_AGENT }} chart with version: $ONELENS_AGENT_VERSION"
-            helm package charts/${{ env.CHART_ONELENS_AGENT }} --version "$ONELENS_AGENT_VERSION" -d packaged-charts
-          else
-            echo "Skipping ${{ env.CHART_ONELENS_AGENT }} packaging — already published by RC run"
-          fi
-
+          
+          echo "Packaging ${{ env.CHART_ONELENS_AGENT }} chart with version: $ONELENS_AGENT_VERSION"
+          helm package charts/${{ env.CHART_ONELENS_AGENT }} --version "$ONELENS_AGENT_VERSION" -d packaged-charts
+          
           echo "Packaging ${{ env.CHART_ONELENSDEPLOYER }} chart with version: $ONELENSDEPLOYER_VERSION"
           helm package charts/${{ env.CHART_ONELENSDEPLOYER }} --version "$ONELENSDEPLOYER_VERSION" -d packaged-charts
-
+          
           echo "Packaged charts:"
           ls -la packaged-charts/
 
