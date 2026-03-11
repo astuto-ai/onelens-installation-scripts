@@ -261,54 +261,27 @@ echo "Persistent storage for Prometheus is ENABLED."
 
 # Phase 9: Cluster Pod Count and Resource Allocation
 
-# Helper: multiply a memory string (e.g., "384Mi") by a float multiplier, round up
-apply_memory_multiplier() {
-    local mem_str="$1"
-    local multiplier="$2"
-    local mem_val="${mem_str%Mi}"
-    local result=$(echo "$mem_val $multiplier" | awk '{printf "%d", int($1 * $2 + 0.99)}')
-    echo "${result}Mi"
-}
+# Source shared resource sizing library (functions: apply_memory_multiplier,
+# select_resource_tier, select_retention_tier, count_deploy_pods, etc.)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/resource-sizing.sh"
 
 # --- Pod count: use desired/max replicas from workload controllers ---
 echo "Calculating cluster pod capacity from workload controllers..."
 
-# Get all HPA targets with their maxReplicas
+# Collect cluster data (kubectl calls stay here; logic is in the library)
 HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
-
-# Deployment replicas: use HPA maxReplicas if HPA targets the deployment, else spec.replicas
-DEPLOY_PODS=$(kubectl get deployments --all-namespaces -o json 2>/dev/null | jq --argjson hpa "$HPA_JSON" '
-    [.items[] | . as $dep |
-        ($hpa.items[] |
-            select(.metadata.namespace == $dep.metadata.namespace and
-                   .spec.scaleTargetRef.kind == "Deployment" and
-                   .spec.scaleTargetRef.name == $dep.metadata.name) |
-            .spec.maxReplicas
-        ) // ($dep.spec.replicas // 0)
-    ] | add // 0
-' 2>/dev/null || echo "0")
-
-# StatefulSet replicas: use HPA maxReplicas if HPA targets it, else spec.replicas
-STS_PODS=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null | jq --argjson hpa "$HPA_JSON" '
-    [.items[] | . as $sts |
-        ($hpa.items[] |
-            select(.metadata.namespace == $sts.metadata.namespace and
-                   .spec.scaleTargetRef.kind == "StatefulSet" and
-                   .spec.scaleTargetRef.name == $sts.metadata.name) |
-            .spec.maxReplicas
-        ) // ($sts.spec.replicas // 0)
-    ] | add // 0
-' 2>/dev/null || echo "0")
-
-# DaemonSet pods: each DS runs one pod per node
+DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+STS_JSON=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 NUM_DAEMONSETS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-DS_PODS=$((NUM_NODES * NUM_DAEMONSETS))
 
+# Calculate pod counts using library functions
+DEPLOY_PODS=$(count_deploy_pods "$DEPLOY_JSON" "$HPA_JSON")
+STS_PODS=$(count_sts_pods "$STS_JSON" "$HPA_JSON")
+DS_PODS=$(count_ds_pods "$NUM_NODES" "$NUM_DAEMONSETS")
 DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-
-# Apply 25% buffer for Jobs, CronJobs, and burst scaling
-TOTAL_PODS=$(echo "$DESIRED_PODS" | awk '{printf "%d", int($1 * 1.25 + 0.99)}')
+TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
 
 # Fallback: if desired pods calculation returned 0 or failed, use running pod count
 if [ "$TOTAL_PODS" -le 0 ]; then
@@ -323,217 +296,17 @@ echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
 
 # --- Label density measurement ---
 echo "Measuring label density across pods..."
-AVG_LABELS=$(kubectl get pods --all-namespaces -o json 2>/dev/null | jq '[.items[].metadata.labels | length] | add / length | floor' 2>/dev/null || echo "0")
-
-if [ "$AVG_LABELS" -le 0 ] 2>/dev/null; then
-    echo "WARNING: Could not measure label density. Using default multiplier 1.3x."
-    LABEL_MULTIPLIER="1.3"
-elif [ "$AVG_LABELS" -le 7 ]; then
-    LABEL_MULTIPLIER="1.0"
-elif [ "$AVG_LABELS" -le 12 ]; then
-    LABEL_MULTIPLIER="1.3"
-elif [ "$AVG_LABELS" -le 17 ]; then
-    LABEL_MULTIPLIER="1.6"
-else
-    LABEL_MULTIPLIER="2.0"
-fi
+PODS_JSON=$(kubectl get pods --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+AVG_LABELS=$(calculate_avg_labels "$PODS_JSON")
+LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 
 echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
 
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
 
-if [ "$TOTAL_PODS" -lt 50 ]; then
-    echo "Setting resources for tiny cluster (<50 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="270m"
-    PROMETHEUS_MEMORY_REQUEST="1425Mi"
-    PROMETHEUS_CPU_LIMIT="270m"
-    PROMETHEUS_MEMORY_LIMIT="1425Mi"
-
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="180m"
-    OPENCOST_MEMORY_REQUEST="240Mi"
-    OPENCOST_CPU_LIMIT="180m"
-    OPENCOST_MEMORY_LIMIT="240Mi"
-
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="100m"
-    ONELENS_MEMORY_REQUEST="256Mi"
-    ONELENS_CPU_LIMIT="300m"
-    ONELENS_MEMORY_LIMIT="384Mi"
-
-    # KSM resources
-    KSM_CPU_REQUEST="100m"
-    KSM_MEMORY_REQUEST="128Mi"
-    KSM_CPU_LIMIT="100m"
-    KSM_MEMORY_LIMIT="128Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="50m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="64Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="50m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="64Mi"
-
-elif [ "$TOTAL_PODS" -lt 100 ]; then
-    echo "Setting resources for small cluster (50-99 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="360m"
-    PROMETHEUS_MEMORY_REQUEST="1901Mi"
-    PROMETHEUS_CPU_LIMIT="360m"
-    PROMETHEUS_MEMORY_LIMIT="1901Mi"
-
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="240m"
-    OPENCOST_MEMORY_REQUEST="320Mi"
-    OPENCOST_CPU_LIMIT="240m"
-    OPENCOST_MEMORY_LIMIT="320Mi"
-
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="125m"
-    ONELENS_MEMORY_REQUEST="320Mi"
-    ONELENS_CPU_LIMIT="375m"
-    ONELENS_MEMORY_LIMIT="480Mi"
-
-    # KSM resources
-    KSM_CPU_REQUEST="120m"
-    KSM_MEMORY_REQUEST="160Mi"
-    KSM_CPU_LIMIT="120m"
-    KSM_MEMORY_LIMIT="160Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-
-elif [ "$TOTAL_PODS" -lt 500 ]; then
-    echo "Setting resources for medium cluster (100-499 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="420m"
-    PROMETHEUS_MEMORY_REQUEST="2834Mi"
-    PROMETHEUS_CPU_LIMIT="420m"
-    PROMETHEUS_MEMORY_LIMIT="2834Mi"
-
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="240m"
-    OPENCOST_MEMORY_REQUEST="400Mi"
-    OPENCOST_CPU_LIMIT="240m"
-    OPENCOST_MEMORY_LIMIT="400Mi"
-
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="125m"
-    ONELENS_MEMORY_REQUEST="480Mi"
-    ONELENS_CPU_LIMIT="375m"
-    ONELENS_MEMORY_LIMIT="640Mi"
-
-    # KSM resources
-    KSM_CPU_REQUEST="120m"
-    KSM_MEMORY_REQUEST="256Mi"
-    KSM_CPU_LIMIT="120m"
-    KSM_MEMORY_LIMIT="256Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
-    echo "Setting resources for large cluster (500-999 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1200m"
-    PROMETHEUS_MEMORY_REQUEST="5653Mi"
-    PROMETHEUS_CPU_LIMIT="1200m"
-    PROMETHEUS_MEMORY_LIMIT="5653Mi"
-
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="300m"
-    OPENCOST_MEMORY_REQUEST="576Mi"
-    OPENCOST_CPU_LIMIT="300m"
-    OPENCOST_MEMORY_LIMIT="576Mi"
-
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="125m"
-    ONELENS_MEMORY_REQUEST="640Mi"
-    ONELENS_CPU_LIMIT="440m"
-    ONELENS_MEMORY_LIMIT="800Mi"
-
-    # KSM resources
-    KSM_CPU_REQUEST="120m"
-    KSM_MEMORY_REQUEST="384Mi"
-    KSM_CPU_LIMIT="120m"
-    KSM_MEMORY_LIMIT="384Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="100Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="100m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="100Mi"
-
-elif [ "$TOTAL_PODS" -lt 1500 ]; then
-    echo "Setting resources for extra large cluster (1000-1499 pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1380m"
-    PROMETHEUS_MEMORY_REQUEST="8640Mi"
-    PROMETHEUS_CPU_LIMIT="1380m"
-    PROMETHEUS_MEMORY_LIMIT="8640Mi"
-    
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="300m"
-    OPENCOST_MEMORY_REQUEST="720Mi"
-    OPENCOST_CPU_LIMIT="300m"
-    OPENCOST_MEMORY_LIMIT="720Mi"
-    
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="125m"
-    ONELENS_MEMORY_REQUEST="800Mi"
-    ONELENS_CPU_LIMIT="500m"
-    ONELENS_MEMORY_LIMIT="960Mi"
-
-    # KSM resources
-    KSM_CPU_REQUEST="300m"
-    KSM_MEMORY_REQUEST="640Mi"
-    KSM_CPU_LIMIT="300m"
-    KSM_MEMORY_LIMIT="640Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="250m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="400Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
-
-else
-    echo "Setting resources for very large cluster (1500+ pods)"
-    # Prometheus resources
-    PROMETHEUS_CPU_REQUEST="1800m"
-    PROMETHEUS_MEMORY_REQUEST="11306Mi"
-    PROMETHEUS_CPU_LIMIT="1800m"
-    PROMETHEUS_MEMORY_LIMIT="11306Mi"
-    
-    # OpenCost resources
-    OPENCOST_CPU_REQUEST="360m"
-    OPENCOST_MEMORY_REQUEST="960Mi"
-    OPENCOST_CPU_LIMIT="360m"
-    OPENCOST_MEMORY_LIMIT="960Mi"
-    
-    # OneLens Agent resources
-    ONELENS_CPU_REQUEST="190m"
-    ONELENS_MEMORY_REQUEST="960Mi"
-    ONELENS_CPU_LIMIT="565m"
-    ONELENS_MEMORY_LIMIT="1280Mi"
-    
-    # KSM resources
-    KSM_CPU_REQUEST="300m"
-    KSM_MEMORY_REQUEST="640Mi"
-    KSM_CPU_LIMIT="300m"
-    KSM_MEMORY_LIMIT="640Mi"
-
-    # Pushgateway resources
-    PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="250m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="400Mi"
-    PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="250m"
-    PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="400Mi"
-fi
+# --- Resource tier selection ---
+TIER=$(select_resource_tier "$TOTAL_PODS")
+echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
 if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
@@ -557,27 +330,14 @@ if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
     echo "  OneLens Agent: ${ONELENS_MEMORY_REQUEST} request / ${ONELENS_MEMORY_LIMIT} limit"
 fi
 
-PROMETHEUS_RETENTION="10d"
+# Configmap-reload sidecar: fixed small footprint, does not scale with cluster size.
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST="10m"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="32Mi"
+PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT="10m"
+PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="32Mi"
 
-if [ "$TOTAL_PODS" -lt 50 ]; then
-    PROMETHEUS_RETENTION_SIZE="4GB"
-    PROMETHEUS_VOLUME_SIZE="8Gi"
-elif [ "$TOTAL_PODS" -lt 100 ]; then
-    PROMETHEUS_RETENTION_SIZE="6GB"
-    PROMETHEUS_VOLUME_SIZE="10Gi"
-elif [ "$TOTAL_PODS" -lt 500 ]; then
-    PROMETHEUS_RETENTION_SIZE="12GB"
-    PROMETHEUS_VOLUME_SIZE="20Gi"
-elif [ "$TOTAL_PODS" -lt 1000 ]; then
-    PROMETHEUS_RETENTION_SIZE="20GB"
-    PROMETHEUS_VOLUME_SIZE="30Gi"
-elif [ "$TOTAL_PODS" -lt 1500 ]; then
-    PROMETHEUS_RETENTION_SIZE="30GB"
-    PROMETHEUS_VOLUME_SIZE="40Gi"
-else
-    PROMETHEUS_RETENTION_SIZE="35GB"
-    PROMETHEUS_VOLUME_SIZE="50Gi"
-fi
+# --- Retention and volume sizing ---
+select_retention_tier "$TOTAL_PODS"
 
 # Phase 10: Helm Deployment
 check_var() {
@@ -684,6 +444,10 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onele
     --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST\" \
     --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT\" \
     --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT\" \
+    --set prometheus.configmapReload.prometheus.resources.requests.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST\" \
+    --set prometheus.configmapReload.prometheus.resources.requests.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST\" \
+    --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
+    --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\" \
     --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
     --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
     --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
