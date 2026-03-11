@@ -1,0 +1,8 @@
+{
+  "items": [
+    {"metadata": {"name": "frontend-hpa", "namespace": "app"}, "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "frontend"}, "minReplicas": 3, "maxReplicas": 30}},
+    {"metadata": {"name": "backend-hpa", "namespace": "app"}, "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "backend"}, "minReplicas": 5, "maxReplicas": 50}},
+    {"metadata": {"name": "gateway-hpa", "namespace": "infra"}, "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "gateway"}, "minReplicas": 2, "maxReplicas": 10}},
+    {"metadata": {"name": "redis-hpa", "namespace": "data"}, "spec": {"scaleTargetRef": {"kind": "StatefulSet", "name": "redis"}, "minReplicas": 3, "maxReplicas": 9}}
+  ]
+}

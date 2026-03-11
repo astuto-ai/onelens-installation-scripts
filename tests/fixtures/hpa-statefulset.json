@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "metadata": {"name": "redis-hpa", "namespace": "data"},
+      "spec": {
+        "scaleTargetRef": {"kind": "StatefulSet", "name": "redis"},
+        "minReplicas": 3,
+        "maxReplicas": 15
+      }
+    }
+  ]
+}

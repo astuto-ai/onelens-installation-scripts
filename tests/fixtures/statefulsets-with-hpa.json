@@ -1,0 +1,5 @@
+{
+  "items": [
+    {"metadata": {"name": "redis", "namespace": "data"}, "spec": {"replicas": 3}}
+  ]
+}

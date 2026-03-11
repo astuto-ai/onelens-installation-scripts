@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "metadata": {"name": "web-hpa-1", "namespace": "default"},
+      "spec": {
+        "scaleTargetRef": {"kind": "Deployment", "name": "web"},
+        "minReplicas": 2,
+        "maxReplicas": 10
+      }
+    },
+    {
+      "metadata": {"name": "web-hpa-2", "namespace": "default"},
+      "spec": {
+        "scaleTargetRef": {"kind": "Deployment", "name": "web"},
+        "minReplicas": 5,
+        "maxReplicas": 20
+      }
+    }
+  ]
+}

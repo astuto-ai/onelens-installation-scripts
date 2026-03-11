@@ -1,0 +1,9 @@
+{
+  "items": [
+    {"metadata": {"name": "pod-1", "namespace": "default", "labels": {"app": "web", "env": "prod", "team": "alpha", "version": "2.1", "release": "stable", "tier": "frontend", "region": "us-east", "managed-by": "helm", "chart": "web-1.0", "component": "server"}}},
+    {"metadata": {"name": "pod-2", "namespace": "default", "labels": {"app": "api", "env": "prod", "team": "beta", "version": "3.0", "release": "canary", "tier": "backend", "region": "us-east", "managed-by": "helm", "chart": "api-2.0", "component": "gateway", "sla": "gold"}}},
+    {"metadata": {"name": "pod-3", "namespace": "default", "labels": {"app": "worker", "env": "prod", "team": "alpha", "version": "2.1", "release": "stable", "tier": "backend", "region": "us-west", "managed-by": "argocd", "chart": "worker-1.0", "component": "processor", "priority": "high", "queue": "main"}}},
+    {"metadata": {"name": "pod-4", "namespace": "default", "labels": {"app": "cache", "env": "staging", "team": "gamma", "version": "1.5", "release": "stable", "tier": "data", "region": "eu-west", "managed-by": "helm", "chart": "cache-1.0", "component": "redis"}}},
+    {"metadata": {"name": "pod-5", "namespace": "default", "labels": {"app": "db", "env": "prod", "team": "delta", "version": "14.0", "release": "stable", "tier": "data", "region": "us-east", "managed-by": "operator", "chart": "pg-5.0", "component": "primary", "backup": "enabled"}}}
+  ]
+}

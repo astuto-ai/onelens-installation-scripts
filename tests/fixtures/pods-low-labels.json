@@ -1,0 +1,9 @@
+{
+  "items": [
+    {"metadata": {"name": "pod-1", "namespace": "default", "labels": {"app": "web", "env": "prod", "team": "a", "version": "1", "release": "stable"}}},
+    {"metadata": {"name": "pod-2", "namespace": "default", "labels": {"app": "api", "env": "prod", "team": "b", "version": "2", "release": "stable", "tier": "backend"}}},
+    {"metadata": {"name": "pod-3", "namespace": "default", "labels": {"app": "worker", "env": "prod", "team": "a", "version": "1", "release": "stable", "tier": "backend", "priority": "high"}}},
+    {"metadata": {"name": "pod-4", "namespace": "default", "labels": {"app": "cache", "env": "prod", "team": "c", "version": "1", "release": "stable"}}},
+    {"metadata": {"name": "pod-5", "namespace": "default", "labels": {"app": "db", "env": "prod", "team": "d", "version": "3", "release": "stable", "tier": "data"}}}
+  ]
+}
