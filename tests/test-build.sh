@@ -78,7 +78,8 @@ assert_eq "$end_count" "1" "END_EMBED marker present"
 ###############################################################################
 # Test 8: Embedded content includes library header
 ###############################################################################
-assert_contains "$(cat "$OUT_FILE")" "Embedded from lib/resource-sizing.sh" "embedded content header present"
+embed_header=$(grep -c 'Embedded from lib/resource-sizing.sh' "$OUT_FILE" || true)
+assert_gt "$embed_header" "0" "embedded content header present"
 
 ###############################################################################
 # Test 9: Output file is executable
