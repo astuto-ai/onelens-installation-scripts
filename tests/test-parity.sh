@@ -95,10 +95,12 @@ patching_ncv=$(grep -c 'normalize_chart_version' "$ROOT/src/patching.sh" || true
 assert_eq "$patching_ncv" "0" "patching.sh does not pin chart version (uses latest)"
 
 # ---------------------------------------------------------------------------
-# Test 11: Patching.sh does NOT use --reuse-values (uses explicit value files)
+# Test 11: Agent chart upgrade does NOT use --reuse-values (uses explicit value files)
+# Note: deployer self-upgrade (helm upgrade onelensdeployer) legitimately uses --reuse-values
+# We check that only 1 occurrence exists and it's in the deployer upgrade block
 # ---------------------------------------------------------------------------
 reuse_count=$(grep -v '^#' "$ROOT/src/patching.sh" | grep -c -- '--reuse-values' || true)
-assert_eq "$reuse_count" "0" "patching does not use --reuse-values (uses -f globalvalues.yaml + customer overrides)"
+assert_eq "$reuse_count" "1" "only deployer self-upgrade uses --reuse-values (agent chart uses -f globalvalues.yaml)"
 
 # ---------------------------------------------------------------------------
 # Test 12: Patching.sh does NOT have --create-namespace

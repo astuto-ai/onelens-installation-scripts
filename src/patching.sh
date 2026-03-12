@@ -634,15 +634,40 @@ if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
-# Update CronJob schedule to hourly if currently set to daily.
-# Reduces patching retry wait from 24h to 1h for failed clusters.
+# Update CronJob schedule to every 5 minutes for healthcheck mode.
+# Enables self-healing: 5 min detection + 5 min fix = 10 min max downtime.
+TARGET_SCHEDULE="*/5 * * * *"
 CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
-if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "0 * * * *" ]; then
-    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to hourly (0 * * * *)..."
+if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
+    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to every 5 min ($TARGET_SCHEDULE)..."
     kubectl patch cronjob onelensupdater -n onelens-agent \
-        -p '{"spec":{"schedule":"0 * * * *"}}' 2>/dev/null && \
-        echo "CronJob schedule updated to hourly" || \
+        -p "{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\"}}" 2>/dev/null && \
+        echo "CronJob schedule updated to */5" || \
         echo "WARNING: Failed to update CronJob schedule (RBAC?)"
+fi
+
+# Deployer self-upgrade — upgrade the deployer chart itself to get new entrypoint.sh
+# This is the key enabler: once the deployer chart is upgraded, the new entrypoint.sh
+# with healthcheck mode will run on the next CronJob execution.
+echo "Checking deployer chart version..."
+DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
+    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
+    | sed 's/onelensdeployer-//' || true)
+LATEST_DEPLOYER=$(helm search repo onelens/onelensdeployer -o json 2>/dev/null \
+    | jq -r '.[0].version' || true)
+
+if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSION" != "$LATEST_DEPLOYER" ]; then
+    echo "Upgrading deployer from $DEPLOYER_VERSION to $LATEST_DEPLOYER..."
+    helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
+        --reuse-values \
+        --set cronjob.schedule="$TARGET_SCHEDULE" \
+        --set cronjob.backoffLimit=0 \
+        --set cronjob.activeDeadlineSeconds=600 \
+        --timeout=3m 2>&1 && \
+        echo "Deployer upgraded to $LATEST_DEPLOYER" || \
+        echo "WARNING: Deployer upgrade failed (non-fatal, will retry next run)"
+else
+    echo "Deployer chart: current=${DEPLOYER_VERSION:-unknown} latest=${LATEST_DEPLOYER:-unknown} (no upgrade needed)"
 fi
 
 # Get the chart version that was actually deployed
@@ -680,5 +705,26 @@ echo "--- Helm Release After Upgrade ---"
 helm list -n onelens-agent --no-headers 2>/dev/null || true
 
 echo "========== END POST-PATCH STATE =========="
+
+# Activate healthcheck mode via API — tells backend this cluster is ready for
+# self-healing. Also reports deployer_version so we can track fleet state.
+echo "Activating healthcheck mode..."
+FINAL_DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
+    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
+    | sed 's/onelensdeployer-//' || true)
+current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+hc_payload=$(jq -n \
+    --arg reg_id "$REGISTRATION_ID" \
+    --arg token "$CLUSTER_TOKEN" \
+    --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+    --arg ts "$current_timestamp" \
+    '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts}}')
+curl -s --max-time 10 --location --request PUT \
+    "${API_BASE_URL:-https://api-in.onelens.cloud}/v1/kubernetes/cluster-version" \
+    --header 'Content-Type: application/json' \
+    --data "$hc_payload" >/dev/null 2>&1 && \
+    echo "Healthcheck mode activated (deployer: ${FINAL_DEPLOYER_VERSION:-unknown})" || \
+    echo "WARNING: Failed to activate healthcheck mode (API call failed)"
+
 echo ""
 echo "Patching complete. Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
