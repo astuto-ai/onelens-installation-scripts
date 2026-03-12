@@ -946,7 +946,7 @@ HELM_CMD="$HELM_CMD \
 
 # PVC settings
 HELM_CMD="$HELM_CMD \
-  --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
+  --set prometheus.server.persistentVolume.enabled=$PVC_ENABLED \
   $EXISTING_CLAIM_FLAG \
   --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
 

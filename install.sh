@@ -449,7 +449,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onele
     --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\" \
     --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$CLUSTER_NAME\" \
     --set onelens-agent.image.tag=\"$IMAGE_TAG\" \
-    --set prometheus.server.persistentVolume.enabled=\"$PVC_ENABLED\" \
+    --set prometheus.server.persistentVolume.enabled=$PVC_ENABLED \
     $EXISTING_CLAIM_FLAG \
     --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
     --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
