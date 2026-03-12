@@ -1,4 +1,44 @@
 #!/bin/bash
+
+# --- Log capture & reporting ---
+# Captures all script output and sends it to the API as patching_logs on exit.
+# Works regardless of which entrypoint.sh version is running this script.
+_PATCH_LOG_FILE=$(mktemp 2>/dev/null || echo "/tmp/_patching_log_$$")
+exec > >(tee -a "$_PATCH_LOG_FILE") 2>&1
+
+_send_patching_logs() {
+    local exit_code=$?
+    # Close stdout/stderr to flush the tee subprocess before reading the log file
+    exec 1>&- 2>&-
+    sleep 1
+    # Only send if we have credentials (extracted later in script from helm release)
+    if [ -n "$REGISTRATION_ID" ] && [ -n "$CLUSTER_TOKEN" ]; then
+        local log_content
+        log_content=$(cat "$_PATCH_LOG_FILE" 2>/dev/null || true)
+        # Truncate to 10000 chars
+        if [ ${#log_content} -gt 10000 ]; then
+            log_content="[truncated]...${log_content: -9900}"
+        fi
+        # Send only patching_logs — don't overwrite logs/patch_status/patching_enabled
+        # (entrypoint.sh handles those fields separately)
+        local payload
+        payload=$(jq -n \
+            --arg reg_id "$REGISTRATION_ID" \
+            --arg token "$CLUSTER_TOKEN" \
+            --arg plogs "$log_content" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_logs: $plogs}}' 2>/dev/null)
+        if [ -n "$payload" ]; then
+            curl -s --max-time 10 --location --request PUT \
+                "https://api-in.onelens.cloud/v1/kubernetes/cluster-version" \
+                --header 'Content-Type: application/json' \
+                --data "$payload" >/dev/null 2>&1 || true
+        fi
+    fi
+    rm -f "$_PATCH_LOG_FILE"
+    exit $exit_code
+}
+trap _send_patching_logs EXIT
+
 # Phase 1: Prerequisite Checks
 echo "Checking prerequisites..."
 
