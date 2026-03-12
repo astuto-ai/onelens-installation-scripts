@@ -988,6 +988,8 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
+echo "DEBUG: PVC_ENABLED='$PVC_ENABLED' (type check)"
+echo "DEBUG: HELM_CMD PVC portion: $(echo "$HELM_CMD" | grep -o 'persistentVolume.enabled[^ ]*')"
 eval "$HELM_CMD"
 
 if [ $? -ne 0 ]; then
