@@ -633,6 +633,17 @@ if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
+# Update CronJob schedule to hourly if currently set to daily.
+# Reduces patching retry wait from 24h to 1h for failed clusters.
+CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
+if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "0 * * * *" ]; then
+    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to hourly (0 * * * *)..."
+    kubectl patch cronjob onelensupdater -n onelens-agent \
+        -p '{"spec":{"schedule":"0 * * * *"}}' 2>/dev/null && \
+        echo "CronJob schedule updated to hourly" || \
+        echo "WARNING: Failed to update CronJob schedule (RBAC?)"
+fi
+
 # Get the chart version that was actually deployed
 DEPLOYED_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//' || echo "unknown")
 
