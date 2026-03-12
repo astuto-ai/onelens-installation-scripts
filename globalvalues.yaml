@@ -302,17 +302,6 @@ prometheus:
           static_configs:
             - targets:
                 - localhost:9090
-        - job_name: 'kubernetes-apiservers'
-          kubernetes_sd_configs:
-            - role: endpoints
-          scheme: https
-          tls_config:
-            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-          relabel_configs:
-            - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
-              action: keep
-              regex: default;kubernetes;https
         - job_name: 'kubernetes-nodes'
           scheme: https
           tls_config:
@@ -329,6 +318,10 @@ prometheus:
               regex: (.+)
               target_label: __metrics_path__
               replacement: /api/v1/nodes/$1/proxy/metrics
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'kubelet_volume_stats_.*'
+              action: keep
         - job_name: 'kubernetes-nodes-cadvisor'
           scheme: https
           tls_config:
@@ -345,6 +338,10 @@ prometheus:
               regex: (.+)
               target_label: __metrics_path__
               replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_usage_bytes|container_fs_limit_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total|container_cpu_cfs_throttled_seconds_total|container_oom_events_total|container_spec_memory_limit_bytes|container_spec_cpu_shares|container_spec_cpu_quota|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_packets_total'
+              action: keep
         - job_name: 'kubernetes-service-endpoints'
           honor_labels: true
           kubernetes_sd_configs:
@@ -383,43 +380,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_pod_node_name]
               action: replace
               target_label: node
-        - job_name: 'kubernetes-service-endpoints-slow'
-          honor_labels: true
-          scrape_interval: 5m
-          scrape_timeout: 30s
-          kubernetes_sd_configs:
-            - role: endpoints
-          relabel_configs:
-            - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape_slow]
-              action: keep
-              regex: true
-            - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
-              action: replace
-              target_label: __scheme__
-              regex: (https?)
-            - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
-              action: replace
-              target_label: __metrics_path__
-              regex: (.+)
-            - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
-              action: replace
-              target_label: __address__
-              regex: (.+?)(?::\d+)?;(\d+)
-              replacement: $1:$2
-            - action: labelmap
-              regex: __meta_kubernetes_service_annotation_prometheus_io_param_(.+)
-              replacement: __param_$1
-            - action: labelmap
-              regex: __meta_kubernetes_service_label_(.+)
-            - source_labels: [__meta_kubernetes_namespace]
-              action: replace
-              target_label: namespace
-            - source_labels: [__meta_kubernetes_service_name]
-              action: replace
-              target_label: service
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              action: replace
-              target_label: node
         - job_name: 'prometheus-pushgateway'
           honor_labels: true
           kubernetes_sd_configs:
@@ -428,53 +388,6 @@ prometheus:
             - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
               action: keep
               regex: pushgateway
-        - job_name: 'kubernetes-services'
-          honor_labels: true
-          metrics_path: /probe
-          params:
-            module: [http_2xx]
-          kubernetes_sd_configs:
-            - role: service
-          relabel_configs:
-            - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
-              action: keep
-              regex: true
-            - source_labels: [__address__]
-              target_label: __param_target
-            - target_label: __address__
-              replacement: blackbox
-            - source_labels: [__param_target]
-              target_label: instance
-            - action: labelmap
-              regex: __meta_kubernetes_service_label_(.+)
-            - source_labels: [__meta_kubernetes_namespace]
-              target_label: namespace
-            - source_labels: [__meta_kubernetes_service_name]
-              target_label: service
-        - job_name: 'kubernetes-pods'
-          honor_labels: true
-          kubernetes_sd_configs:
-            - role: pod
-          relabel_configs:
-            - source_labels: [__meta_kubernetes_pod_annotation_custom_metrics_scrape]
-              action: keep
-              regex: true
-            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape_slow]
-              action: drop
-              regex: true
-            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
-              action: replace
-              regex: (https?)
-              target_label: __scheme__
-            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-              action: replace
-              target_label: __metrics_path__
-              regex: (.+)
-            - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port, __meta_kubernetes_pod_ip]
-              action: replace
-              regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
-              replacement: '[$2]:$1'
-              target_label: __address__
   alertRelabelConfigs: {}
   networkPolicy:
     enabled: false
@@ -640,21 +553,18 @@ prometheus:
     podDisruptionBudget: {}
     metricAnnotationsAllowList: []
     collectors:
-      - cronjobs # Scheduled jobs that run at specified intervals
-      - daemonsets # Ensures a pod runs on all (or some) nodes
-      - deployments # Manages ReplicaSets and Pods
-      - horizontalpodautoscalers # Automatically scales Pod replicas based on metrics
-      - jobs # One-time tasks that run to completion
-      - limitranges # Enforces resource limits in a namespace
-      - namespaces # Virtual clusters within a physical cluster
-      - nodes # Physical or virtual machines in the cluster
-      - persistentvolumeclaims # Storage requests by Pods
-      - persistentvolumes # Cluster storage resources
-      - pods # Smallest deployable units in Kubernetes
-      - replicasets # Maintains a stable set of replica Pods
-      - resourcequotas # Limits aggregate resource consumption per namespace
-      - statefulsets # Manages stateful applications
-      - storageclasses # Defines different classes of storage
+      - cronjobs
+      - daemonsets
+      - deployments
+      - jobs
+      - namespaces
+      - nodes
+      - persistentvolumeclaims
+      - persistentvolumes
+      - pods
+      - replicasets
+      - resourcequotas
+      - statefulsets
     metricAllowlist: []
     metricDenylist: []
     metricLabelsAllowlist:
@@ -666,10 +576,7 @@ prometheus:
       - statefulsets=[*]
       - cronjobs=[*]
       - jobs=[*]
-      - horizontalpodautoscalers=[*]
-      - limitranges=[*]
       - persistentvolumeclaims=[*]
-      - storageclasses=[*]
       - nodes=[*]
       - resourcequotas=[*]
       - persistentvolumes=[*]
