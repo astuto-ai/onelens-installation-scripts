@@ -164,7 +164,8 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   CLUSTER_TOKEN=$(_get '.["onelens-agent"].secrets.CLUSTER_TOKEN')
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
-  PVC_ENABLED=$(_get '.prometheus.server.persistentVolume.enabled')
+  # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
+  PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
   # Detect cloud provider from existing StorageClass provisioner
   SC_PROVISIONER=$(_get '.["onelens-agent"].storageClass.provisioner')
@@ -598,8 +599,6 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
-echo "DEBUG: PVC_ENABLED='$PVC_ENABLED' (type check)"
-echo "DEBUG: HELM_CMD PVC portion: $(echo "$HELM_CMD" | grep -o 'persistentVolume.enabled[^ ]*')"
 eval "$HELM_CMD"
 
 if [ $? -ne 0 ]; then
