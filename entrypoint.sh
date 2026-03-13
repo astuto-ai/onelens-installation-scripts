@@ -79,6 +79,9 @@ elif [ "$deployment_type" = "cronjob" ]; then
     # ═══════════════════════════════════════════════════════════════════
     echo "Running healthcheck..."
 
+    # Wait briefly for K8s API and DNS to be ready (pod just started)
+    sleep 5
+
     UNHEALTHY_REASONS=""
 
     # Check 1: All pods Running and Ready
