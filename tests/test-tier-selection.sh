@@ -55,11 +55,11 @@ echo "--- select_resource_tier: tiny tier (0 pods) — full check ---"
 call_tier 0
 assert_eq "$(get_tier)" "tiny" "0 pods -> tiny tier"
 assert_all_resource_vars "tiny(0)" \
-    "270m" "1425Mi" "270m" "1425Mi" \
-    "180m" "240Mi"  "180m" "240Mi"  \
-    "100m" "256Mi"  "300m" "384Mi"  \
+    "100m" "150Mi"  "100m" "150Mi"  \
     "100m" "128Mi"  "100m" "128Mi"  \
-    "50m"  "64Mi"   "50m"  "64Mi"
+    "100m" "256Mi"  "300m" "384Mi"  \
+    "50m"  "64Mi"   "50m"  "64Mi"   \
+    "25m"  "64Mi"   "25m"  "64Mi"
 
 echo ""
 echo "--- select_resource_tier: tiny tier (49 pods) — boundary ---"
@@ -71,11 +71,11 @@ echo "--- select_resource_tier: small tier (50 pods) — full check ---"
 call_tier 50
 assert_eq "$(get_tier)" "small" "50 pods -> small tier"
 assert_all_resource_vars "small(50)" \
-    "360m" "1901Mi" "360m" "1901Mi" \
-    "240m" "320Mi"  "240m" "320Mi"  \
+    "100m" "275Mi"  "100m" "275Mi"  \
+    "100m" "192Mi"  "100m" "192Mi"  \
     "125m" "320Mi"  "375m" "480Mi"  \
-    "120m" "160Mi"  "120m" "160Mi"  \
-    "100m" "100Mi"  "100m" "100Mi"
+    "50m"  "128Mi"  "50m"  "128Mi"  \
+    "25m"  "64Mi"   "25m"  "64Mi"
 
 echo ""
 echo "--- select_resource_tier: small tier (99 pods) — boundary ---"
@@ -87,11 +87,11 @@ echo "--- select_resource_tier: medium tier (100 pods) — full check ---"
 call_tier 100
 assert_eq "$(get_tier)" "medium" "100 pods -> medium tier"
 assert_all_resource_vars "medium(100)" \
-    "420m" "2834Mi" "420m" "2834Mi" \
-    "240m" "400Mi"  "240m" "400Mi"  \
+    "150m" "420Mi"  "150m" "420Mi"  \
+    "100m" "256Mi"  "100m" "256Mi"  \
     "125m" "480Mi"  "375m" "640Mi"  \
-    "120m" "256Mi"  "120m" "256Mi"  \
-    "100m" "100Mi"  "100m" "100Mi"
+    "50m"  "192Mi"  "50m"  "192Mi"  \
+    "50m"  "100Mi"  "50m"  "100Mi"
 
 echo ""
 echo "--- select_resource_tier: medium tier (499 pods) — boundary ---"
@@ -103,11 +103,11 @@ echo "--- select_resource_tier: large tier (500 pods) — full check ---"
 call_tier 500
 assert_eq "$(get_tier)" "large" "500 pods -> large tier"
 assert_all_resource_vars "large(500)" \
-    "1200m" "5653Mi" "1200m" "5653Mi" \
-    "300m"  "576Mi"  "300m"  "576Mi"  \
+    "250m"  "720Mi"  "250m"  "720Mi"  \
+    "150m"  "384Mi"  "150m"  "384Mi"  \
     "125m"  "640Mi"  "440m"  "800Mi"  \
-    "120m"  "384Mi"  "120m"  "384Mi"  \
-    "100m"  "100Mi"  "100m"  "100Mi"
+    "50m"   "256Mi"  "50m"   "256Mi"  \
+    "50m"   "100Mi"  "50m"   "100Mi"
 
 echo ""
 echo "--- select_resource_tier: large tier (999 pods) — boundary ---"
@@ -119,11 +119,11 @@ echo "--- select_resource_tier: extra-large tier (1000 pods) — full check ---"
 call_tier 1000
 assert_eq "$(get_tier)" "extra-large" "1000 pods -> extra-large tier"
 assert_all_resource_vars "extra-large(1000)" \
-    "1380m" "8640Mi" "1380m" "8640Mi" \
-    "300m"  "720Mi"  "300m"  "720Mi"  \
+    "400m"  "1600Mi" "400m"  "1600Mi" \
+    "150m"  "512Mi"  "150m"  "512Mi"  \
     "125m"  "800Mi"  "500m"  "960Mi"  \
-    "300m"  "640Mi"  "300m"  "640Mi"  \
-    "250m"  "400Mi"  "250m"  "400Mi"
+    "100m"  "384Mi"  "100m"  "384Mi"  \
+    "50m"   "128Mi"  "50m"   "128Mi"
 
 echo ""
 echo "--- select_resource_tier: extra-large tier (1499 pods) — boundary ---"
@@ -135,11 +135,11 @@ echo "--- select_resource_tier: very-large tier (1500 pods) — full check ---"
 call_tier 1500
 assert_eq "$(get_tier)" "very-large" "1500 pods -> very-large tier"
 assert_all_resource_vars "very-large(1500)" \
-    "1800m" "11306Mi" "1800m" "11306Mi" \
-    "360m"  "960Mi"   "360m"  "960Mi"   \
+    "600m"  "2400Mi"  "600m"  "2400Mi"  \
+    "200m"  "768Mi"   "200m"  "768Mi"   \
     "190m"  "960Mi"   "565m"  "1280Mi"  \
-    "300m"  "640Mi"   "300m"  "640Mi"   \
-    "250m"  "400Mi"   "250m"  "400Mi"
+    "100m"  "512Mi"   "100m"  "512Mi"   \
+    "50m"   "128Mi"   "50m"   "128Mi"
 
 echo ""
 echo "--- select_resource_tier: very-large tier (5000 pods) — boundary ---"
