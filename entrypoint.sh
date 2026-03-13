@@ -96,9 +96,9 @@ elif [ "$deployment_type" = "cronjob" ]; then
     PROM_SVC=$(kubectl get svc -n onelens-agent --no-headers 2>/dev/null \
         | awk '/prometheus-server/{print $1; exit}' || true)
     if [ -n "$PROM_SVC" ]; then
-        PROM_HEALTH=$(curl -s --max-time 5 "http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy" 2>/dev/null || true)
-        if ! echo "$PROM_HEALTH" | grep -qi "healthy"; then
-            UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Prometheus unhealthy (${PROM_SVC})\n"
+        PROM_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy" 2>/dev/null || echo "000")
+        if [ "$PROM_HTTP_CODE" != "200" ]; then
+            UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Prometheus unhealthy (HTTP ${PROM_HTTP_CODE})\n"
         fi
     else
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Prometheus service not found\n"
@@ -110,10 +110,10 @@ elif [ "$deployment_type" = "cronjob" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}OpenCost unhealthy (HTTP ${OPENCOST_HTTP_CODE})\n"
     fi
 
-    # Check 4: Pushgateway healthy
-    PGW_HEALTH=$(curl -s --max-time 5 "http://onelens-agent-prometheus-pushgateway.onelens-agent.svc.cluster.local:9091/-/healthy" 2>/dev/null || true)
-    if ! echo "$PGW_HEALTH" | grep -qi "healthy"; then
-        UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pushgateway unhealthy\n"
+    # Check 4: Pushgateway healthy (returns "OK" body, not "healthy")
+    PGW_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://onelens-agent-prometheus-pushgateway.onelens-agent.svc.cluster.local:9091/-/healthy" 2>/dev/null || echo "000")
+    if [ "$PGW_HTTP_CODE" != "200" ]; then
+        UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pushgateway unhealthy (HTTP ${PGW_HTTP_CODE})\n"
     fi
 
     # Check 5: Version match
