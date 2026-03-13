@@ -101,10 +101,10 @@ elif [ "$deployment_type" = "cronjob" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Prometheus service not found\n"
     fi
 
-    # Check 3: OpenCost healthy
-    OPENCOST_HEALTH=$(curl -s --max-time 5 "http://onelens-agent-prometheus-opencost-exporter.onelens-agent.svc.cluster.local:9003/healthz" 2>/dev/null || true)
-    if [ "$OPENCOST_HEALTH" != "ok" ]; then
-        UNHEALTHY_REASONS="${UNHEALTHY_REASONS}OpenCost unhealthy\n"
+    # Check 3: OpenCost healthy (older versions return "ok" body, newer return empty body with HTTP 200)
+    OPENCOST_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://onelens-agent-prometheus-opencost-exporter.onelens-agent.svc.cluster.local:9003/healthz" 2>/dev/null || echo "000")
+    if [ "$OPENCOST_HTTP_CODE" != "200" ]; then
+        UNHEALTHY_REASONS="${UNHEALTHY_REASONS}OpenCost unhealthy (HTTP ${OPENCOST_HTTP_CODE})\n"
     fi
 
     # Check 4: Pushgateway healthy
