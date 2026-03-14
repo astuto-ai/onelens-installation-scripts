@@ -600,8 +600,14 @@ HELM_CMD="$HELM_CMD \
   --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT_ID\" \
   --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
   --set onelens-agent.secrets.CLUSTER_TOKEN=\"$CLUSTER_TOKEN\" \
-  --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\" \
-  --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$DEFAULT_CLUSTER_ID\""
+  --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\""
+
+# OpenCost cluster ID — only set if extracted value is non-empty.
+# Empty --set would override the globalvalues.yaml default ('default-cluster'),
+# which breaks OpenCost's idle cost allocation (shareIdle=true → 500 error).
+if [ -n "$DEFAULT_CLUSTER_ID" ]; then
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$DEFAULT_CLUSTER_ID\""
+fi
 
 # PVC settings
 HELM_CMD="$HELM_CMD \
