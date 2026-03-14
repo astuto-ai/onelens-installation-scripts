@@ -89,10 +89,14 @@ end_marker=$(grep -c 'END_EMBED' "$ROOT/src/patching.sh" || true)
 assert_gt "$end_marker" "0" "patching.sh has END_EMBED marker"
 
 # ---------------------------------------------------------------------------
-# Test 10: Patching.sh does NOT use normalize_chart_version (no version pinning)
+# Test 10: Patching.sh pins chart version from PATCHING_VERSION env var
+# Uses normalize_chart_version to strip v/release/ prefix for --version flag.
+# Falls back to no --version (latest) if PATCHING_VERSION is not set (old entrypoint).
 # ---------------------------------------------------------------------------
-patching_ncv=$(grep -c 'normalize_chart_version' "$ROOT/src/patching.sh" || true)
-assert_eq "$patching_ncv" "0" "patching.sh does not pin chart version (uses latest)"
+patching_ncv=$(grep -c 'normalize_chart_version.*PATCHING_VERSION' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_ncv" "0" "patching.sh pins chart version from PATCHING_VERSION"
+patching_version_flag=$(grep -c -- '--version.*CHART_VERSION' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_version_flag" "0" "patching.sh passes --version to helm upgrade"
 
 # ---------------------------------------------------------------------------
 # Test 11: Neither agent nor deployer upgrade uses --reuse-values

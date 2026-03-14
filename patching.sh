@@ -967,17 +967,27 @@ if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-r
 fi
 
 # Build helm upgrade command
-# Key design: NO --reuse-values, NO --version
+# Key design: NO --reuse-values
 #   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
 #   - Customer values file preserves tolerations, nodeSelector, podLabels, storageClass
 #   - --set overrides for identity, resources, retention, PVC
-#   - Without --version, helm uses latest chart from repo (auto-converge to latest)
+#   - --version pins to the target version from PATCHING_VERSION (set by entrypoint.sh)
+#     Without --version, helm would pick latest from repo — uncontrolled upgrades.
+#     If PATCHING_VERSION is not set (old entrypoint), omit --version (backward compat).
+CHART_VERSION=""
+if [ -n "$PATCHING_VERSION" ]; then
+    CHART_VERSION=$(normalize_chart_version "$PATCHING_VERSION" 2>/dev/null || echo "")
+fi
 HELM_CMD="helm upgrade onelens-agent onelens/onelens-agent \
   -f /globalvalues.yaml \
   --history-max 200 \
   --wait \
   --timeout=10m \
   --namespace onelens-agent"
+if [ -n "$CHART_VERSION" ]; then
+    HELM_CMD="$HELM_CMD --version $CHART_VERSION"
+    echo "Pinning chart version to $CHART_VERSION (from PATCHING_VERSION=$PATCHING_VERSION)"
+fi
 
 # Apply customer values (tolerations, nodeSelector, podLabels, storageClass)
 if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
@@ -1092,11 +1102,17 @@ echo "Checking deployer chart version..."
 DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
     | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
     | sed 's/onelensdeployer-//' || true)
-LATEST_DEPLOYER=$(helm search repo onelens/onelensdeployer -o json 2>/dev/null \
-    | jq -r '.[0].version' || true)
+# Pin deployer target to CHART_VERSION (from PATCHING_VERSION) if available.
+# Fall back to latest from repo for backward compat (old entrypoint without PATCHING_VERSION).
+if [ -n "$CHART_VERSION" ]; then
+    TARGET_DEPLOYER="$CHART_VERSION"
+else
+    TARGET_DEPLOYER=$(helm search repo onelens/onelensdeployer -o json 2>/dev/null \
+        | jq -r '.[0].version' || true)
+fi
 
-if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSION" != "$LATEST_DEPLOYER" ]; then
-    echo "Upgrading deployer from $DEPLOYER_VERSION to $LATEST_DEPLOYER..."
+if [ -n "$DEPLOYER_VERSION" ] && [ -n "$TARGET_DEPLOYER" ] && [ "$DEPLOYER_VERSION" != "$TARGET_DEPLOYER" ]; then
+    echo "Upgrading deployer from $DEPLOYER_VERSION to $TARGET_DEPLOYER..."
 
     # Extract customer-specific values from existing deployer release
     DEPLOYER_VALUES=$(helm get values onelensdeployer -n onelens-agent -a -o json 2>/dev/null || true)
@@ -1116,6 +1132,7 @@ if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSI
         --set cronjob.backoffLimit=0 \
         --set cronjob.activeDeadlineSeconds=900 \
         --set cronjob.env.deployment_type=cronjob \
+        --version $TARGET_DEPLOYER \
         --timeout=3m"
 
     if [ -n "$DEPLOYER_CUSTOMER_FILE" ] && [ -f "$DEPLOYER_CUSTOMER_FILE" ]; then
@@ -1123,12 +1140,12 @@ if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSI
     fi
 
     eval "$DEPLOYER_CMD" 2>&1 && \
-        echo "Deployer upgraded to $LATEST_DEPLOYER" || \
+        echo "Deployer upgraded to $TARGET_DEPLOYER" || \
         echo "WARNING: Deployer upgrade failed (non-fatal, will retry next run)"
 
     [ -n "$DEPLOYER_CUSTOMER_FILE" ] && rm -f "$DEPLOYER_CUSTOMER_FILE"
 else
-    echo "Deployer chart: current=${DEPLOYER_VERSION:-unknown} latest=${LATEST_DEPLOYER:-unknown} (no upgrade needed)"
+    echo "Deployer chart: current=${DEPLOYER_VERSION:-unknown} target=${TARGET_DEPLOYER:-unknown} (no upgrade needed)"
 fi
 
 # Get the chart version that was actually deployed

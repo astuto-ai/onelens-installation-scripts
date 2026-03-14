@@ -152,6 +152,12 @@ norm_v_sed=$(grep '_norm_current\|_norm_patching' "$ENTRYPOINT" | grep -c "sed '
 assert_gt "$norm_v_sed" "0" "version normalization strips v prefix"
 
 ###############################################################################
+# Test 20: entrypoint.sh exports PATCHING_VERSION for patching.sh
+###############################################################################
+pv_export=$(grep -c 'export PATCHING_VERSION' "$ENTRYPOINT" || true)
+assert_eq "$pv_export" "2" "PATCHING_VERSION exported in both healthcheck and oneshot paths"
+
+###############################################################################
 # Summary
 ###############################################################################
 test_summary

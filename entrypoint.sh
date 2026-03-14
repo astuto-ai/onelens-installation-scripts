@@ -171,6 +171,9 @@ elif [ "$deployment_type" = "cronjob" ]; then
     echo "Patching script downloaded, executing for remediation..."
     chmod +x "./$SCRIPT_NAME"
 
+    # Export patching_version so patching.sh can pin chart version (not latest)
+    export PATCHING_VERSION="$patching_version"
+
     # Execute the patching script and capture output
     PATCH_LOG_FILE=$(mktemp)
     ./"$SCRIPT_NAME" 2>&1 | tee "$PATCH_LOG_FILE"
@@ -263,6 +266,9 @@ elif [ "$deployment_type" = "cronjob" ]; then
 
     echo "Patching script downloaded, executing..."
     chmod +x "./$SCRIPT_NAME"
+
+    # Export patching_version so patching.sh can pin chart version (not latest)
+    export PATCHING_VERSION="$patching_version"
 
     # Execute the patching script and capture full output for diagnostics
     PATCH_LOG_FILE=$(mktemp)
