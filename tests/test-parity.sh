@@ -109,10 +109,12 @@ patching_create_ns=$(grep -c -- '--create-namespace' "$ROOT/src/patching.sh" || 
 assert_eq "$patching_create_ns" "0" "patching does not use --create-namespace"
 
 # ---------------------------------------------------------------------------
-# Test 13: Patching.sh has --atomic flag
+# Test 13: Patching.sh uses --wait (not --atomic) to avoid full rollback on timeout
 # ---------------------------------------------------------------------------
+wait_count=$(grep -c -- '--wait' "$ROOT/src/patching.sh" || true)
+assert_gt "$wait_count" "0" "patching uses --wait for upgrade monitoring"
 atomic_count=$(grep -c -- '--atomic' "$ROOT/src/patching.sh" || true)
-assert_gt "$atomic_count" "0" "patching uses --atomic for safe rollback"
+assert_eq "$atomic_count" "0" "patching does not use --atomic (continue to deployer upgrade on failure)"
 
 # ---------------------------------------------------------------------------
 # Test 14: Label multiplier application code matches between scripts

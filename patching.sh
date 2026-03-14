@@ -72,6 +72,18 @@ if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
 fi
 echo "Tools ready: helm $(helm version --short 2>/dev/null), kubectl $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'unknown')"
 
+# Immediately set 5-min schedule — ensures retries even if anything below fails.
+# Without this, a daily-schedule cluster waits 24 hours on any failure.
+TARGET_SCHEDULE="*/5 * * * *"
+CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
+if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
+    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to every 5 min ($TARGET_SCHEDULE)..."
+    kubectl patch cronjob onelensupdater -n onelens-agent \
+        -p "{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\"}}" 2>/dev/null && \
+        echo "CronJob schedule updated to */5" || \
+        echo "WARNING: Failed to update CronJob schedule (RBAC?)"
+fi
+
 # Phase 4: Cluster Pod Count and Resource Allocation
 
 # BEGIN_EMBED lib/resource-sizing.sh
@@ -927,8 +939,8 @@ fi
 HELM_CMD="helm upgrade onelens-agent onelens/onelens-agent \
   -f /globalvalues.yaml \
   --history-max 200 \
-  --atomic \
-  --timeout=5m \
+  --wait \
+  --timeout=10m \
   --namespace onelens-agent"
 
 # Apply customer values (tolerations, nodeSelector, podLabels, storageClass)
@@ -991,13 +1003,18 @@ HELM_CMD="$HELM_CMD \
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"
 
-if [ $? -ne 0 ]; then
-    echo "Upgrade failed and was automatically rolled back by --atomic flag"
-    echo "--- Pod Status After Rollback ---"
+UPGRADE_EXIT=$?
+if [ $UPGRADE_EXIT -ne 0 ]; then
+    echo "WARNING: helm upgrade failed (exit $UPGRADE_EXIT) but NOT rolling back."
+    echo "Old pods remain running. Deployer upgrade + 5-min schedule will proceed"
+    echo "so the next healthcheck can retry or allow quick analysis."
+    echo "--- Pod Status After Failed Upgrade ---"
     kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || true
-    echo "--- Events After Rollback ---"
+    echo "--- Events After Failed Upgrade ---"
     kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || true
-    exit 1
+    UPGRADE_FAILED=true
+else
+    UPGRADE_FAILED=false
 fi
 
 # Clean up temp file
@@ -1024,18 +1041,6 @@ if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
-# Update CronJob schedule to every 5 minutes for healthcheck mode.
-# Enables self-healing: 5 min detection + 5 min fix = 10 min max downtime.
-TARGET_SCHEDULE="*/5 * * * *"
-CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
-if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
-    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to every 5 min ($TARGET_SCHEDULE)..."
-    kubectl patch cronjob onelensupdater -n onelens-agent \
-        -p "{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\"}}" 2>/dev/null && \
-        echo "CronJob schedule updated to */5" || \
-        echo "WARNING: Failed to update CronJob schedule (RBAC?)"
-fi
-
 # Deployer self-upgrade — upgrade the deployer chart itself to get new entrypoint.sh
 # This is the key enabler: once the deployer chart is upgraded, the new entrypoint.sh
 # with healthcheck mode will run on the next CronJob execution.
@@ -1052,7 +1057,7 @@ if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSI
         --reuse-values \
         --set cronjob.schedule="$TARGET_SCHEDULE" \
         --set cronjob.backoffLimit=0 \
-        --set cronjob.activeDeadlineSeconds=600 \
+        --set cronjob.activeDeadlineSeconds=900 \
         --timeout=3m 2>&1 && \
         echo "Deployer upgraded to $LATEST_DEPLOYER" || \
         echo "WARNING: Deployer upgrade failed (non-fatal, will retry next run)"
@@ -1103,12 +1108,21 @@ FINAL_DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
     | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
     | sed 's/onelensdeployer-//' || true)
 current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-hc_payload=$(jq -n \
-    --arg reg_id "$REGISTRATION_ID" \
-    --arg token "$CLUSTER_TOKEN" \
-    --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
-    --arg ts "$current_timestamp" \
-    '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts}}')
+if [ "$UPGRADE_FAILED" = "true" ]; then
+    # Upgrade failed — activate healthcheck + deployer version but don't claim healthy
+    hc_payload=$(jq -n \
+        --arg reg_id "$REGISTRATION_ID" \
+        --arg token "$CLUSTER_TOKEN" \
+        --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+        '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv}}')
+else
+    hc_payload=$(jq -n \
+        --arg reg_id "$REGISTRATION_ID" \
+        --arg token "$CLUSTER_TOKEN" \
+        --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+        --arg ts "$current_timestamp" \
+        '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts}}')
+fi
 curl -s --max-time 10 --location --request PUT \
     "${API_BASE_URL:-https://api-in.onelens.cloud}/v1/kubernetes/cluster-version" \
     --header 'Content-Type: application/json' \
@@ -1117,4 +1131,9 @@ curl -s --max-time 10 --location --request PUT \
     echo "WARNING: Failed to activate healthcheck mode (API call failed)"
 
 echo ""
+if [ "$UPGRADE_FAILED" = "true" ]; then
+    echo "Patching incomplete (upgrade failed). Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
+    echo "Deployer upgraded + 5-min schedule set. Next healthcheck will retry."
+    exit 1
+fi
 echo "Patching complete. Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
