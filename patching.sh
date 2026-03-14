@@ -679,9 +679,13 @@ fi
 # Cluster sizing inputs (the numbers that drive resource allocation)
 echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER"
 
-# Current resources (compact: memory limits only — the OOM-relevant values)
+# Current resources (compact: cpu/memory limits per component)
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
-    echo "Current limits: prom=$(_get '.prometheus.server.resources.limits.memory') ksm=$(_get '.prometheus["kube-state-metrics"].resources.limits.memory') opencost=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory') agent=$(_get '.["onelens-agent"].resources.limits.memory')"
+    echo "Current limits:"
+    echo "  prom: cpu=$(_get '.prometheus.server.resources.limits.cpu') mem=$(_get '.prometheus.server.resources.limits.memory')"
+    echo "  ksm: cpu=$(_get '.prometheus["kube-state-metrics"].resources.limits.cpu') mem=$(_get '.prometheus["kube-state-metrics"].resources.limits.memory')"
+    echo "  opencost: cpu=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu') mem=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory')"
+    echo "  agent: cpu=$(_get '.["onelens-agent"].resources.limits.cpu') mem=$(_get '.["onelens-agent"].resources.limits.memory')"
 fi
 
 # Warning events only (OOMKilled, CrashLoopBackOff, FailedScheduling)
@@ -1186,7 +1190,11 @@ echo ""
 echo "=== POST-PATCH ==="
 echo "Chart: $DEPLOYED_VERSION | Tier: $TIER | Pods: $TOTAL_PODS | Labels: ${LABEL_MULTIPLIER}x"
 echo "Retention: $PROMETHEUS_RETENTION | Size: $PROMETHEUS_RETENTION_SIZE | PVC: $PROMETHEUS_VOLUME_SIZE"
-echo "Applied limits: prom=$PROMETHEUS_MEMORY_LIMIT ksm=$KSM_MEMORY_LIMIT opencost=$OPENCOST_MEMORY_LIMIT agent=$ONELENS_MEMORY_LIMIT"
+echo "Applied limits:"
+echo "  prom: cpu=$PROMETHEUS_CPU_LIMIT mem=$PROMETHEUS_MEMORY_LIMIT"
+echo "  ksm: cpu=$KSM_CPU_LIMIT mem=$KSM_MEMORY_LIMIT"
+echo "  opencost: cpu=$OPENCOST_CPU_LIMIT mem=$OPENCOST_MEMORY_LIMIT"
+echo "  agent: cpu=$ONELENS_CPU_LIMIT mem=$ONELENS_MEMORY_LIMIT"
 
 # Pod health after upgrade (compact)
 POST_NOT_HEALTHY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
