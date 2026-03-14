@@ -537,6 +537,39 @@ if [ -n "$EXISTING_PVC_SIZE" ]; then
     fi
 fi
 
+# Never downsize memory limits — prevents OOM during Prometheus WAL replay and
+# KSM/agent startup when upgrading from older versions with higher allocations.
+# The metric filtering in globalvalues.yaml reduces long-term memory needs, but
+# the first startup after upgrade replays old (larger) WAL data.
+# Uses _max_memory from lib/resource-sizing.sh to compare and keep the larger value.
+if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+    _existing() { echo "$CURRENT_VALUES" | jq -r "$1 // empty"; }
+
+    _guard_memory() {
+        local component="$1" path="$2" current_var="$3"
+        local existing
+        existing=$(_existing "$path")
+        if [ -n "$existing" ]; then
+            local kept
+            kept=$(_max_memory "$existing" "${!current_var}")
+            if [ "$kept" != "${!current_var}" ]; then
+                echo "  $component: keeping existing $existing (tier calculated ${!current_var})"
+                eval "$current_var=\"$kept\""
+            fi
+        fi
+    }
+
+    echo "Checking for memory downsizes (never downsize on upgrade)..."
+    _guard_memory "Prometheus request" '.prometheus.server.resources.requests.memory' PROMETHEUS_MEMORY_REQUEST
+    _guard_memory "Prometheus limit" '.prometheus.server.resources.limits.memory' PROMETHEUS_MEMORY_LIMIT
+    _guard_memory "KSM request" '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
+    _guard_memory "KSM limit" '.prometheus["kube-state-metrics"].resources.limits.memory' KSM_MEMORY_LIMIT
+    _guard_memory "OpenCost request" '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory' OPENCOST_MEMORY_REQUEST
+    _guard_memory "OpenCost limit" '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory' OPENCOST_MEMORY_LIMIT
+    _guard_memory "Agent request" '.["onelens-agent"].resources.requests.memory' ONELENS_MEMORY_REQUEST
+    _guard_memory "Agent limit" '.["onelens-agent"].resources.limits.memory' ONELENS_MEMORY_LIMIT
+fi
+
 # Check for existing bound PVC to preserve data across upgrades
 EXISTING_CLAIM_FLAG=""
 PVC_NAME="onelens-agent-prometheus-server"
