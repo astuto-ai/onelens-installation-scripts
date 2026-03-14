@@ -95,12 +95,12 @@ patching_ncv=$(grep -c 'normalize_chart_version' "$ROOT/src/patching.sh" || true
 assert_eq "$patching_ncv" "0" "patching.sh does not pin chart version (uses latest)"
 
 # ---------------------------------------------------------------------------
-# Test 11: Agent chart upgrade does NOT use --reuse-values (uses explicit value files)
-# Note: deployer self-upgrade (helm upgrade onelensdeployer) legitimately uses --reuse-values
-# We check that only 1 occurrence exists and it's in the deployer upgrade block
+# Test 11: Neither agent nor deployer upgrade uses --reuse-values
+# All values are explicitly controlled: customer values extracted and re-applied,
+# everything else comes from chart defaults or --set overrides.
 # ---------------------------------------------------------------------------
 reuse_count=$(grep -v '^#' "$ROOT/src/patching.sh" | grep -c -- '--reuse-values' || true)
-assert_eq "$reuse_count" "1" "only deployer self-upgrade uses --reuse-values (agent chart uses -f globalvalues.yaml)"
+assert_eq "$reuse_count" "0" "no helm upgrade uses --reuse-values (all values explicitly controlled)"
 
 # ---------------------------------------------------------------------------
 # Test 12: Patching.sh does NOT have --create-namespace
@@ -124,6 +124,30 @@ install_label_apply=$(sed -n '/Apply label density multiplier/,/^fi$/p' "$ROOT/i
 patching_label_apply=$(sed -n '/Apply label density multiplier/,/^fi$/p' "$ROOT/src/patching.sh" | sed 's/^[[:space:]]*//')
 assert_ne "$install_label_apply" "" "install.sh has label multiplier application block"
 assert_eq "$install_label_apply" "$patching_label_apply" "label multiplier application code matches"
+
+# ---------------------------------------------------------------------------
+# Test 15: Patching.sh patches activeDeadlineSeconds before helm upgrade
+# ---------------------------------------------------------------------------
+deadline_patch=$(grep -c 'activeDeadlineSeconds' "$ROOT/src/patching.sh" || true)
+assert_gt "$deadline_patch" "0" "patching.sh references activeDeadlineSeconds"
+# The deadline patch must appear BEFORE the helm upgrade command
+deadline_line=$(grep -n 'CURRENT_DEADLINE' "$ROOT/src/patching.sh" | head -1 | cut -d: -f1)
+helm_upgrade_line=$(grep -n 'helm upgrade onelens-agent' "$ROOT/src/patching.sh" | head -1 | cut -d: -f1)
+assert_gt "$helm_upgrade_line" "$deadline_line" "activeDeadlineSeconds patched before helm upgrade"
+
+# ---------------------------------------------------------------------------
+# Test 16: Patching.sh handles stuck helm release (pending-upgrade/pending-rollback)
+# ---------------------------------------------------------------------------
+pending_check=$(grep -c 'pending-upgrade\|pending-rollback' "$ROOT/src/patching.sh" || true)
+assert_gt "$pending_check" "0" "patching.sh checks for stuck helm release states"
+rollback_cmd=$(grep -c 'helm rollback onelens-agent' "$ROOT/src/patching.sh" || true)
+assert_gt "$rollback_cmd" "0" "patching.sh can rollback stuck helm releases"
+
+# ---------------------------------------------------------------------------
+# Test 17: Deployer upgrade extracts customer values (no --reuse-values)
+# ---------------------------------------------------------------------------
+deployer_extract=$(grep -c 'DEPLOYER_CUSTOMER_FILE\|DEPLOYER_VALUES' "$ROOT/src/patching.sh" || true)
+assert_gt "$deployer_extract" "0" "deployer upgrade extracts customer values explicitly"
 
 test_summary
 exit $?

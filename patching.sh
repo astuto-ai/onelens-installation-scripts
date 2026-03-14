@@ -72,16 +72,33 @@ if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
 fi
 echo "Tools ready: helm $(helm version --short 2>/dev/null), kubectl $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'unknown')"
 
-# Immediately set 5-min schedule — ensures retries even if anything below fails.
-# Without this, a daily-schedule cluster waits 24 hours on any failure.
+# Immediately set 5-min schedule and raise activeDeadlineSeconds — ensures retries
+# even if anything below fails, and prevents pod kill during 10m helm timeout.
+# Without this, a daily-schedule cluster waits 24 hours on any failure, and an old
+# deployer with low activeDeadlineSeconds kills the pod mid-helm-upgrade.
 TARGET_SCHEDULE="*/5 * * * *"
+TARGET_DEADLINE=900
 CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
+CURRENT_DEADLINE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.activeDeadlineSeconds}' 2>/dev/null || true)
+
+PATCH_JSON=""
 if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
-    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to every 5 min ($TARGET_SCHEDULE)..."
-    kubectl patch cronjob onelensupdater -n onelens-agent \
-        -p "{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\"}}" 2>/dev/null && \
-        echo "CronJob schedule updated to */5" || \
-        echo "WARNING: Failed to update CronJob schedule (RBAC?)"
+    PATCH_JSON="{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\""
+    echo "Updating CronJob schedule from '$CURRENT_SCHEDULE' to every 5 min..."
+fi
+if [ -n "$CURRENT_DEADLINE" ] && [ "$CURRENT_DEADLINE" -lt "$TARGET_DEADLINE" ] 2>/dev/null; then
+    if [ -n "$PATCH_JSON" ]; then
+        PATCH_JSON="${PATCH_JSON},\"jobTemplate\":{\"spec\":{\"activeDeadlineSeconds\":$TARGET_DEADLINE}}"
+    else
+        PATCH_JSON="{\"spec\":{\"jobTemplate\":{\"spec\":{\"activeDeadlineSeconds\":$TARGET_DEADLINE}}"
+    fi
+    echo "Raising activeDeadlineSeconds from $CURRENT_DEADLINE to $TARGET_DEADLINE..."
+fi
+if [ -n "$PATCH_JSON" ]; then
+    PATCH_JSON="${PATCH_JSON}}}"
+    kubectl patch cronjob onelensupdater -n onelens-agent -p "$PATCH_JSON" 2>/dev/null && \
+        echo "CronJob patched successfully" || \
+        echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
 
 # Phase 4: Cluster Pod Count and Resource Allocation
@@ -930,6 +947,25 @@ if [ "$_PV_NEEDS_MANUAL_FIX" = "true" ]; then
     exit 1
 fi
 
+# Phase 5.9: Recover stuck helm release
+# If a previous run was killed mid-upgrade (pod OOM, activeDeadlineSeconds, etc.),
+# the release gets stuck in pending-upgrade or pending-rollback. Subsequent helm
+# upgrade calls fail with "another operation (install/upgrade/rollback) is in progress".
+# Fix: rollback to the last successful revision before attempting upgrade.
+RELEASE_STATUS=$(helm status onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.info.status' || true)
+if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-rollback" ] || [ "$RELEASE_STATUS" = "pending-install" ]; then
+    echo "Helm release stuck in '$RELEASE_STATUS' — rolling back to last successful revision..."
+    LAST_GOOD_REV=$(helm history onelens-agent -n onelens-agent -o json 2>/dev/null \
+        | jq -r '[.[] | select(.status == "deployed" or .status == "superseded")] | last | .revision' || true)
+    if [ -n "$LAST_GOOD_REV" ] && [ "$LAST_GOOD_REV" != "null" ]; then
+        helm rollback onelens-agent "$LAST_GOOD_REV" -n onelens-agent --timeout=3m 2>&1 && \
+            echo "Rolled back to revision $LAST_GOOD_REV" || \
+            echo "WARNING: Rollback failed — helm upgrade may also fail"
+    else
+        echo "WARNING: No previous successful revision found — attempting upgrade anyway"
+    fi
+fi
+
 # Build helm upgrade command
 # Key design: NO --reuse-values, NO --version
 #   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
@@ -1044,6 +1080,8 @@ fi
 # Deployer self-upgrade — upgrade the deployer chart itself to get new entrypoint.sh
 # This is the key enabler: once the deployer chart is upgraded, the new entrypoint.sh
 # with healthcheck mode will run on the next CronJob execution.
+# NO --reuse-values: image tag comes from chart AppVersion (new chart = new image).
+# Only customer-specific values (tolerations, nodeSelector) are extracted and re-applied.
 echo "Checking deployer chart version..."
 DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
     | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
@@ -1053,14 +1091,36 @@ LATEST_DEPLOYER=$(helm search repo onelens/onelensdeployer -o json 2>/dev/null \
 
 if [ -n "$DEPLOYER_VERSION" ] && [ -n "$LATEST_DEPLOYER" ] && [ "$DEPLOYER_VERSION" != "$LATEST_DEPLOYER" ]; then
     echo "Upgrading deployer from $DEPLOYER_VERSION to $LATEST_DEPLOYER..."
-    helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
-        --reuse-values \
-        --set cronjob.schedule="$TARGET_SCHEDULE" \
+
+    # Extract customer-specific values from existing deployer release
+    DEPLOYER_VALUES=$(helm get values onelensdeployer -n onelens-agent -a -o json 2>/dev/null || true)
+    DEPLOYER_CUSTOMER_FILE=""
+    if [ -n "$DEPLOYER_VALUES" ] && command -v jq &>/dev/null; then
+        DEPLOYER_CUSTOMER_FILE=$(mktemp)
+        echo "$DEPLOYER_VALUES" | jq '{
+            cronjob: {
+                tolerations: (.cronjob.tolerations // []),
+                nodeSelector: (.cronjob.nodeSelector // {})
+            }
+        }' > "$DEPLOYER_CUSTOMER_FILE" 2>/dev/null || true
+    fi
+
+    DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
+        --set cronjob.schedule=\"$TARGET_SCHEDULE\" \
         --set cronjob.backoffLimit=0 \
         --set cronjob.activeDeadlineSeconds=900 \
-        --timeout=3m 2>&1 && \
+        --set cronjob.env.deployment_type=cronjob \
+        --timeout=3m"
+
+    if [ -n "$DEPLOYER_CUSTOMER_FILE" ] && [ -f "$DEPLOYER_CUSTOMER_FILE" ]; then
+        DEPLOYER_CMD="$DEPLOYER_CMD -f $DEPLOYER_CUSTOMER_FILE"
+    fi
+
+    eval "$DEPLOYER_CMD" 2>&1 && \
         echo "Deployer upgraded to $LATEST_DEPLOYER" || \
         echo "WARNING: Deployer upgrade failed (non-fatal, will retry next run)"
+
+    [ -n "$DEPLOYER_CUSTOMER_FILE" ] && rm -f "$DEPLOYER_CUSTOMER_FILE"
 else
     echo "Deployer chart: current=${DEPLOYER_VERSION:-unknown} latest=${LATEST_DEPLOYER:-unknown} (no upgrade needed)"
 fi
