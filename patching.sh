@@ -1132,9 +1132,9 @@ fi
 # NO --reuse-values: image tag comes from chart AppVersion (new chart = new image).
 # Only customer-specific values (tolerations, nodeSelector) are extracted and re-applied.
 echo "Checking deployer chart version..."
-DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
-    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
-    | sed 's/onelensdeployer-//' || true)
+DEPLOYER_RELEASE_JSON=$(helm list -n onelens-agent -o json 2>/dev/null || echo "[]")
+DEPLOYER_VERSION=$(echo "$DEPLOYER_RELEASE_JSON" | jq -r '.[] | select(.name=="onelensdeployer") | .chart' | sed 's/onelensdeployer-//' || true)
+DEPLOYER_STATUS=$(echo "$DEPLOYER_RELEASE_JSON" | jq -r '.[] | select(.name=="onelensdeployer") | .status' || true)
 # Pin deployer target to CHART_VERSION (from PATCHING_VERSION) if available.
 # Fall back to latest from repo for backward compat (old entrypoint without PATCHING_VERSION).
 if [ -n "$CHART_VERSION" ]; then
@@ -1144,8 +1144,17 @@ else
         | jq -r '.[0].version' || true)
 fi
 
-if [ -n "$DEPLOYER_VERSION" ] && [ -n "$TARGET_DEPLOYER" ] && [ "$DEPLOYER_VERSION" != "$TARGET_DEPLOYER" ]; then
-    echo "Upgrading deployer from $DEPLOYER_VERSION to $TARGET_DEPLOYER..."
+DEPLOYER_NEEDS_UPGRADE=false
+if [ -n "$DEPLOYER_VERSION" ] && [ -n "$TARGET_DEPLOYER" ]; then
+    if [ "$DEPLOYER_VERSION" != "$TARGET_DEPLOYER" ]; then
+        DEPLOYER_NEEDS_UPGRADE=true
+    elif [ "$DEPLOYER_STATUS" = "failed" ]; then
+        echo "Deployer release is in 'failed' state — retrying upgrade..."
+        DEPLOYER_NEEDS_UPGRADE=true
+    fi
+fi
+if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
+    echo "Upgrading deployer from $DEPLOYER_VERSION ($DEPLOYER_STATUS) to $TARGET_DEPLOYER..."
 
     # Extract customer-specific values from existing deployer release
     DEPLOYER_VALUES=$(helm get values onelensdeployer -n onelens-agent -a -o json 2>/dev/null || true)
@@ -1160,11 +1169,17 @@ if [ -n "$DEPLOYER_VERSION" ] && [ -n "$TARGET_DEPLOYER" ] && [ "$DEPLOYER_VERSI
         }' > "$DEPLOYER_CUSTOMER_FILE" 2>/dev/null || true
     fi
 
+    # Disable bootstrap RBAC — it's for the initial install job only.
+    # The CronJob SA can't create cluster-scoped resources (ClusterRole/ClusterRoleBinding).
+    # Bootstrap RBAC already exists from the original install, no need to recreate.
     DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
         --set cronjob.schedule=\"$TARGET_SCHEDULE\" \
         --set cronjob.backoffLimit=0 \
         --set cronjob.activeDeadlineSeconds=900 \
         --set cronjob.env.deployment_type=cronjob \
+        --set bootstrapRbac.clusterRole.enabled=false \
+        --set bootstrapRbac.clusterRoleBinding.enabled=false \
+        --set job.enabled=false \
         --version $TARGET_DEPLOYER \
         --timeout=3m"
 
