@@ -116,9 +116,11 @@ elif [ "$deployment_type" = "cronjob" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pushgateway unhealthy (HTTP ${PGW_HTTP_CODE})\n"
     fi
 
-    # Check 5: Version match
+    # Check 5: Version match (normalize: strip leading v and release/ prefix)
     if [ -n "$patching_version" ] && [ "$patching_version" != "null" ]; then
-        if [ "$current_version" != "$patching_version" ]; then
+        _norm_current=$(echo "$current_version" | sed 's|^release/||' | sed 's|^v||')
+        _norm_patching=$(echo "$patching_version" | sed 's|^release/||' | sed 's|^v||')
+        if [ "$_norm_current" != "$_norm_patching" ]; then
             UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Version mismatch: current=$current_version target=$patching_version\n"
         fi
     fi
@@ -188,15 +190,28 @@ elif [ "$deployment_type" = "cronjob" ]; then
         current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         SUMMARY_LOG="REMEDIATED: ${UNHEALTHY_SUMMARY} ${PATCH_SUMMARY:-Patching completed successfully}"
         # CRITICAL: healthcheck mode NEVER sets patching_enabled=false
-        payload=$(jq -n \
-            --arg reg_id "$REGISTRATION_ID" \
-            --arg token "$CLUSTER_TOKEN" \
-            --arg logs "$SUMMARY_LOG" \
-            --arg patching_logs "$PATCH_OUTPUT" \
-            --arg prev "$current_version" \
-            --arg curr "$patching_version" \
-            --arg ts "$current_timestamp" \
-            '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts, last_healthy_at: $ts, healthcheck_failures: 0}}')
+        # Only update prev_version/current_version when there's an actual version change.
+        # If current == patching, this is a re-remediation (pod crash, OOM, etc.) —
+        # overwriting prev_version would lose the original pre-upgrade version.
+        if [ "$current_version" != "$patching_version" ]; then
+            payload=$(jq -n \
+                --arg reg_id "$REGISTRATION_ID" \
+                --arg token "$CLUSTER_TOKEN" \
+                --arg logs "$SUMMARY_LOG" \
+                --arg patching_logs "$PATCH_OUTPUT" \
+                --arg prev "$current_version" \
+                --arg curr "$patching_version" \
+                --arg ts "$current_timestamp" \
+                '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts, last_healthy_at: $ts, healthcheck_failures: 0}}')
+        else
+            payload=$(jq -n \
+                --arg reg_id "$REGISTRATION_ID" \
+                --arg token "$CLUSTER_TOKEN" \
+                --arg logs "$SUMMARY_LOG" \
+                --arg patching_logs "$PATCH_OUTPUT" \
+                --arg ts "$current_timestamp" \
+                '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, patch_status: "SUCCESS", last_patched: $ts, last_healthy_at: $ts, healthcheck_failures: 0}}')
+        fi
         curl -s --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null
@@ -269,15 +284,26 @@ elif [ "$deployment_type" = "cronjob" ]; then
         # patching_logs: full detailed output for debugging
         current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         SUMMARY_LOG="SUCCESS: ${PATCH_SUMMARY:-Patching completed successfully}"
-        payload=$(jq -n \
-            --arg reg_id "$REGISTRATION_ID" \
-            --arg token "$CLUSTER_TOKEN" \
-            --arg logs "$SUMMARY_LOG" \
-            --arg patching_logs "$PATCH_OUTPUT" \
-            --arg prev "$current_version" \
-            --arg curr "$patching_version" \
-            --arg ts "$current_timestamp" \
-            '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, patching_enabled: false, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts}}')
+        # Only update prev_version/current_version when there's an actual version change
+        if [ "$current_version" != "$patching_version" ]; then
+            payload=$(jq -n \
+                --arg reg_id "$REGISTRATION_ID" \
+                --arg token "$CLUSTER_TOKEN" \
+                --arg logs "$SUMMARY_LOG" \
+                --arg patching_logs "$PATCH_OUTPUT" \
+                --arg prev "$current_version" \
+                --arg curr "$patching_version" \
+                --arg ts "$current_timestamp" \
+                '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, patching_enabled: false, prev_version: $prev, current_version: $curr, patch_status: "SUCCESS", last_patched: $ts}}')
+        else
+            payload=$(jq -n \
+                --arg reg_id "$REGISTRATION_ID" \
+                --arg token "$CLUSTER_TOKEN" \
+                --arg logs "$SUMMARY_LOG" \
+                --arg patching_logs "$PATCH_OUTPUT" \
+                --arg ts "$current_timestamp" \
+                '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, patching_logs: $patching_logs, patching_enabled: false, patch_status: "SUCCESS", last_patched: $ts}}')
+        fi
         curl -s --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null

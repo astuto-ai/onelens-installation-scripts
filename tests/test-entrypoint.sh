@@ -105,16 +105,51 @@ assert_gt "$inc_failures" "0" "healthcheck increments failure counter on remedia
 
 
 ###############################################################################
-# Test 16: Backwards compatibility — job mode is unchanged
+# Test 16: prev_version is only set when version actually changes
+###############################################################################
+# Both healthcheck and oneshot modes must guard prev_version/current_version
+# behind a version-change check to avoid overwriting prev_version on re-runs
+hc_block=$(sed -n '/HEALTHCHECK MODE/,/ONESHOT MODE/p' "$ENTRYPOINT")
+hc_version_guard=$(echo "$hc_block" | grep -c 'current_version.*!=.*patching_version' || true)
+assert_gt "$hc_version_guard" "0" "healthcheck mode guards prev_version behind version-change check"
+
+oneshot_block=$(sed -n '/ONESHOT MODE/,$ p' "$ENTRYPOINT")
+oneshot_version_guard=$(echo "$oneshot_block" | grep -c 'current_version.*!=.*patching_version' || true)
+assert_gt "$oneshot_version_guard" "0" "oneshot mode guards prev_version behind version-change check"
+
+# The else branch (same version) must NOT contain prev_version
+# Count prev_version occurrences in healthcheck success block — should have exactly
+# one guarded set, and the else branch should omit it
+hc_no_prev_in_else=$(echo "$hc_block" | grep -v '^[[:space:]]*#' | grep -c 'prev_version' || true)
+# Should be exactly 1 (only in the version-changed branch, not the else)
+assert_eq "$hc_no_prev_in_else" "1" "healthcheck has prev_version only in version-changed branch"
+
+###############################################################################
+# Test 17: Backwards compatibility — job mode is unchanged
 ###############################################################################
 job_mode=$(grep -c 'deployment_type.*=.*job' "$ENTRYPOINT" || true)
 assert_gt "$job_mode" "0" "job deployment type still exists"
 
 ###############################################################################
-# Test 17: curl uses --max-time for health checks (no hanging)
+# Test 18: curl uses --max-time for health checks (no hanging)
 ###############################################################################
 max_time_count=$(grep -c 'max-time' "$ENTRYPOINT" || true)
 assert_gt "$max_time_count" "0" "health curls use --max-time to prevent hanging"
+
+###############################################################################
+# Test 19: Version comparison normalizes v prefix and release/ prefix
+###############################################################################
+# The healthcheck version check should strip v and release/ before comparing
+# so that "v2.1.10" matches "2.1.10" and "release/v1.7.0" matches "v1.7.0"
+norm_check=$(grep -c '_norm_current\|_norm_patching' "$ENTRYPOINT" || true)
+assert_gt "$norm_check" "0" "version comparison uses normalization variables"
+
+# Verify sed strips both release/ and v prefixes
+norm_sed=$(grep '_norm_current\|_norm_patching' "$ENTRYPOINT" | grep -c "sed 's|^release/||'" || true)
+assert_gt "$norm_sed" "0" "version normalization strips release/ prefix"
+
+norm_v_sed=$(grep '_norm_current\|_norm_patching' "$ENTRYPOINT" | grep -c "sed 's|^v||'" || true)
+assert_gt "$norm_v_sed" "0" "version normalization strips v prefix"
 
 ###############################################################################
 # Summary
