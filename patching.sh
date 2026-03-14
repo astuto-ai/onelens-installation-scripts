@@ -1113,7 +1113,7 @@ STABLE=false
 for i in 1 2 3 4 5 6; do
     sleep 10
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -v 'Completed' \
+        | grep -vE 'Completed|Error' \
         | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
     if [ -z "$NOT_READY" ]; then
         STABLE=true

@@ -85,8 +85,10 @@ elif [ "$deployment_type" = "cronjob" ]; then
     UNHEALTHY_REASONS=""
 
     # Check 1: All pods Running and Ready
+    # Filter out terminal job/cronjob pods (Completed, Error) — these are not long-running
+    # workloads and should not trigger remediation.
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -v 'Completed' \
+        | grep -vE 'Completed|Error' \
         | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1 " (" $3 ")"}' || true)
     if [ -n "$NOT_READY" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pods not ready: ${NOT_READY}\n"
