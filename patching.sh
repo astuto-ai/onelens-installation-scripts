@@ -677,7 +677,7 @@ if [ -n "$NOT_HEALTHY" ]; then
 fi
 
 # Cluster sizing inputs (the numbers that drive resource allocation)
-echo "Sizing: nodes=$NODE_COUNT pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER"
+echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER"
 
 # Current resources (compact: memory limits only — the OOM-relevant values)
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
