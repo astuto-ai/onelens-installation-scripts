@@ -266,58 +266,41 @@ if [ -z "$CLUSTER_TOKEN" ] || [ -z "$REGISTRATION_ID" ]; then
     exit 1
 fi
 
-# Phase 5: Capture pre-patch state for diagnostics
+# Phase 5: Capture pre-patch state (compact — fits in 10K log limit for large clusters)
 
 echo ""
-echo "========== PRE-PATCH STATE =========="
+echo "=== PRE-PATCH ==="
 
-# Helm release info
-echo "--- Helm Release ---"
-helm list -n onelens-agent --no-headers 2>/dev/null || echo "(helm list failed)"
+# Helm releases (1 line each)
+helm list -n onelens-agent --no-headers 2>/dev/null | awk '{printf "%s %s %s %s\n", $1, $7, $9, $4}' || true
 
-# Pod status in onelens-agent namespace
-echo "--- Pod Status (onelens-agent namespace) ---"
-kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
-
-# Node summary
-echo "--- Nodes ---"
-NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-echo "Total nodes: $NODE_COUNT"
-kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,STATUS:.status.conditions[-1].type,VERSION:.status.nodeInfo.kubeletVersion' 2>/dev/null || true
-
-# Current resource configuration from helm values
-echo "--- Current Resource Configuration ---"
-if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
-  echo "Prometheus server:"
-  echo "  requests: cpu=$(_get '.prometheus.server.resources.requests.cpu') memory=$(_get '.prometheus.server.resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.prometheus.server.resources.limits.cpu') memory=$(_get '.prometheus.server.resources.limits.memory')"
-  echo "OpenCost exporter:"
-  echo "  requests: cpu=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.cpu') memory=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu') memory=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory')"
-  echo "OneLens Agent:"
-  echo "  requests: cpu=$(_get '.["onelens-agent"].resources.requests.cpu') memory=$(_get '.["onelens-agent"].resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.["onelens-agent"].resources.limits.cpu') memory=$(_get '.["onelens-agent"].resources.limits.memory')"
-  echo "KSM:"
-  echo "  requests: cpu=$(_get '.prometheus["kube-state-metrics"].resources.requests.cpu') memory=$(_get '.prometheus["kube-state-metrics"].resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.prometheus["kube-state-metrics"].resources.limits.cpu') memory=$(_get '.prometheus["kube-state-metrics"].resources.limits.memory')"
-  echo "Pushgateway:"
-  echo "  requests: cpu=$(_get '.prometheus["prometheus-pushgateway"].resources.requests.cpu') memory=$(_get '.prometheus["prometheus-pushgateway"].resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.prometheus["prometheus-pushgateway"].resources.limits.cpu') memory=$(_get '.prometheus["prometheus-pushgateway"].resources.limits.memory')"
-  echo "Configmap-reload:"
-  echo "  requests: cpu=$(_get '.prometheus.configmapReload.prometheus.resources.requests.cpu') memory=$(_get '.prometheus.configmapReload.prometheus.resources.requests.memory')"
-  echo "  limits:   cpu=$(_get '.prometheus.configmapReload.prometheus.resources.limits.cpu') memory=$(_get '.prometheus.configmapReload.prometheus.resources.limits.memory')"
-  echo "Image tags:"
-  echo "  onelens-agent: $(_get '.["onelens-agent"].image.tag')"
-  echo "  opencost: $(_get '.["prometheus-opencost-exporter"].opencost.exporter.image.tag')"
-else
-  echo "(helm values not available or jq missing)"
+# OneLens pod health (compact: only name, ready, status — no IPs/nodes)
+echo "Pods:"
+kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep -vE 'Completed|Error' \
+    | awk '{printf "  %s %s %s\n", $1, $2, $3}' || true
+NOT_HEALTHY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep -vE 'Completed|Error' \
+    | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1, $3}' || true)
+if [ -n "$NOT_HEALTHY" ]; then
+    echo "WARNING: unhealthy pods: $NOT_HEALTHY"
 fi
 
-# Events in our namespace (catches OOMKilled, CrashLoopBackOff, etc.)
-echo "--- Recent Events (onelens-agent namespace, last 10) ---"
-kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || echo "(no events)"
+# Cluster sizing inputs (the numbers that drive resource allocation)
+echo "Sizing: nodes=$NODE_COUNT pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER"
 
-echo "========== END PRE-PATCH STATE =========="
+# Current resources (compact: memory limits only — the OOM-relevant values)
+if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+    echo "Current limits: prom=$(_get '.prometheus.server.resources.limits.memory') ksm=$(_get '.prometheus["kube-state-metrics"].resources.limits.memory') opencost=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory') agent=$(_get '.["onelens-agent"].resources.limits.memory')"
+fi
+
+# Warning events only (OOMKilled, CrashLoopBackOff, FailedScheduling)
+WARN_EVENTS=$(kubectl get events -n onelens-agent --no-headers 2>/dev/null \
+    | grep -iE 'OOMKill|CrashLoop|FailedSchedul|FailedMount|BackOff' | tail -3 || true)
+if [ -n "$WARN_EVENTS" ]; then
+    echo "Warning events:"
+    echo "$WARN_EVENTS"
+fi
 echo ""
 
 # Phase 5.5: Prometheus PV recovery — detect and fix broken volume
@@ -810,37 +793,20 @@ fi
 DEPLOYED_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//' || echo "unknown")
 
 echo ""
-echo "========== POST-PATCH STATE =========="
-
-echo "--- Applied Configuration ---"
+echo "=== POST-PATCH ==="
 echo "Chart: $DEPLOYED_VERSION | Tier: $TIER | Pods: $TOTAL_PODS | Labels: ${LABEL_MULTIPLIER}x"
-echo "Retention: $PROMETHEUS_RETENTION | RetentionSize: $PROMETHEUS_RETENTION_SIZE | VolumeSize: $PROMETHEUS_VOLUME_SIZE"
-echo "Prometheus server:"
-echo "  requests: cpu=$PROMETHEUS_CPU_REQUEST memory=$PROMETHEUS_MEMORY_REQUEST"
-echo "  limits:   cpu=$PROMETHEUS_CPU_LIMIT memory=$PROMETHEUS_MEMORY_LIMIT"
-echo "OpenCost exporter:"
-echo "  requests: cpu=$OPENCOST_CPU_REQUEST memory=$OPENCOST_MEMORY_REQUEST"
-echo "  limits:   cpu=$OPENCOST_CPU_LIMIT memory=$OPENCOST_MEMORY_LIMIT"
-echo "OneLens Agent:"
-echo "  requests: cpu=$ONELENS_CPU_REQUEST memory=$ONELENS_MEMORY_REQUEST"
-echo "  limits:   cpu=$ONELENS_CPU_LIMIT memory=$ONELENS_MEMORY_LIMIT"
-echo "KSM:"
-echo "  requests: cpu=$KSM_CPU_REQUEST memory=$KSM_MEMORY_REQUEST"
-echo "  limits:   cpu=$KSM_CPU_LIMIT memory=$KSM_MEMORY_LIMIT"
-echo "Pushgateway:"
-echo "  requests: cpu=$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST memory=$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST"
-echo "  limits:   cpu=$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT memory=$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
-echo "Configmap-reload:"
-echo "  requests: cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST"
-echo "  limits:   cpu=$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT memory=$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT"
+echo "Retention: $PROMETHEUS_RETENTION | Size: $PROMETHEUS_RETENTION_SIZE | PVC: $PROMETHEUS_VOLUME_SIZE"
+echo "Applied limits: prom=$PROMETHEUS_MEMORY_LIMIT ksm=$KSM_MEMORY_LIMIT opencost=$OPENCOST_MEMORY_LIMIT agent=$ONELENS_MEMORY_LIMIT"
 
-echo "--- Pod Status After Upgrade ---"
-kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || echo "(kubectl get pods failed)"
-
-echo "--- Helm Release After Upgrade ---"
-helm list -n onelens-agent --no-headers 2>/dev/null || true
-
-echo "========== END POST-PATCH STATE =========="
+# Pod health after upgrade (compact)
+POST_NOT_HEALTHY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep -vE 'Completed|Error' \
+    | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1, $3}' || true)
+if [ -n "$POST_NOT_HEALTHY" ]; then
+    echo "WARNING: pods not ready after upgrade: $POST_NOT_HEALTHY"
+else
+    echo "All pods healthy"
+fi
 
 # Activate healthcheck mode via API — tells backend this cluster is ready for
 # self-healing. Also reports deployer_version so we can track fleet state.
