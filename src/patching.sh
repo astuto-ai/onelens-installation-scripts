@@ -491,89 +491,106 @@ if [ -n "$PROM_SVC" ]; then
         NEW_PROM_OOM="$STATE_LAST_OOM_prometheus_server"
         NEW_KSM_OOM="$STATE_LAST_OOM_kube_state_metrics"
         NEW_OC_OOM="$STATE_LAST_OOM_opencost"
+        SIZING_CHANGES=0
 
-        # Evaluate each component: Prometheus
-        PROM_MEM_BYTES=$(_get_container_val "$MEM_72H" "prometheus-server")
-        PROM_CPU_CORES=$(_get_container_val "$CPU_72H" "prometheus-server")
-        PROM_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-server"; then
-            PROM_OOM_NOW=true
-            NEW_PROM_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        fi
-        PROM_OOM_RECENT=$(_get_oom_recent "prometheus-server")
-        PROM_RESULT=$(evaluate_container_sizing "prometheus-server" \
+        # _evaluate_and_log "$label" "$container_name" "$current_mem" "$current_cpu" \
+        #   "$mem_floor" "$mem_cap" "$oom_state_var"
+        # Evaluates one component with full diagnostic logging.
+        # Sets: _OUT_MEM, _OUT_CPU, increments SIZING_CHANGES if changed.
+        _evaluate_and_log() {
+            local label="$1" container="$2" cur_mem="$3" cur_cpu="$4"
+            local mem_floor="$5" mem_cap="$6" oom_state_var="$7"
+
+            local mem_bytes cpu_cores oom_now oom_recent
+            mem_bytes=$(_get_container_val "$MEM_72H" "$container")
+            cpu_cores=$(_get_container_val "$CPU_72H" "$container")
+
+            # OOM detection (skip on first run — historical events predate our tracking)
+            oom_now=false
+            if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "$container"; then
+                oom_now=true
+                eval "$oom_state_var=\"\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\""
+                echo "  $label: OOM detected — doubling memory from $cur_mem"
+            elif [ "$IS_FIRST_RUN" = "true" ] && _has_oom "$container"; then
+                echo "  $label: historical OOM found, skipping (first run)"
+            fi
+
+            oom_recent=$(_get_oom_recent "$container")
+            if [ "$oom_recent" = "true" ]; then
+                echo "  $label: OOM hold active (7-day window), no downsize"
+            fi
+
+            local result new_mem new_cpu
+            result=$(evaluate_container_sizing "$container" \
+                "$cur_mem" "$cur_cpu" "$mem_bytes" "$cpu_cores" \
+                "$oom_now" "$oom_recent" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
+                1.35 1.25 "$mem_floor" "$mem_cap" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
+            new_mem=$(echo "$result" | grep '^MEM=' | cut -d= -f2)
+            new_cpu=$(echo "$result" | grep '^CPU=' | cut -d= -f2)
+
+            if [ "$new_mem" != "$cur_mem" ] || [ "$new_cpu" != "$cur_cpu" ]; then
+                echo "  $label: mem ${cur_mem}→${new_mem} cpu ${cur_cpu}→${new_cpu}"
+                SIZING_CHANGES=$((SIZING_CHANGES + 1))
+                # Check if safety guard would have blocked a larger downsize
+                if [ "$FULL_EVAL_DUE" = "true" ] && [ -n "$mem_bytes" ] && [ "$mem_bytes" != "0" ]; then
+                    local proposed
+                    proposed=$(calculate_usage_memory "$mem_bytes" 1.35 "$mem_floor" "$mem_cap")
+                    if [ -n "$proposed" ] && ! is_safe_downsize "$proposed" "$cur_mem"; then
+                        echo "  $label: safety guard limited downsize (target was $proposed, >50% reduction)"
+                    fi
+                fi
+            else
+                echo "  $label: no change (mem=$cur_mem cpu=$cur_cpu)"
+            fi
+
+            _OUT_MEM="$new_mem"
+            _OUT_CPU="$new_cpu"
+        }
+
+        # Evaluate: Prometheus
+        _evaluate_and_log "prometheus-server" "prometheus-server" \
             "$PROMETHEUS_MEMORY_LIMIT" "$PROMETHEUS_CPU_LIMIT" \
-            "$PROM_MEM_BYTES" "$PROM_CPU_CORES" \
-            "$PROM_OOM_NOW" "$PROM_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
-            1.35 1.25 "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
-        NEW_PROM_MEM=$(echo "$PROM_RESULT" | grep '^MEM=' | cut -d= -f2)
-        NEW_PROM_CPU=$(echo "$PROM_RESULT" | grep '^CPU=' | cut -d= -f2)
-        if [ "$NEW_PROM_MEM" != "$PROMETHEUS_MEMORY_LIMIT" ] || [ "$NEW_PROM_CPU" != "$PROMETHEUS_CPU_LIMIT" ]; then
-            echo "  prometheus-server: mem ${PROMETHEUS_MEMORY_LIMIT}→${NEW_PROM_MEM} cpu ${PROMETHEUS_CPU_LIMIT}→${NEW_PROM_CPU}"
-        fi
-        PROMETHEUS_MEMORY_REQUEST="$NEW_PROM_MEM"
-        PROMETHEUS_MEMORY_LIMIT="$NEW_PROM_MEM"
-        PROMETHEUS_CPU_REQUEST="$NEW_PROM_CPU"
-        PROMETHEUS_CPU_LIMIT="$NEW_PROM_CPU"
+            "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "NEW_PROM_OOM"
+        PROMETHEUS_MEMORY_REQUEST="$_OUT_MEM"; PROMETHEUS_MEMORY_LIMIT="$_OUT_MEM"
+        PROMETHEUS_CPU_REQUEST="$_OUT_CPU"; PROMETHEUS_CPU_LIMIT="$_OUT_CPU"
 
         # Evaluate: KSM
-        KSM_MEM_BYTES=$(_get_container_val "$MEM_72H" "kube-state-metrics")
-        KSM_CPU_CORES=$(_get_container_val "$CPU_72H" "kube-state-metrics")
-        KSM_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "kube-state-metrics"; then
-            KSM_OOM_NOW=true
-            NEW_KSM_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        fi
-        KSM_OOM_RECENT=$(_get_oom_recent "kube-state-metrics")
-        KSM_RESULT=$(evaluate_container_sizing "kube-state-metrics" \
+        _evaluate_and_log "kube-state-metrics" "kube-state-metrics" \
             "$KSM_MEMORY_LIMIT" "$KSM_CPU_LIMIT" \
-            "$KSM_MEM_BYTES" "$KSM_CPU_CORES" \
-            "$KSM_OOM_NOW" "$KSM_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
-            1.35 1.25 "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
-        NEW_KSM_MEM=$(echo "$KSM_RESULT" | grep '^MEM=' | cut -d= -f2)
-        NEW_KSM_CPU=$(echo "$KSM_RESULT" | grep '^CPU=' | cut -d= -f2)
-        if [ "$NEW_KSM_MEM" != "$KSM_MEMORY_LIMIT" ] || [ "$NEW_KSM_CPU" != "$KSM_CPU_LIMIT" ]; then
-            echo "  kube-state-metrics: mem ${KSM_MEMORY_LIMIT}→${NEW_KSM_MEM} cpu ${KSM_CPU_LIMIT}→${NEW_KSM_CPU}"
-        fi
-        KSM_MEMORY_REQUEST="$NEW_KSM_MEM"
-        KSM_MEMORY_LIMIT="$NEW_KSM_MEM"
-        KSM_CPU_REQUEST="$NEW_KSM_CPU"
-        KSM_CPU_LIMIT="$NEW_KSM_CPU"
+            "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "NEW_KSM_OOM"
+        KSM_MEMORY_REQUEST="$_OUT_MEM"; KSM_MEMORY_LIMIT="$_OUT_MEM"
+        KSM_CPU_REQUEST="$_OUT_CPU"; KSM_CPU_LIMIT="$_OUT_CPU"
 
         # Evaluate: OpenCost
-        OC_MEM_BYTES=$(_get_container_val "$MEM_72H" "onelens-agent-prometheus-opencost-exporter")
-        OC_CPU_CORES=$(_get_container_val "$CPU_72H" "onelens-agent-prometheus-opencost-exporter")
-        OC_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "onelens-agent-prometheus-opencost-exporter"; then
-            OC_OOM_NOW=true
-            NEW_OC_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        fi
-        OC_OOM_RECENT=$(_get_oom_recent "onelens-agent-prometheus-opencost-exporter")
-        OC_RESULT=$(evaluate_container_sizing "opencost" \
+        _evaluate_and_log "opencost" "onelens-agent-prometheus-opencost-exporter" \
             "$OPENCOST_MEMORY_LIMIT" "$OPENCOST_CPU_LIMIT" \
-            "$OC_MEM_BYTES" "$OC_CPU_CORES" \
-            "$OC_OOM_NOW" "$OC_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
-            1.35 1.25 "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
-        NEW_OC_MEM=$(echo "$OC_RESULT" | grep '^MEM=' | cut -d= -f2)
-        NEW_OC_CPU=$(echo "$OC_RESULT" | grep '^CPU=' | cut -d= -f2)
-        if [ "$NEW_OC_MEM" != "$OPENCOST_MEMORY_LIMIT" ] || [ "$NEW_OC_CPU" != "$OPENCOST_CPU_LIMIT" ]; then
-            echo "  opencost: mem ${OPENCOST_MEMORY_LIMIT}→${NEW_OC_MEM} cpu ${OPENCOST_CPU_LIMIT}→${NEW_OC_CPU}"
-        fi
-        OPENCOST_MEMORY_REQUEST="$NEW_OC_MEM"
-        OPENCOST_MEMORY_LIMIT="$NEW_OC_MEM"
-        OPENCOST_CPU_REQUEST="$NEW_OC_CPU"
-        OPENCOST_CPU_LIMIT="$NEW_OC_CPU"
+            "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "NEW_OC_OOM"
+        OPENCOST_MEMORY_REQUEST="$_OUT_MEM"; OPENCOST_MEMORY_LIMIT="$_OUT_MEM"
+        OPENCOST_CPU_REQUEST="$_OUT_CPU"; OPENCOST_CPU_LIMIT="$_OUT_CPU"
 
         # Evaluate: Pushgateway (fixed, OOM → 1.25x)
         PGW_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-pushgateway"; then PGW_OOM_NOW=true; fi
+        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-pushgateway"; then
+            PGW_OOM_NOW=true
+            echo "  pushgateway: OOM detected — bumping 1.25x"
+        fi
         PGW_RESULT=$(evaluate_fixed_container_sizing "pushgateway" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$PGW_OOM_NOW")
         NEW_PGW_MEM=$(echo "$PGW_RESULT" | grep '^MEM=' | cut -d= -f2)
         if [ "$NEW_PGW_MEM" != "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" ]; then
-            echo "  pushgateway: mem ${PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT}→${NEW_PGW_MEM} (OOM bump)"
+            echo "  pushgateway: mem ${PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT}→${NEW_PGW_MEM}"
+            SIZING_CHANGES=$((SIZING_CHANGES + 1))
+        else
+            echo "  pushgateway: no change (mem=$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT)"
         fi
         PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="$NEW_PGW_MEM"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="$NEW_PGW_MEM"
+
+        # Summary
+        if [ "$SIZING_CHANGES" -gt 0 ]; then
+            echo "Usage-based sizing: $SIZING_CHANGES component(s) adjusted"
+        else
+            echo "Usage-based sizing: no changes needed"
+        fi
 
         # Update ConfigMap with new state
         NEW_EVAL_TS="$STATE_LAST_FULL_EVAL"
