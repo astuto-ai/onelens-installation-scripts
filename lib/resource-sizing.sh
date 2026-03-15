@@ -73,6 +73,100 @@ _max_memory() {
 }
 
 ###############################################################################
+# Usage-based sizing — pure math (no I/O)
+###############################################################################
+
+# Floor/cap constants for usage-based sizing.
+# Floor: tier-tiny minimums. Cap: 2x very-large maximums.
+# These prevent usage-based from going absurdly low (zero usage) or high (runaway OOM doubling).
+_USAGE_FLOOR_PROM_MEM=150   # tiny tier Prometheus memory (Mi)
+_USAGE_FLOOR_KSM_MEM=64     # tiny tier KSM memory (Mi)
+_USAGE_FLOOR_OPENCOST_MEM=128 # tiny tier OpenCost memory (Mi)
+_USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
+_USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
+_USAGE_CAP_PROM_MEM=4800    # 2x very-large Prometheus memory (Mi)
+_USAGE_CAP_KSM_MEM=1024     # 2x very-large KSM memory (Mi)
+_USAGE_CAP_OPENCOST_MEM=1536 # 2x very-large OpenCost memory (Mi)
+_USAGE_CAP_AGENT_MEM=2560   # 2x very-large Agent memory (Mi)
+_USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
+
+# apply_cpu_multiplier "$cpu_str" "$multiplier"
+# Multiply a CPU string by a float multiplier, returning millicores format.
+# Examples: "100m" x 1.25 → "125m", "1" x 1.25 → "1250m", "0.5" x 1.25 → "625m"
+apply_cpu_multiplier() {
+    local cpu_str="$1" multiplier="$2"
+    local mc=$(_cpu_to_millicores "$cpu_str")
+    local result=$(echo "$mc $multiplier" | awk '{printf "%d", int($1 * $2 + 0.99)}')
+    echo "${result}m"
+}
+
+# _clamp_resource "$value" "$floor" "$cap"
+# Clamp an integer between floor and cap. Returns clamped integer.
+_clamp_resource() {
+    local val="$1" floor="$2" cap="$3"
+    if [ "$val" -lt "$floor" ] 2>/dev/null; then echo "$floor"; return; fi
+    if [ "$val" -gt "$cap" ] 2>/dev/null; then echo "$cap"; return; fi
+    echo "$val"
+}
+
+# calculate_usage_memory "$max_72h_bytes" "$buffer" "$floor" "$cap"
+# Convert max bytes from Prometheus to Mi with buffer, clamped to floor/cap.
+# Returns Mi string (e.g. "258Mi"). Returns empty if input is empty/zero.
+calculate_usage_memory() {
+    local bytes="$1" buffer="$2" floor="$3" cap="$4"
+    if [ -z "$bytes" ] || [ "$bytes" = "0" ]; then echo ""; return; fi
+    local mi=$(echo "$bytes $buffer" | awk '{printf "%d", int($1 / 1048576 * $2 + 0.99)}')
+    mi=$(_clamp_resource "$mi" "$floor" "$cap")
+    echo "${mi}Mi"
+}
+
+# calculate_usage_cpu "$max_72h_cores" "$buffer" "$floor" "$cap"
+# Convert max cores from Prometheus to millicores with buffer, clamped.
+# Returns millicores string (e.g. "125m"). Returns empty if input is empty/zero.
+calculate_usage_cpu() {
+    local cores="$1" buffer="$2" floor="$3" cap="$4"
+    if [ -z "$cores" ] || [ "$cores" = "0" ]; then echo ""; return; fi
+    local mc=$(echo "$cores $buffer" | awk '{printf "%d", int($1 * 1000 * $2 + 0.99)}')
+    mc=$(_clamp_resource "$mc" "$floor" "$cap")
+    echo "${mc}m"
+}
+
+# should_upsize "$proposed_str" "$current_str" "$unit"
+# Returns 0 (true) if proposed > current. Unit is "memory" or "cpu".
+# Used by 5-min checks to enforce upsize-only.
+should_upsize() {
+    local proposed="$1" current="$2" unit="$3"
+    if [ -z "$proposed" ] || [ -z "$current" ]; then return 1; fi
+    if [ "$unit" = "memory" ]; then
+        local p=$(_memory_to_mi "$proposed") c=$(_memory_to_mi "$current")
+    else
+        local p=$(_cpu_to_millicores "$proposed") c=$(_cpu_to_millicores "$current")
+    fi
+    [ "$p" -gt "$c" ]
+}
+
+# is_safe_downsize "$proposed_str" "$current_str"
+# Returns 0 (true) if proposed >= 50% of current. Safety guard against catastrophic downsize.
+# A legitimate right-sizing should never halve memory in one step.
+is_safe_downsize() {
+    local proposed="$1" current="$2"
+    if [ -z "$proposed" ] || [ -z "$current" ]; then return 1; fi
+    local p=$(_memory_to_mi "$proposed") c=$(_memory_to_mi "$current")
+    local half=$(( c / 2 ))
+    [ "$p" -ge "$half" ]
+}
+
+# calculate_oom_response_memory "$current_mem_str" "$cap"
+# Double current memory, capped at $cap Mi. Returns Mi string.
+calculate_oom_response_memory() {
+    local current="$1" cap="$2"
+    local c=$(_memory_to_mi "$current")
+    local doubled=$(( c * 2 ))
+    doubled=$(_clamp_resource "$doubled" "$c" "$cap")
+    echo "${doubled}Mi"
+}
+
+###############################################################################
 # Pod counting functions (accept JSON strings as arguments)
 ###############################################################################
 
