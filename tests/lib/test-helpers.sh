@@ -95,6 +95,38 @@ assert_ge() {
     fi
 }
 
+# Assert numeric less than
+assert_lt() {
+    local actual="$1"
+    local threshold="$2"
+    local desc="$3"
+    _TESTS_TOTAL=$((_TESTS_TOTAL + 1))
+    if [ "$actual" -lt "$threshold" ] 2>/dev/null; then
+        _TESTS_PASSED=$((_TESTS_PASSED + 1))
+        printf "  ${_GREEN}PASS${_NC}: %s\n" "$desc"
+    else
+        _TESTS_FAILED=$((_TESTS_FAILED + 1))
+        printf "  ${_RED}FAIL${_NC}: %s\n" "$desc"
+        printf "         expected < %s, got: '%s'\n" "$threshold" "$actual"
+    fi
+}
+
+# Assert numeric less than or equal
+assert_le() {
+    local actual="$1"
+    local threshold="$2"
+    local desc="$3"
+    _TESTS_TOTAL=$((_TESTS_TOTAL + 1))
+    if [ "$actual" -le "$threshold" ] 2>/dev/null; then
+        _TESTS_PASSED=$((_TESTS_PASSED + 1))
+        printf "  ${_GREEN}PASS${_NC}: %s\n" "$desc"
+    else
+        _TESTS_FAILED=$((_TESTS_FAILED + 1))
+        printf "  ${_RED}FAIL${_NC}: %s\n" "$desc"
+        printf "         expected <= %s, got: '%s'\n" "$threshold" "$actual"
+    fi
+}
+
 # Assert string contains substring
 assert_contains() {
     local haystack="$1"

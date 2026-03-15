@@ -167,6 +167,129 @@ calculate_oom_response_memory() {
 }
 
 ###############################################################################
+# Usage-based sizing — ConfigMap state parsing (Phase 2)
+###############################################################################
+
+# seconds_since "$iso_timestamp"
+# Returns seconds since the given ISO 8601 timestamp. Portable (GNU + BSD).
+# Returns empty if timestamp is empty or invalid.
+seconds_since() {
+    local ts="$1"
+    if [ -z "$ts" ]; then echo ""; return; fi
+    local epoch_then epoch_now
+    # Try GNU date (-d), then BSD date (-juf for UTC), then awk mktime
+    epoch_then=$(date -d "$ts" +%s 2>/dev/null) || \
+        epoch_then=$(date -juf "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null) || \
+        epoch_then=$(echo "$ts" | awk -F'[-T:Z]' 'BEGIN{ENVIRON["TZ"]="UTC"}{printf "%d", mktime($1" "$2" "$3" "$4" "$5" "int($6))}' 2>/dev/null) || \
+        { echo ""; return; }
+    epoch_now=$(date +%s)
+    echo $(( epoch_now - epoch_then ))
+}
+
+# is_oom_recent "$last_oom_timestamp" "$window_days"
+# Returns 0 (true) if the OOM happened within $window_days of now.
+is_oom_recent() {
+    local ts="$1" window_days="$2"
+    if [ -z "$ts" ]; then return 1; fi
+    local secs
+    secs=$(seconds_since "$ts")
+    if [ -z "$secs" ]; then return 1; fi
+    local window_secs=$(( window_days * 86400 ))
+    [ "$secs" -le "$window_secs" ]
+}
+
+# is_full_eval_due "$last_full_eval_timestamp" "$interval_hours"
+# Returns 0 (true) if $interval_hours have passed since last eval.
+# Empty timestamp is NOT treated as due (first run creates ConfigMap with now).
+is_full_eval_due() {
+    local ts="$1" interval_hours="$2"
+    if [ -z "$ts" ]; then return 1; fi
+    local secs
+    secs=$(seconds_since "$ts")
+    if [ -z "$secs" ]; then return 1; fi
+    local interval_secs=$(( interval_hours * 3600 ))
+    [ "$secs" -ge "$interval_secs" ]
+}
+
+# parse_sizing_state "$configmap_json"
+# Parse ConfigMap JSON into shell variables. Sets:
+#   STATE_LAST_FULL_EVAL, STATE_LAST_OOM_prometheus_server,
+#   STATE_LAST_OOM_kube_state_metrics, STATE_LAST_OOM_opencost
+# Returns 1 if JSON is empty/invalid.
+parse_sizing_state() {
+    local json="$1"
+    if [ -z "$json" ] || ! echo "$json" | jq -e '.data' >/dev/null 2>&1; then
+        STATE_LAST_FULL_EVAL=""
+        STATE_LAST_OOM_prometheus_server=""
+        STATE_LAST_OOM_kube_state_metrics=""
+        STATE_LAST_OOM_opencost=""
+        return 1
+    fi
+    STATE_LAST_FULL_EVAL=$(echo "$json" | jq -r '.data.last_full_evaluation // empty' 2>/dev/null || true)
+    STATE_LAST_OOM_prometheus_server=$(echo "$json" | jq -r '.data["prometheus-server.last_oom_at"] // empty' 2>/dev/null || true)
+    STATE_LAST_OOM_kube_state_metrics=$(echo "$json" | jq -r '.data["kube-state-metrics.last_oom_at"] // empty' 2>/dev/null || true)
+    STATE_LAST_OOM_opencost=$(echo "$json" | jq -r '.data["opencost.last_oom_at"] // empty' 2>/dev/null || true)
+    return 0
+}
+
+# build_sizing_state_patch "$last_full_eval" "$prom_oom" "$ksm_oom" "$opencost_oom"
+# Generate JSON string for kubectl patch. All args are ISO timestamps or empty.
+build_sizing_state_patch() {
+    local eval_ts="$1" prom_oom="$2" ksm_oom="$3" opencost_oom="$4"
+    jq -n \
+        --arg eval "$eval_ts" \
+        --arg prom "$prom_oom" \
+        --arg ksm "$ksm_oom" \
+        --arg oc "$opencost_oom" \
+        '{data: {
+            last_full_evaluation: $eval,
+            "prometheus-server.last_oom_at": $prom,
+            "kube-state-metrics.last_oom_at": $ksm,
+            "opencost.last_oom_at": $oc
+        }}'
+}
+
+###############################################################################
+# Usage-based sizing — Prometheus response parsing (Phase 3)
+###############################################################################
+
+# parse_prom_result "$response_json"
+# Parse Prometheus instant query JSON response.
+# Returns one line per result: "container_name value"
+# Returns empty if response is error or has no results.
+parse_prom_result() {
+    local json="$1"
+    if [ -z "$json" ]; then return 0; fi
+    echo "$json" | jq -r '
+        if .status == "success" and (.data.result | length) > 0 then
+            .data.result[] | "\(.metric.container) \(.value[1])"
+        else empty end
+    ' 2>/dev/null || true
+}
+
+# parse_prom_oom_count "$response_json"
+# Parse kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} response.
+# Returns one line per container: "container_name count"
+# count is the metric value (1 = OOM happened, 0 = no OOM).
+parse_prom_oom_count() {
+    local json="$1"
+    if [ -z "$json" ]; then return 0; fi
+    echo "$json" | jq -r '
+        if .status == "success" and (.data.result | length) > 0 then
+            .data.result[] | "\(.metric.container) \(.value[1])"
+        else empty end
+    ' 2>/dev/null || true
+}
+
+# has_sufficient_data "$data_age_hours" "$min_hours"
+# Returns 0 if at least $min_hours of data is available.
+has_sufficient_data() {
+    local age="$1" min="$2"
+    if [ -z "$age" ] || [ "$age" -lt "$min" ] 2>/dev/null; then return 1; fi
+    return 0
+}
+
+###############################################################################
 # Pod counting functions (accept JSON strings as arguments)
 ###############################################################################
 

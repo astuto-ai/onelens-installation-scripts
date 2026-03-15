@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"prometheus-server","reason":"OOMKilled"},"value":[1710489600,"1"]}]}}
