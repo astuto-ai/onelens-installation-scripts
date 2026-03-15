@@ -1072,6 +1072,28 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
+# Force-delete pods stuck in Terminating for >10 min before helm upgrade.
+# Pods on dead/unreachable nodes stay Terminating forever because kubelet can't
+# acknowledge the deletion. Helm sees them as part of the release and times out
+# waiting for the rollout. Force-delete clears the API objects so helm proceeds.
+TERMINATING_PODS=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | awk '$3 == "Terminating" {print $1}' || true)
+if [ -n "$TERMINATING_PODS" ]; then
+    NOW=$(date +%s)
+    for pod in $TERMINATING_PODS; do
+        DEL_TS=$(kubectl get pod "$pod" -n onelens-agent \
+            -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
+        if [ -n "$DEL_TS" ]; then
+            DEL_EPOCH=$(date -d "$DEL_TS" +%s 2>/dev/null || echo "0")
+            STUCK_SECS=$(( NOW - DEL_EPOCH ))
+            if [ "$STUCK_SECS" -gt 600 ]; then
+                echo "Force-deleting pod stuck Terminating for $((STUCK_SECS / 60))m: $pod"
+                kubectl delete pod "$pod" -n onelens-agent --force --grace-period=0 2>/dev/null || true
+            fi
+        fi
+    done
+fi
+
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"
 
