@@ -290,6 +290,139 @@ has_sufficient_data() {
 }
 
 ###############################################################################
+# Usage-based sizing — Evaluation Engine (Phase 4)
+###############################################################################
+
+# evaluate_container_sizing \
+#   "$container" "$current_mem" "$current_cpu" \
+#   "$max_72h_mem_bytes" "$max_72h_cpu_cores" \
+#   "$has_oom_now" "$has_oom_recent" "$is_full_eval" "$is_first_run" \
+#   "$mem_buffer" "$cpu_buffer" "$mem_floor" "$mem_cap" "$cpu_floor" "$cpu_cap"
+#
+# The master decision function for Prometheus, KSM, OpenCost.
+# Prints two lines: MEM=<value> and CPU=<value>
+# Logic:
+#   - OOM now + not first run: DOUBLE memory (capped)
+#   - OOM recent (7d hold): HOLD, upsize allowed
+#   - First run: HOLD (no downsize, no OOM reaction)
+#   - Empty Prometheus data: HOLD, upsize allowed
+#   - Full eval (72h): set to usage × buffer (can downsize, with 50% safety guard)
+#   - Normal 5-min: set to usage × buffer, UPSIZE ONLY
+evaluate_container_sizing() {
+    local container="$1" current_mem="$2" current_cpu="$3"
+    local max_mem_bytes="$4" max_cpu_cores="$5"
+    local has_oom_now="$6" has_oom_recent="$7" is_full_eval="$8" is_first_run="$9"
+    local mem_buffer="${10}" cpu_buffer="${11}"
+    local mem_floor="${12}" mem_cap="${13}" cpu_floor="${14}" cpu_cap="${15}"
+
+    local new_mem="$current_mem"
+    local new_cpu="$current_cpu"
+
+    # First run: hold everything. Don't react to historical OOM or usage.
+    if [ "$is_first_run" = "true" ]; then
+        # Exception: upsize if usage data suggests buffer is thin
+        if [ -n "$max_mem_bytes" ] && [ "$max_mem_bytes" != "0" ]; then
+            local proposed_mem
+            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+            if [ -n "$proposed_mem" ] && should_upsize "$proposed_mem" "$current_mem" "memory"; then
+                new_mem="$proposed_mem"
+            fi
+        fi
+        if [ -n "$max_cpu_cores" ] && [ "$max_cpu_cores" != "0" ]; then
+            local proposed_cpu
+            proposed_cpu=$(calculate_usage_cpu "$max_cpu_cores" "$cpu_buffer" "$cpu_floor" "$cpu_cap")
+            if [ -n "$proposed_cpu" ] && should_upsize "$proposed_cpu" "$current_cpu" "cpu"; then
+                new_cpu="$proposed_cpu"
+            fi
+        fi
+        echo "MEM=$new_mem"
+        echo "CPU=$new_cpu"
+        return 0
+    fi
+
+    # OOM just detected: DOUBLE memory (capped)
+    if [ "$has_oom_now" = "true" ]; then
+        new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap")
+        echo "MEM=$new_mem"
+        echo "CPU=$new_cpu"
+        return 0
+    fi
+
+    # OOM recent (within 7-day hold): HOLD, but allow upsize
+    if [ "$has_oom_recent" = "true" ]; then
+        if [ -n "$max_mem_bytes" ] && [ "$max_mem_bytes" != "0" ]; then
+            local proposed_mem
+            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+            if [ -n "$proposed_mem" ] && should_upsize "$proposed_mem" "$current_mem" "memory"; then
+                new_mem="$proposed_mem"
+            fi
+        fi
+        if [ -n "$max_cpu_cores" ] && [ "$max_cpu_cores" != "0" ]; then
+            local proposed_cpu
+            proposed_cpu=$(calculate_usage_cpu "$max_cpu_cores" "$cpu_buffer" "$cpu_floor" "$cpu_cap")
+            if [ -n "$proposed_cpu" ] && should_upsize "$proposed_cpu" "$current_cpu" "cpu"; then
+                new_cpu="$proposed_cpu"
+            fi
+        fi
+        echo "MEM=$new_mem"
+        echo "CPU=$new_cpu"
+        return 0
+    fi
+
+    # No Prometheus data: HOLD, upsize allowed
+    if [ -z "$max_mem_bytes" ] || [ "$max_mem_bytes" = "0" ]; then
+        echo "MEM=$new_mem"
+        echo "CPU=$new_cpu"
+        return 0
+    fi
+
+    # Calculate proposed values from usage
+    local proposed_mem proposed_cpu
+    proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+    proposed_cpu=$(calculate_usage_cpu "$max_cpu_cores" "$cpu_buffer" "$cpu_floor" "$cpu_cap")
+
+    if [ "$is_full_eval" = "true" ]; then
+        # Full 72h evaluation: can go up OR down
+        if [ -n "$proposed_mem" ]; then
+            # Safety guard: refuse if new < 50% of current
+            if is_safe_downsize "$proposed_mem" "$current_mem"; then
+                new_mem="$proposed_mem"
+            fi
+            # else: keep current (unsafe downsize blocked)
+        fi
+        if [ -n "$proposed_cpu" ]; then
+            new_cpu="$proposed_cpu"
+        fi
+    else
+        # Normal 5-min check: UPSIZE ONLY
+        if [ -n "$proposed_mem" ] && should_upsize "$proposed_mem" "$current_mem" "memory"; then
+            new_mem="$proposed_mem"
+        fi
+        if [ -n "$proposed_cpu" ] && should_upsize "$proposed_cpu" "$current_cpu" "cpu"; then
+            new_cpu="$proposed_cpu"
+        fi
+    fi
+
+    echo "MEM=$new_mem"
+    echo "CPU=$new_cpu"
+    return 0
+}
+
+# evaluate_fixed_container_sizing "$container" "$current_mem" "$has_oom_now"
+# For pushgateway and agent CronJob: fixed tier sizing, OOM → 1.25x bump.
+# Prints: MEM=<value>
+evaluate_fixed_container_sizing() {
+    local container="$1" current_mem="$2" has_oom_now="$3"
+    if [ "$has_oom_now" = "true" ]; then
+        local new_mem
+        new_mem=$(apply_memory_multiplier "$current_mem" 1.25)
+        echo "MEM=$new_mem"
+    else
+        echo "MEM=$current_mem"
+    fi
+}
+
+###############################################################################
 # Pod counting functions (accept JSON strings as arguments)
 ###############################################################################
 
