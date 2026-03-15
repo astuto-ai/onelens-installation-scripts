@@ -767,15 +767,13 @@ if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
     fi
 
     # Disable bootstrap RBAC — it's for the initial install job only.
-    # The CronJob SA can't create cluster-scoped resources (ClusterRole/ClusterRoleBinding).
-    # Bootstrap RBAC already exists from the original install, no need to recreate.
+    # Bootstrap RBAC is guarded by .Release.IsInstall in the chart templates,
+    # so it never renders on upgrade. Job is disabled — only CronJob runs post-install.
     DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
         --set cronjob.schedule=\"$TARGET_SCHEDULE\" \
         --set cronjob.backoffLimit=0 \
         --set cronjob.activeDeadlineSeconds=900 \
         --set cronjob.env.deployment_type=cronjob \
-        --set bootstrapRbac.clusterRole.enabled=false \
-        --set bootstrapRbac.clusterRoleBinding.enabled=false \
         --set job.enabled=false \
         --version $TARGET_DEPLOYER \
         --timeout=3m"
