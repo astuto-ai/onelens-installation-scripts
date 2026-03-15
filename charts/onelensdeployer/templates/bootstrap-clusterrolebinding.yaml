@@ -1,4 +1,4 @@
-{{- if .Values.bootstrapRbac.clusterRoleBinding.enabled }}
+{{- if and .Values.bootstrapRbac.clusterRoleBinding.enabled .Release.IsInstall }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
