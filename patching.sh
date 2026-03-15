@@ -1177,7 +1177,6 @@ if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
         }' > "$DEPLOYER_CUSTOMER_FILE" 2>/dev/null || true
     fi
 
-    # Disable bootstrap RBAC — it's for the initial install job only.
     # Bootstrap RBAC is guarded by .Release.IsInstall in the chart templates,
     # so it never renders on upgrade. Job is disabled — only CronJob runs post-install.
     DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
@@ -1188,6 +1187,19 @@ if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
         --set job.enabled=false \
         --version $TARGET_DEPLOYER \
         --timeout=3m"
+
+    # Preserve old RBAC resource names if upgrading from v1.x deployer.
+    # The ClusterRole/ClusterRoleBinding were renamed from onelensupdater-* to
+    # onelensdeployer-* in the v2.x chart. Helm treats renamed resources as new
+    # and tries to CREATE them — but the CronJob SA can't create ClusterRoles
+    # at cluster scope (by design). Passing the old names makes helm UPDATE the
+    # existing resources instead.
+    if kubectl get clusterrole onelensupdater-clusterrole &>/dev/null; then
+        echo "Detected old RBAC names (v1.x deployer) — preserving to avoid cluster-scope create"
+        DEPLOYER_CMD="$DEPLOYER_CMD \
+            --set rbac.clusterRole.name=onelensupdater-clusterrole \
+            --set rbac.clusterRoleBinding.name=onelensupdater-clusterrolebinding"
+    fi
 
     if [ -n "$DEPLOYER_CUSTOMER_FILE" ] && [ -f "$DEPLOYER_CUSTOMER_FILE" ]; then
         DEPLOYER_CMD="$DEPLOYER_CMD -f $DEPLOYER_CUSTOMER_FILE"
