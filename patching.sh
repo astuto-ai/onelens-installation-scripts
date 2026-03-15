@@ -748,6 +748,49 @@ if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
     fi
 fi
 
+# Capture actual resource usage from Prometheus (non-fatal — skip if unavailable).
+# Logs current + max-over-1h memory and CPU for each onelens pod.
+# This data is critical for right-sizing validation: limits vs actual usage.
+if [ -n "$PROM_SVC" ]; then
+    PROM_QUERY_URL="http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/api/v1/query"
+    _prom_query() {
+        curl -s -G --max-time 5 "$PROM_QUERY_URL" --data-urlencode "query=$1" 2>/dev/null \
+            | jq -r '.data.result[] | "\(.metric.container) \(.value[1])"' 2>/dev/null || true
+    }
+
+    # Memory: current working set
+    MEM_NOW=$(_prom_query 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
+    # Memory: max over last 1h
+    MEM_MAX=$(_prom_query 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[1h]))')
+    # CPU: current rate in cores
+    CPU_NOW=$(_prom_query 'sum by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
+
+    if [ -n "$MEM_NOW" ]; then
+        echo "Actual usage (now | max 1h):"
+        # Merge all three into a single per-container output
+        # Format: container current_mem max_mem current_cpu
+        (
+            echo "$MEM_NOW" | while read c v; do echo "mem_now $c $v"; done
+            echo "$MEM_MAX" | while read c v; do echo "mem_max $c $v"; done
+            echo "$CPU_NOW" | while read c v; do echo "cpu_now $c $v"; done
+        ) | awk '
+        {
+            type=$1; container=$2; val=$3
+            if (type == "mem_now") mem_now[container] = val
+            if (type == "mem_max") mem_max[container] = val
+            if (type == "cpu_now") cpu_now[container] = val
+        }
+        END {
+            for (c in mem_now) {
+                mn = int(mem_now[c] / 1048576)
+                mx = int(mem_max[c] / 1048576)
+                cpu = cpu_now[c] + 0
+                printf "  %s: mem=%dMi|%dMi cpu=%dm\n", c, mn, mx, int(cpu * 1000)
+            }
+        }' | sort
+    fi
+fi
+
 echo "Checking Prometheus persistent volume health..."
 PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
