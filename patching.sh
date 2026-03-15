@@ -1177,6 +1177,7 @@ if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
         }' > "$DEPLOYER_CUSTOMER_FILE" 2>/dev/null || true
     fi
 
+    # Disable bootstrap RBAC — it's for the initial install job only.
     # Bootstrap RBAC is guarded by .Release.IsInstall in the chart templates,
     # so it never renders on upgrade. Job is disabled — only CronJob runs post-install.
     DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
