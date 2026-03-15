@@ -153,5 +153,32 @@ assert_gt "$rollback_cmd" "0" "patching.sh can rollback stuck helm releases"
 deployer_extract=$(grep -c 'DEPLOYER_CUSTOMER_FILE\|DEPLOYER_VALUES' "$ROOT/src/patching.sh" || true)
 assert_gt "$deployer_extract" "0" "deployer upgrade extracts customer values explicitly"
 
+# ---------------------------------------------------------------------------
+# Test 18: Usage-based sizing functions exist in lib
+# ---------------------------------------------------------------------------
+for fn in evaluate_container_sizing evaluate_fixed_container_sizing parse_sizing_state \
+    parse_prom_result calculate_usage_memory calculate_oom_response_memory is_safe_downsize; do
+    lib_has=$(grep -c "$fn" "$ROOT/lib/resource-sizing.sh" || true)
+    assert_gt "$lib_has" "0" "lib/resource-sizing.sh has $fn"
+done
+
+# ---------------------------------------------------------------------------
+# Test 19: Patching.sh calls evaluate_container_sizing
+# ---------------------------------------------------------------------------
+patching_eval=$(grep -c 'evaluate_container_sizing' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_eval" "0" "patching.sh calls evaluate_container_sizing"
+
+# ---------------------------------------------------------------------------
+# Test 20: Patching.sh manages ConfigMap state
+# ---------------------------------------------------------------------------
+patching_cm=$(grep -c 'onelens-agent-sizing-state' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_cm" "0" "patching.sh manages onelens-agent-sizing-state ConfigMap"
+
+# ---------------------------------------------------------------------------
+# Test 21: Patching.sh has fallback to legacy memory guard
+# ---------------------------------------------------------------------------
+patching_fallback=$(grep -c 'USAGE_BASED_APPLIED' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_fallback" "0" "patching.sh has USAGE_BASED_APPLIED fallback flag"
+
 test_summary
 exit $?
