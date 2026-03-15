@@ -667,10 +667,10 @@ helm list -n onelens-agent --no-headers 2>/dev/null | awk '{printf "%s %s %s %s\
 # OneLens pod health (compact: only name, ready, status — no IPs/nodes)
 echo "Pods:"
 kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | grep -vE 'Completed|Error' \
+    | grep -vE 'Completed|Error|Terminating' \
     | awk '{printf "  %s %s %s\n", $1, $2, $3}' || true
 NOT_HEALTHY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | grep -vE 'Completed|Error' \
+    | grep -vE 'Completed|Error|Terminating' \
     | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1, $3}' || true)
 if [ -n "$NOT_HEALTHY" ]; then
     echo "WARNING: unhealthy pods: $NOT_HEALTHY"
@@ -1100,7 +1100,7 @@ STABLE=false
 for i in 1 2 3 4 5 6; do
     sleep 10
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -vE 'Completed|Error' \
+        | grep -vE 'Completed|Error|Terminating' \
         | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
     if [ -z "$NOT_READY" ]; then
         STABLE=true
@@ -1198,7 +1198,7 @@ echo "  agent: cpu=$ONELENS_CPU_LIMIT mem=$ONELENS_MEMORY_LIMIT"
 
 # Pod health after upgrade (compact)
 POST_NOT_HEALTHY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | grep -vE 'Completed|Error' \
+    | grep -vE 'Completed|Error|Terminating' \
     | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1, $3}' || true)
 if [ -n "$POST_NOT_HEALTHY" ]; then
     echo "WARNING: pods not ready after upgrade: $POST_NOT_HEALTHY"
