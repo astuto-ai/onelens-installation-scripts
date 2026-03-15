@@ -748,46 +748,223 @@ if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
     fi
 fi
 
-# Capture actual resource usage from Prometheus (non-fatal — skip if unavailable).
-# Logs current + max-over-1h memory and CPU for each onelens pod.
-# This data is critical for right-sizing validation: limits vs actual usage.
+# ═══════════════════════════════════════════════════════════════════════════
+# Usage-based right-sizing — query Prometheus and evaluate resource limits
+# ═══════════════════════════════════════════════════════════════════════════
+# Queries actual usage data from Prometheus (72h window), reads OOM events,
+# manages ConfigMap state, and calls the evaluation engine to determine
+# optimal resource limits. Falls back to tier-based sizing if unavailable.
+
+USAGE_BASED_APPLIED=false
+
 if [ -n "$PROM_SVC" ]; then
     PROM_QUERY_URL="http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/api/v1/query"
-    _prom_query() {
-        curl -s -G --max-time 5 "$PROM_QUERY_URL" --data-urlencode "query=$1" 2>/dev/null \
-            | jq -r '.data.result[] | "\(.metric.container) \(.value[1])"' 2>/dev/null || true
+    _prom_query_raw() {
+        curl -s -G --max-time 15 "$PROM_QUERY_URL" --data-urlencode "query=$1" 2>/dev/null || true
     }
 
-    # Memory: current working set
-    MEM_NOW=$(_prom_query 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
-    # Memory: max over last 1h
-    MEM_MAX=$(_prom_query 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[1h]))')
-    # CPU: current rate in cores
-    CPU_NOW=$(_prom_query 'sum by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
+    # Query 72h max memory and CPU for sizing decisions
+    MEM_72H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[72h]))')
+    CPU_72H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m])[72h:5m]))')
 
+    # Query current usage for logging (1h window)
+    MEM_NOW_RAW=$(_prom_query_raw 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
+    MEM_1H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[1h]))')
+    CPU_NOW_RAW=$(_prom_query_raw 'sum by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
+
+    # Parse results
+    MEM_72H=$(parse_prom_result "$MEM_72H_RAW")
+    CPU_72H=$(parse_prom_result "$CPU_72H_RAW")
+    MEM_NOW=$(parse_prom_result "$MEM_NOW_RAW")
+    MEM_1H=$(parse_prom_result "$MEM_1H_RAW")
+    CPU_NOW=$(parse_prom_result "$CPU_NOW_RAW")
+
+    # Log current usage (observability)
     if [ -n "$MEM_NOW" ]; then
-        echo "Actual usage (now | max 1h):"
-        # Merge all three into a single per-container output
-        # Format: container current_mem max_mem current_cpu
+        echo "Actual usage (now | max 1h | max 72h):"
         (
             echo "$MEM_NOW" | while read c v; do echo "mem_now $c $v"; done
-            echo "$MEM_MAX" | while read c v; do echo "mem_max $c $v"; done
+            echo "$MEM_1H" | while read c v; do echo "mem_1h $c $v"; done
+            echo "$MEM_72H" | while read c v; do echo "mem_72h $c $v"; done
             echo "$CPU_NOW" | while read c v; do echo "cpu_now $c $v"; done
         ) | awk '
         {
             type=$1; container=$2; val=$3
             if (type == "mem_now") mem_now[container] = val
-            if (type == "mem_max") mem_max[container] = val
+            if (type == "mem_1h") mem_1h[container] = val
+            if (type == "mem_72h") mem_72h[container] = val
             if (type == "cpu_now") cpu_now[container] = val
         }
         END {
             for (c in mem_now) {
                 mn = int(mem_now[c] / 1048576)
-                mx = int(mem_max[c] / 1048576)
+                m1 = int(mem_1h[c] / 1048576)
+                m72 = int(mem_72h[c] / 1048576)
                 cpu = cpu_now[c] + 0
-                printf "  %s: mem=%dMi|%dMi cpu=%dm\n", c, mn, mx, int(cpu * 1000)
+                printf "  %s: mem=%dMi|%dMi|%dMi cpu=%dm\n", c, mn, m1, m72, int(cpu * 1000)
             }
         }' | sort
+    fi
+
+    # Query OOM events from Prometheus (KSM metric)
+    OOM_PROM_RAW=$(_prom_query_raw 'kube_pod_container_status_last_terminated_reason{namespace="onelens-agent",reason="OOMKilled"}')
+    OOM_PROM=$(parse_prom_oom_count "$OOM_PROM_RAW")
+
+    # Kubectl fallback for OOM detection
+    OOM_KUBECTL=""
+    if [ -z "$OOM_PROM" ]; then
+        OOM_KUBECTL=$(kubectl get pods -n onelens-agent -o json 2>/dev/null \
+            | jq -r '.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled") | .name' 2>/dev/null || true)
+    fi
+
+    # Read ConfigMap state
+    IS_FIRST_RUN=false
+    CM_JSON=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent -o json 2>/dev/null || true)
+    if [ -z "$CM_JSON" ] || ! echo "$CM_JSON" | jq -e '.data' >/dev/null 2>&1; then
+        IS_FIRST_RUN=true
+        NOW_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        kubectl create configmap onelens-agent-sizing-state -n onelens-agent \
+            --from-literal=last_full_evaluation="$NOW_TS" \
+            --from-literal=prometheus-server.last_oom_at="" \
+            --from-literal=kube-state-metrics.last_oom_at="" \
+            --from-literal=opencost.last_oom_at="" 2>/dev/null || true
+        echo "Created sizing state ConfigMap (first run, downsize deferred 72h)"
+        STATE_LAST_FULL_EVAL="$NOW_TS"
+        STATE_LAST_OOM_prometheus_server=""
+        STATE_LAST_OOM_kube_state_metrics=""
+        STATE_LAST_OOM_opencost=""
+    else
+        parse_sizing_state "$CM_JSON"
+    fi
+
+    FULL_EVAL_DUE=false
+    if is_full_eval_due "$STATE_LAST_FULL_EVAL" 72; then
+        FULL_EVAL_DUE=true
+        echo "72h full evaluation due (last: $STATE_LAST_FULL_EVAL)"
+    fi
+
+    if [ -n "$MEM_72H" ]; then
+        echo "Usage-based sizing: evaluating..."
+        USAGE_BASED_APPLIED=true
+
+        _get_container_val() {
+            local data="$1" container="$2"
+            echo "$data" | awk -v c="$container" '$1 == c {print $2; exit}'
+        }
+
+        _has_oom() {
+            local container="$1"
+            if echo "$OOM_PROM" | grep -q "^${container} "; then return 0; fi
+            if echo "$OOM_KUBECTL" | grep -qF "$container"; then return 0; fi
+            return 1
+        }
+
+        _get_oom_recent() {
+            local container="$1"
+            case "$container" in
+                prometheus-server) is_oom_recent "$STATE_LAST_OOM_prometheus_server" 7 && echo "true" || echo "false" ;;
+                kube-state-metrics) is_oom_recent "$STATE_LAST_OOM_kube_state_metrics" 7 && echo "true" || echo "false" ;;
+                *opencost*) is_oom_recent "$STATE_LAST_OOM_opencost" 7 && echo "true" || echo "false" ;;
+                *) echo "false" ;;
+            esac
+        }
+
+        NEW_PROM_OOM="$STATE_LAST_OOM_prometheus_server"
+        NEW_KSM_OOM="$STATE_LAST_OOM_kube_state_metrics"
+        NEW_OC_OOM="$STATE_LAST_OOM_opencost"
+
+        # Evaluate: Prometheus
+        PROM_MEM_BYTES=$(_get_container_val "$MEM_72H" "prometheus-server")
+        PROM_CPU_CORES=$(_get_container_val "$CPU_72H" "prometheus-server")
+        PROM_OOM_NOW=false
+        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-server"; then
+            PROM_OOM_NOW=true
+            NEW_PROM_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        fi
+        PROM_OOM_RECENT=$(_get_oom_recent "prometheus-server")
+        PROM_RESULT=$(evaluate_container_sizing "prometheus-server" \
+            "$PROMETHEUS_MEMORY_LIMIT" "$PROMETHEUS_CPU_LIMIT" \
+            "$PROM_MEM_BYTES" "$PROM_CPU_CORES" \
+            "$PROM_OOM_NOW" "$PROM_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
+            1.35 1.25 "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
+        NEW_PROM_MEM=$(echo "$PROM_RESULT" | grep '^MEM=' | cut -d= -f2)
+        NEW_PROM_CPU=$(echo "$PROM_RESULT" | grep '^CPU=' | cut -d= -f2)
+        if [ "$NEW_PROM_MEM" != "$PROMETHEUS_MEMORY_LIMIT" ] || [ "$NEW_PROM_CPU" != "$PROMETHEUS_CPU_LIMIT" ]; then
+            echo "  prometheus-server: mem ${PROMETHEUS_MEMORY_LIMIT}→${NEW_PROM_MEM} cpu ${PROMETHEUS_CPU_LIMIT}→${NEW_PROM_CPU}"
+        fi
+        PROMETHEUS_MEMORY_REQUEST="$NEW_PROM_MEM"
+        PROMETHEUS_MEMORY_LIMIT="$NEW_PROM_MEM"
+        PROMETHEUS_CPU_REQUEST="$NEW_PROM_CPU"
+        PROMETHEUS_CPU_LIMIT="$NEW_PROM_CPU"
+
+        # Evaluate: KSM
+        KSM_MEM_BYTES=$(_get_container_val "$MEM_72H" "kube-state-metrics")
+        KSM_CPU_CORES=$(_get_container_val "$CPU_72H" "kube-state-metrics")
+        KSM_OOM_NOW=false
+        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "kube-state-metrics"; then
+            KSM_OOM_NOW=true
+            NEW_KSM_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        fi
+        KSM_OOM_RECENT=$(_get_oom_recent "kube-state-metrics")
+        KSM_RESULT=$(evaluate_container_sizing "kube-state-metrics" \
+            "$KSM_MEMORY_LIMIT" "$KSM_CPU_LIMIT" \
+            "$KSM_MEM_BYTES" "$KSM_CPU_CORES" \
+            "$KSM_OOM_NOW" "$KSM_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
+            1.35 1.25 "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
+        NEW_KSM_MEM=$(echo "$KSM_RESULT" | grep '^MEM=' | cut -d= -f2)
+        NEW_KSM_CPU=$(echo "$KSM_RESULT" | grep '^CPU=' | cut -d= -f2)
+        if [ "$NEW_KSM_MEM" != "$KSM_MEMORY_LIMIT" ] || [ "$NEW_KSM_CPU" != "$KSM_CPU_LIMIT" ]; then
+            echo "  kube-state-metrics: mem ${KSM_MEMORY_LIMIT}→${NEW_KSM_MEM} cpu ${KSM_CPU_LIMIT}→${NEW_KSM_CPU}"
+        fi
+        KSM_MEMORY_REQUEST="$NEW_KSM_MEM"
+        KSM_MEMORY_LIMIT="$NEW_KSM_MEM"
+        KSM_CPU_REQUEST="$NEW_KSM_CPU"
+        KSM_CPU_LIMIT="$NEW_KSM_CPU"
+
+        # Evaluate: OpenCost
+        OC_MEM_BYTES=$(_get_container_val "$MEM_72H" "onelens-agent-prometheus-opencost-exporter")
+        OC_CPU_CORES=$(_get_container_val "$CPU_72H" "onelens-agent-prometheus-opencost-exporter")
+        OC_OOM_NOW=false
+        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "onelens-agent-prometheus-opencost-exporter"; then
+            OC_OOM_NOW=true
+            NEW_OC_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        fi
+        OC_OOM_RECENT=$(_get_oom_recent "onelens-agent-prometheus-opencost-exporter")
+        OC_RESULT=$(evaluate_container_sizing "opencost" \
+            "$OPENCOST_MEMORY_LIMIT" "$OPENCOST_CPU_LIMIT" \
+            "$OC_MEM_BYTES" "$OC_CPU_CORES" \
+            "$OC_OOM_NOW" "$OC_OOM_RECENT" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
+            1.35 1.25 "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
+        NEW_OC_MEM=$(echo "$OC_RESULT" | grep '^MEM=' | cut -d= -f2)
+        NEW_OC_CPU=$(echo "$OC_RESULT" | grep '^CPU=' | cut -d= -f2)
+        if [ "$NEW_OC_MEM" != "$OPENCOST_MEMORY_LIMIT" ] || [ "$NEW_OC_CPU" != "$OPENCOST_CPU_LIMIT" ]; then
+            echo "  opencost: mem ${OPENCOST_MEMORY_LIMIT}→${NEW_OC_MEM} cpu ${OPENCOST_CPU_LIMIT}→${NEW_OC_CPU}"
+        fi
+        OPENCOST_MEMORY_REQUEST="$NEW_OC_MEM"
+        OPENCOST_MEMORY_LIMIT="$NEW_OC_MEM"
+        OPENCOST_CPU_REQUEST="$NEW_OC_CPU"
+        OPENCOST_CPU_LIMIT="$NEW_OC_CPU"
+
+        # Evaluate: Pushgateway (fixed, OOM → 1.25x)
+        PGW_OOM_NOW=false
+        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-pushgateway"; then PGW_OOM_NOW=true; fi
+        PGW_RESULT=$(evaluate_fixed_container_sizing "pushgateway" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$PGW_OOM_NOW")
+        NEW_PGW_MEM=$(echo "$PGW_RESULT" | grep '^MEM=' | cut -d= -f2)
+        if [ "$NEW_PGW_MEM" != "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" ]; then
+            echo "  pushgateway: mem ${PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT}→${NEW_PGW_MEM} (OOM bump)"
+        fi
+        PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="$NEW_PGW_MEM"
+        PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="$NEW_PGW_MEM"
+
+        # Update ConfigMap
+        NEW_EVAL_TS="$STATE_LAST_FULL_EVAL"
+        if [ "$FULL_EVAL_DUE" = "true" ]; then
+            NEW_EVAL_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        fi
+        PATCH_JSON=$(build_sizing_state_patch "$NEW_EVAL_TS" "$NEW_PROM_OOM" "$NEW_KSM_OOM" "$NEW_OC_OOM")
+        kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
+    else
+        echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"
     fi
 fi
 
@@ -956,12 +1133,10 @@ if [ -n "$EXISTING_PVC_SIZE" ]; then
     fi
 fi
 
-# Never downsize memory limits — prevents OOM during Prometheus WAL replay and
-# KSM/agent startup when upgrading from older versions with higher allocations.
-# The metric filtering in globalvalues.yaml reduces long-term memory needs, but
-# the first startup after upgrade replays old (larger) WAL data.
-# Uses _max_memory from lib/resource-sizing.sh to compare and keep the larger value.
-if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+# Memory guard: usage-based sizing (above) replaces the old "never downsize" guard.
+# If usage-based was applied, limits are already set from actual Prometheus data.
+# If not (Prometheus unavailable), fall back to the old guard to prevent OOM.
+if [ "$USAGE_BASED_APPLIED" != "true" ] && [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
     _existing() { echo "$CURRENT_VALUES" | jq -r "$1 // empty"; }
 
     _guard_memory() {
@@ -978,7 +1153,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
         fi
     }
 
-    echo "Checking for memory downsizes (never downsize on upgrade)..."
+    echo "Fallback: usage-based unavailable, applying legacy memory guard..."
     _guard_memory "Prometheus request" '.prometheus.server.resources.requests.memory' PROMETHEUS_MEMORY_REQUEST
     _guard_memory "Prometheus limit" '.prometheus.server.resources.limits.memory' PROMETHEUS_MEMORY_LIMIT
     _guard_memory "KSM request" '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
