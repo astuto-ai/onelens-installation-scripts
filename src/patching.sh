@@ -234,8 +234,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
         tolerations: (.["onelens-agent"].cronJob.tolerations // []),
         nodeSelector: (.["onelens-agent"].cronJob.nodeSelector // {}),
         podLabels: (.["onelens-agent"].cronJob.podLabels // {})
-      },
-      storageClass: (.["onelens-agent"].storageClass // {})
+      }
     }
   }' > "$CUSTOMER_VALUES_FILE" 2>/dev/null || true
 
@@ -599,7 +598,7 @@ fi
 # Build helm upgrade command
 # Key design: NO --reuse-values
 #   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
-#   - Customer values file preserves tolerations, nodeSelector, podLabels, storageClass
+#   - Customer values file preserves tolerations, nodeSelector, podLabels
 #   - --set overrides for identity, resources, retention, PVC
 #   - --version pins to the target version from PATCHING_VERSION (set by entrypoint.sh)
 #     Without --version, helm would pick latest from repo — uncontrolled upgrades.
@@ -619,7 +618,7 @@ if [ -n "$CHART_VERSION" ]; then
     echo "Pinning chart version to $CHART_VERSION (from PATCHING_VERSION=$PATCHING_VERSION)"
 fi
 
-# Apply customer values (tolerations, nodeSelector, podLabels, storageClass)
+# Apply customer values (tolerations, nodeSelector, podLabels)
 if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
     HELM_CMD="$HELM_CMD -f $CUSTOMER_VALUES_FILE"
 fi
@@ -645,10 +644,10 @@ HELM_CMD="$HELM_CMD \
   $EXISTING_CLAIM_FLAG \
   --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
 
-# StorageClass provisioner (preserve cloud provider setting from install)
-if [ -n "$SC_PROVISIONER" ]; then
-    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=\"$SC_PROVISIONER\""
-fi
+# StorageClass: disable on upgrade. The SC was created at install time and must not
+# be touched — provisioner is immutable in K8s, and there's no reason to change
+# volume type, size, encryption, or labels on an upgrade.
+HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
 
 # Retention settings
 HELM_CMD="$HELM_CMD \
