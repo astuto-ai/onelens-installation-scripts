@@ -2,3 +2,4 @@ internalwiki/
 
 # Build output directory (legacy)
 dist/
+.claude/
