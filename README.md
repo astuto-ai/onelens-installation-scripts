@@ -10,7 +10,7 @@
 
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start) — install in 3 steps
+- [Quick Start](#quick-start) — install in one command
 - [Configuration Reference](#configuration-reference) — all helm parameters with examples
 - [Upgrade](#upgrade)
 - [Uninstall](#uninstall)
@@ -44,22 +44,13 @@ curl -sSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scrip
 
 ## Quick Start
 
-### 1. Add the Helm repository
-
-OneLens charts are hosted on a public Helm repository. Add it to your local Helm client so you can install charts from it:
-
-```bash
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/
-helm repo update
-```
-
-### 2. Install
-
-This installs the OneLens deployer, which registers your cluster and sets up the full monitoring stack. You only need to do this once per cluster — running it again on an already-connected cluster will fail at registration.
+### 1. Install
 
 Your Kubernetes clusters are automatically discovered and visible in the OneLens console. Navigate to the cluster you want to connect, and the console provides a ready-to-use install command with the `REGISTRATION_TOKEN` pre-filled. Copy and run it directly, or use the template below:
 
 ```bash
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
+helm repo update && \
 helm upgrade --install onelensdeployer onelens/onelensdeployer \
   -n onelens-agent --create-namespace \
   --set job.env.CLUSTER_NAME=<cluster-name> \
@@ -68,9 +59,10 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer \
   --set job.env.REGISTRATION_TOKEN=<token>
 ```
 
-Add any optional parameters (encryption, labels, tolerations) from the [Configuration Reference](#configuration-reference) below.
+Need to run on dedicated nodes, add labels, or encrypt volumes?
+See the [Configuration Reference](#configuration-reference) for all optional parameters.
 
-### 3. Verify installation
+### 2. Verify installation
 
 ```bash
 # Check all pods are running
@@ -85,14 +77,18 @@ kubectl get pods -n onelens-agent
 # Note: The onelens-agent pod is a CronJob that runs hourly by default.
 # It collects metrics from Prometheus and sends them to the OneLens API.
 # It will not appear until its first scheduled run. To trigger it immediately,
-# see step 4 below.
+# see step 3 below.
 ```
 
-### 4. Trigger a manual data collection (optional)
+### 3. Trigger data collection
+
+Once all 4 pods are Running and healthy for at least 2 minutes, trigger the first data collection. This is optional — it runs automatically on the hourly schedule — but a successful job completion verifies that everything is set up correctly.
 
 ```bash
 kubectl create job manual-trigger --from=cronjob/onelens-agent -n onelens-agent
 ```
+
+Your cluster will show as **Connected** in the OneLens console within ~15 minutes of installation. Cost data becomes available after 48 hours once it can be mapped with your cloud provider's cost and usage reports.
 
 ---
 
@@ -319,12 +315,10 @@ To upgrade to a newer version:
 ```bash
 helm repo update
 helm upgrade onelensdeployer onelens/onelensdeployer \
-  -n onelens-agent \
-  --version <new-version> \
-  --reuse-values
+  -n onelens-agent --reuse-values
 ```
 
-The deployer job will re-run and upgrade the agent stack to the matching version.
+This upgrades the deployer CronJob to the latest image. All existing configuration (tolerations, nodeSelector, labels, encryption settings) is preserved via `--reuse-values`. The CronJob automatically detects the version mismatch on its next run and upgrades the agent stack.
 
 ## Uninstall
 
@@ -339,9 +333,10 @@ helm uninstall onelens-agent -n onelens-agent
 kubectl delete namespace onelens-agent
 ```
 
-Note: PersistentVolumeClaims are retained by default (`helm.sh/resource-policy: keep`). To also delete Prometheus data:
+PersistentVolumeClaims are retained by default (`helm.sh/resource-policy: keep`) to preserve data across upgrades. Only delete them if you are facing persistent volume issues that cannot be resolved through upgrade, and as a last resort. All cluster utilization metrics stored locally will be permanently lost.
 
 ```bash
+# WARNING: This permanently deletes all locally stored Prometheus metrics data
 kubectl delete pvc -n onelens-agent --all
 ```
 
@@ -351,32 +346,22 @@ See the [Troubleshooting Guide](docs/troubleshooting.md) for common issues, diag
 
 ---
 
-## How It Works
+## What does the installation do?
 
-```
-helm install onelensdeployer
-    |
-    v
-[Deployer Job] -- runs install.sh inside a pod
-    |              - detects cloud provider (AWS/Azure)
-    |              - registers cluster with OneLens API
-    |              - sizes resources based on pod count
-    |              - creates StorageClass, RBAC, namespace
-    |              - runs: helm install onelens-agent
-    v
-[OneLens Agent Stack]
-    - Prometheus (metrics collection + storage)
-    - Kube-State-Metrics (Kubernetes object metrics)
-    - OpenCost (cost calculation)
-    - OneLens Agent (data processing + upload to OneLens platform)
-    - Pushgateway (metrics push endpoint)
-    |
-    v
-[Daily Updater CronJob] -- runs patching.sh
-    - re-evaluates cluster size
-    - adjusts resource allocations
-    - applies configuration updates
-```
+You install one Helm chart (`onelensdeployer`). It runs a one-time Job that connects your cluster to your OneLens account, detects your cloud provider, and installs the full monitoring stack (`onelens-agent` chart) with right-sized resources.
+
+After that, a CronJob runs every 5 minutes to healthcheck the stack. If anything is unhealthy or a new version is available, it automatically remediates — no manual intervention needed.
+
+**What gets deployed:**
+
+| Component | Purpose |
+|---|---|
+| Prometheus | Collects and stores cluster metrics |
+| Kube-State-Metrics | Exposes Kubernetes object state as metrics |
+| OpenCost | Calculates per-workload cost from cloud pricing + usage |
+| OneLens Agent | Processes collected metrics and uploads to OneLens platform |
+| Pushgateway | Receives metrics from batch jobs |
+| Updater CronJob | Healthchecks the stack, auto-upgrades, right-sizes resources |
 
 ## Documentation
 

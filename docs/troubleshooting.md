@@ -5,7 +5,8 @@
 - [EBS CSI driver not found (AWS)](#ebs-csi-driver-not-found-aws) — storage provisioning fails because the CSI driver is missing
 - [PVC stuck in Pending](#pvc-stuck-in-pending) — Prometheus can't start because its volume isn't provisioned
 - [OpenCost in CrashLoopBackOff](#opencost-in-crashloopbackoff) — pod restarts while downloading cloud pricing data (usually self-resolves)
-- [Helm upgrade ran but nothing changed](#helm-upgrade-ran-but-nothing-changed) — deployer job doesn't re-run after upgrade
+- [Prometheus OOMKilled or restarting](#prometheus-oomkilled-or-restarting) — Prometheus pod gets killed due to memory pressure
+- [Helm upgrade ran but pods haven't changed](#helm-upgrade-ran-but-pods-havent-changed) — monitoring stack pods still on old version after deployer upgrade
 - [Cloud provider auto-detection failed](#cloud-provider-auto-detection-failed) — deployer can't determine if the cluster is AWS or Azure
 - [Pods stuck in Pending (scheduling issues)](#pods-stuck-in-pending-scheduling-issues) — pods can't be scheduled due to taints, resources, or node selectors
 - [Registration failed](#registration-failed) — cluster registration with OneLens API returned an error
@@ -97,22 +98,40 @@ If the logs show pricing file download activity, wait 5-10 minutes. The pod will
 
 ---
 
-## Helm upgrade ran but nothing changed
+## Prometheus OOMKilled or restarting
 
-**Symptom:** `helm upgrade` says "Release has been upgraded" but no new deployer job runs.
+**Symptom:** Prometheus pod shows `OOMKilled` status or keeps restarting with memory-related errors.
 
-Helm does not re-run completed or failed Jobs on upgrade. You need to delete the old job first:
+No action needed. The deployer's healthcheck runs every 5 minutes and will detect the unhealthy pod automatically. It right-sizes Prometheus memory based on the actual workload density of your cluster — pod count, label cardinality, and historical usage patterns. The next healthcheck cycle will adjust the memory limits and restart the pod with appropriate resources.
+
+OneLens intentionally avoids over-provisioning. Resource limits are continuously tuned to match your cluster's actual needs, so occasional OOMKills can happen when workload density changes suddenly (e.g., a large deployment rollout). The self-healing loop resolves this within minutes.
+
+If the pod keeps getting OOMKilled across multiple cycles, contact [OneLens support](mailto:support@astuto.ai) with the output of:
 
 ```bash
-# Delete the old job
-kubectl delete job onelensdeployer -n onelens-agent
+kubectl describe pod -l app.kubernetes.io/name=prometheus -n onelens-agent
+kubectl get deploy -n onelens-agent -o custom-columns='NAME:.metadata.name,MEM_LIM:.spec.template.spec.containers[*].resources.limits.memory'
+```
 
-# Delete any leftover pods from the old job
-kubectl delete pods -n onelens-agent -l job-name=onelensdeployer
+---
 
-# Re-run the upgrade
-helm upgrade --install onelensdeployer onelens/onelensdeployer \
-  -n onelens-agent --reuse-values
+## Helm upgrade ran but pods haven't changed
+
+**Symptom:** `helm upgrade onelensdeployer` succeeded but the monitoring stack pods are still running the old version.
+
+The upgrade command only updates the deployer. The monitoring stack (Prometheus, KSM, OpenCost, Agent) is upgraded automatically by the deployer's CronJob within 5-10 minutes.
+
+If the pods still haven't updated after 10 minutes, trigger the upgrade manually:
+
+```bash
+kubectl create job --from=cronjob/onelensupdater manual-upgrade -n onelens-agent
+kubectl logs -f job/manual-upgrade -n onelens-agent
+```
+
+To verify the upgrade completed:
+
+```bash
+helm list -n onelens-agent
 ```
 
 ---
@@ -285,7 +304,7 @@ kubectl logs -l batch.kubernetes.io/job-name=<job-name> -n onelens-agent -f
 
 ## Uninstallation
 
-Removes all OneLens components from the cluster. The two Helm releases must be uninstalled separately (or together as shown). PVCs are retained by default to protect Prometheus data — delete them explicitly if you want a clean removal.
+Removes all OneLens components from the cluster. The two Helm releases must be uninstalled. PVCs are retained by default to protect Prometheus data — delete them explicitly if you want a clean removal.
 
 ```bash
 # Uninstall both charts at once

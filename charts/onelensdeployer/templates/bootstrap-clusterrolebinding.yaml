@@ -1,4 +1,4 @@
-{{- if and .Values.bootstrapRbac.clusterRoleBinding.enabled .Release.IsInstall }}
+{{- if and (default dict (default dict .Values.bootstrapRbac).clusterRoleBinding).enabled .Release.IsInstall }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -19,4 +19,3 @@ roleRef:
   name: {{ .Values.bootstrapRbac.clusterRole.name }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
-
