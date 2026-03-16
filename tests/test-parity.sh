@@ -148,10 +148,10 @@ rollback_cmd=$(grep -c 'helm rollback onelens-agent' "$ROOT/src/patching.sh" || 
 assert_gt "$rollback_cmd" "0" "patching.sh can rollback stuck helm releases"
 
 # ---------------------------------------------------------------------------
-# Test 17: Deployer upgrade extracts customer values (no --reuse-values)
+# Test 17: Deployer self-upgrade removed (deployer SA cannot escalate RBAC)
 # ---------------------------------------------------------------------------
-deployer_extract=$(grep -c 'DEPLOYER_CUSTOMER_FILE\|DEPLOYER_VALUES' "$ROOT/src/patching.sh" || true)
-assert_gt "$deployer_extract" "0" "deployer upgrade extracts customer values explicitly"
+deployer_helm_upgrade=$(grep -v '^#' "$ROOT/src/patching.sh" | grep -c 'helm upgrade onelensdeployer' || true)
+assert_eq "$deployer_helm_upgrade" "0" "patching.sh does not self-upgrade the deployer chart"
 
 # ---------------------------------------------------------------------------
 # Test 18: Usage-based sizing functions exist in lib

@@ -1693,7 +1693,7 @@ eval "$HELM_CMD"
 UPGRADE_EXIT=$?
 if [ $UPGRADE_EXIT -ne 0 ]; then
     echo "WARNING: helm upgrade failed (exit $UPGRADE_EXIT) but NOT rolling back."
-    echo "Old pods remain running. Deployer upgrade + 5-min schedule will proceed"
+    echo "Old pods remain running. 5-min schedule will proceed"
     echo "so the next healthcheck can retry or allow quick analysis."
     echo "--- Pod Status After Failed Upgrade ---"
     kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || true
@@ -1728,85 +1728,13 @@ if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
 fi
 
-# Deployer self-upgrade — upgrade the deployer chart itself to get new entrypoint.sh
-# This is the key enabler: once the deployer chart is upgraded, the new entrypoint.sh
-# with healthcheck mode will run on the next CronJob execution.
-# NO --reuse-values: image tag comes from chart AppVersion (new chart = new image).
-# Only customer-specific values (tolerations, nodeSelector) are extracted and re-applied.
-echo "Checking deployer chart version..."
-DEPLOYER_RELEASE_JSON=$(helm list -n onelens-agent -o json 2>/dev/null || echo "[]")
-DEPLOYER_VERSION=$(echo "$DEPLOYER_RELEASE_JSON" | jq -r '.[] | select(.name=="onelensdeployer") | .chart' | sed 's/onelensdeployer-//' || true)
-DEPLOYER_STATUS=$(echo "$DEPLOYER_RELEASE_JSON" | jq -r '.[] | select(.name=="onelensdeployer") | .status' || true)
-# Pin deployer target to CHART_VERSION (from PATCHING_VERSION) if available.
-# Fall back to latest from repo for backward compat (old entrypoint without PATCHING_VERSION).
-if [ -n "$CHART_VERSION" ]; then
-    TARGET_DEPLOYER="$CHART_VERSION"
-else
-    TARGET_DEPLOYER=$(helm search repo onelens/onelensdeployer -o json 2>/dev/null \
-        | jq -r '.[0].version' || true)
-fi
-
-DEPLOYER_NEEDS_UPGRADE=false
-if [ -n "$DEPLOYER_VERSION" ] && [ -n "$TARGET_DEPLOYER" ]; then
-    if [ "$DEPLOYER_VERSION" != "$TARGET_DEPLOYER" ]; then
-        DEPLOYER_NEEDS_UPGRADE=true
-    elif [ "$DEPLOYER_STATUS" = "failed" ]; then
-        echo "Deployer release is in 'failed' state — retrying upgrade..."
-        DEPLOYER_NEEDS_UPGRADE=true
-    fi
-fi
-if [ "$DEPLOYER_NEEDS_UPGRADE" = "true" ]; then
-    echo "Upgrading deployer from $DEPLOYER_VERSION ($DEPLOYER_STATUS) to $TARGET_DEPLOYER..."
-
-    # Extract customer-specific values from existing deployer release
-    DEPLOYER_VALUES=$(helm get values onelensdeployer -n onelens-agent -a -o json 2>/dev/null || true)
-    DEPLOYER_CUSTOMER_FILE=""
-    if [ -n "$DEPLOYER_VALUES" ] && command -v jq &>/dev/null; then
-        DEPLOYER_CUSTOMER_FILE=$(mktemp)
-        echo "$DEPLOYER_VALUES" | jq '{
-            cronjob: {
-                tolerations: (.cronjob.tolerations // []),
-                nodeSelector: (.cronjob.nodeSelector // {})
-            }
-        }' > "$DEPLOYER_CUSTOMER_FILE" 2>/dev/null || true
-    fi
-
-    # Bootstrap RBAC is guarded by .Release.IsInstall in the chart templates,
-    # so it never renders on upgrade. Job is disabled — only CronJob runs post-install.
-    DEPLOYER_CMD="helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent \
-        --set cronjob.schedule=\"$TARGET_SCHEDULE\" \
-        --set cronjob.backoffLimit=0 \
-        --set cronjob.activeDeadlineSeconds=900 \
-        --set cronjob.env.deployment_type=cronjob \
-        --set job.enabled=false \
-        --version $TARGET_DEPLOYER \
-        --timeout=3m"
-
-    # Preserve old RBAC resource names if upgrading from v1.x deployer.
-    # The ClusterRole/ClusterRoleBinding were renamed from onelensupdater-* to
-    # onelensdeployer-* in the v2.x chart. Helm treats renamed resources as new
-    # and tries to CREATE them — but the CronJob SA can't create ClusterRoles
-    # at cluster scope (by design). Passing the old names makes helm UPDATE the
-    # existing resources instead.
-    if kubectl get clusterrole onelensupdater-clusterrole &>/dev/null; then
-        echo "Detected old RBAC names (v1.x deployer) — preserving to avoid cluster-scope create"
-        DEPLOYER_CMD="$DEPLOYER_CMD \
-            --set rbac.clusterRole.name=onelensupdater-clusterrole \
-            --set rbac.clusterRoleBinding.name=onelensupdater-clusterrolebinding"
-    fi
-
-    if [ -n "$DEPLOYER_CUSTOMER_FILE" ] && [ -f "$DEPLOYER_CUSTOMER_FILE" ]; then
-        DEPLOYER_CMD="$DEPLOYER_CMD -f $DEPLOYER_CUSTOMER_FILE"
-    fi
-
-    eval "$DEPLOYER_CMD" 2>&1 && \
-        echo "Deployer upgraded to $TARGET_DEPLOYER" || \
-        echo "WARNING: Deployer upgrade failed (non-fatal, will retry next run)"
-
-    [ -n "$DEPLOYER_CUSTOMER_FILE" ] && rm -f "$DEPLOYER_CUSTOMER_FILE"
-else
-    echo "Deployer chart: current=${DEPLOYER_VERSION:-unknown} target=${TARGET_DEPLOYER:-unknown} (no upgrade needed)"
-fi
+# Deployer chart is NOT self-upgraded here. The deployer SA cannot grant itself
+# broader RBAC permissions (Kubernetes escalation prevention), and patching.sh
+# is fetched from the API every run so it's always the latest version regardless
+# of the deployer image. The CronJob schedule and activeDeadlineSeconds are
+# already patched via kubectl at the top of this script (Phase 3).
+# If the deployer chart itself needs upgrading (e.g., new entrypoint.sh),
+# it must be done by a cluster admin: helm upgrade onelensdeployer ...
 
 # Get the chart version that was actually deployed
 DEPLOYED_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null | jq -r '.[0].chart' | sed 's/onelens-agent-//' || echo "unknown")
@@ -1863,7 +1791,7 @@ curl -s --max-time 10 --location --request PUT \
 echo ""
 if [ "$UPGRADE_FAILED" = "true" ]; then
     echo "Patching incomplete (upgrade failed). Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
-    echo "Deployer upgraded + 5-min schedule set. Next healthcheck will retry."
+    echo "5-min schedule set. Next healthcheck will retry."
     exit 1
 fi
 echo "Patching complete. Chart: $DEPLOYED_VERSION | Pods: $TOTAL_PODS | Tier: $TIER"
