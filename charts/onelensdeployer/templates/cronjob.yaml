@@ -18,7 +18,7 @@ spec:
   suspend: {{ .Values.cronjob.suspend }}
   jobTemplate:
     spec:
-      backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      backoffLimit: {{ default 0 .Values.cronjob.backoffLimit }}
       {{- if .Values.cronjob.activeDeadlineSeconds }}
       activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
       {{- end }}
@@ -45,7 +45,7 @@ spec:
           containers:
             - name: {{ .Values.cronjob.name }}
               image: {{ .Values.cronjob.image }}:v{{ .Chart.AppVersion }}
-              imagePullPolicy: {{ .Values.cronjob.imagePullPolicy }}
+              imagePullPolicy: {{ default "Always" .Values.cronjob.imagePullPolicy }}
               {{- with .Values.cronjob.resources }}
               resources:
                 {{- toYaml . | nindent 16 }}
