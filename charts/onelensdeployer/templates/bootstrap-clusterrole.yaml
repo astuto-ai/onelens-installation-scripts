@@ -4,7 +4,7 @@ kind: ClusterRole
 metadata:
   name: {{ .Values.bootstrapRbac.clusterRole.name }}
   labels:
-    {{- with .Values.globals.labels }}
+    {{- with (default dict .Values.globals).labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 rules:

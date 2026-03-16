@@ -1,10 +1,10 @@
-{{- if .Values.job.enabled }}
+{{- if and .Values.job.enabled .Release.IsInstall }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ .Values.job.name }}
   labels:
-    {{- with .Values.globals.labels }}
+    {{- with (default dict .Values.globals).labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
     {{- with .Values.job.labels }}
@@ -16,7 +16,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- with .Values.globals.labels }}
+        {{- with (default dict .Values.globals).labels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- with .Values.job.labels }}
@@ -37,7 +37,7 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-            {{- $deploymentLabels := merge (default dict .Values.globals.labels) (default dict .Values.job.labels) }}
+            {{- $deploymentLabels := merge (default dict (default dict .Values.globals).labels) (default dict .Values.job.labels) }}
             {{- if $deploymentLabels }}
             - name: DEPLOYMENT_LABELS
               value: {{ $deploymentLabels | toJson | quote }}
