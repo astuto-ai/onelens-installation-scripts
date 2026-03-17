@@ -181,10 +181,10 @@ job:
     deployment_type: job
   resources:
     requests:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
     limits:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
@@ -216,10 +216,10 @@ cronjob:
     deployment_type: cronjob
   resources:
     requests:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
     limits:
-      cpu: 50m
+      cpu: 200m
       memory: 256Mi
   concurrencyPolicy: "Forbid" # Prevent concurrent job executions
   successfulJobsHistoryLimit: 1 # Number of successful jobs to keep
