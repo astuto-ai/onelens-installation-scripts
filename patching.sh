@@ -2085,6 +2085,31 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
             echo "Agent CronJob backoffLimit patched" || echo "WARNING: Failed to patch agent backoffLimit"
     fi
 
+    # Check for agent pods stuck in Pending/ContainerCreating (volume attach, image pull, scheduling)
+    AGENT_STUCK_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | grep "^${AGENT_CJ_NAME}-" | grep -v "^onelensupdater" \
+        | awk '$3 == "Pending" || $3 == "ContainerCreating" {print $1; exit}' || true)
+    if [ -n "$AGENT_STUCK_POD" ]; then
+        AGENT_STUCK_AGE=$(kubectl get pod "$AGENT_STUCK_POD" -n onelens-agent \
+            -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
+        AGENT_STUCK_SECS=""
+        if [ -n "$AGENT_STUCK_AGE" ]; then
+            AGENT_STUCK_SECS=$(seconds_since "$AGENT_STUCK_AGE")
+        fi
+        AGENT_STUCK_EVENTS=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$AGENT_STUCK_POD" --no-headers 2>/dev/null | tail -5 || true)
+        echo "WARNING: Agent pod stuck: $AGENT_STUCK_POD (${AGENT_STUCK_SECS:-?}s)"
+        if [ -n "$AGENT_STUCK_EVENTS" ]; then
+            echo "--- Agent stuck pod events ---"
+            echo "$AGENT_STUCK_EVENTS"
+            echo "--- end ---"
+        fi
+        # Delete if stuck > 10 min (hourly CronJob, can't afford to wait)
+        if [ -n "$AGENT_STUCK_SECS" ] && [ "$AGENT_STUCK_SECS" -gt 600 ] 2>/dev/null; then
+            echo "Agent pod stuck > 10 min — deleting to unblock CronJob"
+            kubectl delete pod "$AGENT_STUCK_POD" -n onelens-agent --grace-period=0 2>/dev/null || true
+        fi
+    fi
+
     # Check recent agent Job pods (last 3 jobs)
     AGENT_JOBS=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
         | grep "^${AGENT_CJ_NAME}-" | grep -v "^onelensupdater" | tail -3 || true)
@@ -2113,6 +2138,15 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
 
                 echo "Diagnosis: pod=$AGENT_FAIL_POD reason=$AGENT_TERM_REASON exitCode=$AGENT_EXIT_CODE memLimit=$AGENT_MEM_LIMIT"
 
+                # Get events for the failed pod (FailedScheduling, ImagePull, etc.)
+                AGENT_FAIL_EVENTS=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$AGENT_FAIL_POD" --no-headers 2>/dev/null \
+                    | grep -iE 'Failed|Error|OOM|Back' | tail -5 || true)
+                if [ -n "$AGENT_FAIL_EVENTS" ]; then
+                    echo "--- Agent pod events ---"
+                    echo "$AGENT_FAIL_EVENTS"
+                    echo "--- end ---"
+                fi
+
                 # Get last log lines from the failed pod
                 AGENT_FAIL_LOGS=$(kubectl logs "$AGENT_FAIL_POD" -n onelens-agent --tail=15 2>/dev/null || \
                     kubectl logs "$AGENT_FAIL_POD" -n onelens-agent --previous --tail=15 2>/dev/null || true)
@@ -2120,20 +2154,32 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     echo "--- Agent pod logs (last 15 lines) ---"
                     echo "$AGENT_FAIL_LOGS"
                     echo "--- end ---"
+                else
+                    echo "WARNING: No logs available for agent pod $AGENT_FAIL_POD (pod may have been cleaned up)"
                 fi
 
                 # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch (takes effect on next agent run)
                 if [ "$AGENT_TERM_REASON" = "OOMKilled" ] || echo "$AGENT_FAIL_LOGS" | grep -qiE 'out of memory|cannot allocate|MemoryError|killed' 2>/dev/null; then
-                    AGENT_NEW_MEM=$(apply_memory_multiplier "${AGENT_MEM_LIMIT:-384Mi}" 1.25)
-                    echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
-                    kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
-                      \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
-                        \"name\":\"$AGENT_CJ_NAME\",
-                        \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
-                      }]}}}}}
-                    }" 2>/dev/null && \
-                        echo "Agent CronJob memory patched to $AGENT_NEW_MEM" || \
-                        echo "WARNING: Failed to patch agent CronJob memory"
+                    AGENT_CUR_MI=$(_memory_to_mi "${AGENT_MEM_LIMIT:-384Mi}")
+                    if [ "$AGENT_CUR_MI" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
+                        echo "Agent OOMKilled but already at memory cap (${AGENT_MEM_LIMIT}). Manual investigation needed."
+                    else
+                        AGENT_NEW_MEM=$(apply_memory_multiplier "${AGENT_MEM_LIMIT:-384Mi}" 1.25)
+                        # Cap at _USAGE_CAP_AGENT_MEM
+                        AGENT_NEW_MI=$(_memory_to_mi "$AGENT_NEW_MEM")
+                        if [ "$AGENT_NEW_MI" -gt "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
+                            AGENT_NEW_MEM="${_USAGE_CAP_AGENT_MEM}Mi"
+                        fi
+                        echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
+                        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+                            \"name\":\"$AGENT_CJ_NAME\",
+                            \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
+                          }]}}}}}
+                        }" 2>/dev/null && \
+                            echo "Agent CronJob memory patched to $AGENT_NEW_MEM" || \
+                            echo "WARNING: Failed to patch agent CronJob memory"
+                    fi
                 fi
             fi
         else
@@ -2141,9 +2187,26 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
             AGENT_COMPLETED=$(echo "$AGENT_JOBS" | grep -c 'Complete' || true)
             AGENT_TOTAL=$(echo "$AGENT_JOBS" | wc -l | tr -d '[:space:]')
             echo "Agent jobs: $AGENT_COMPLETED/$AGENT_TOTAL completed successfully"
+
+            # Check last completed pod for signs of empty/failed data export
+            AGENT_LAST_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                | grep "^${AGENT_CJ_NAME}-" | grep -v "^onelensupdater" | grep 'Completed' | tail -1 | awk '{print $1}' || true)
+            if [ -n "$AGENT_LAST_POD" ]; then
+                AGENT_LAST_LOGS=$(kubectl logs "$AGENT_LAST_POD" -n onelens-agent --tail=5 2>/dev/null || true)
+                if echo "$AGENT_LAST_LOGS" | grep -qiE 'failed|error|exception|0 processed' 2>/dev/null; then
+                    echo "WARNING: Last completed agent pod may have issues:"
+                    echo "$AGENT_LAST_LOGS"
+                fi
+            fi
         fi
     else
         echo "WARNING: No agent jobs found — CronJob may not be firing"
+        # Check if CronJob has lastScheduleTime to distinguish "never fired" from "all cleaned up"
+        if [ -z "$AGENT_LAST_SCHEDULE" ]; then
+            echo "Agent CronJob has never been scheduled"
+        else
+            echo "Last scheduled: $AGENT_LAST_SCHEDULE — jobs may have been cleaned up by historyLimit"
+        fi
     fi
 
     # Data staleness: check last successful agent pod completion
@@ -2151,6 +2214,8 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
         | grep "^${AGENT_CJ_NAME}-" | grep -v "^onelensupdater" | grep 'Complete' | tail -1 | awk '{print $4}' || true)
     if [ -n "$AGENT_LAST_SUCCESS" ]; then
         echo "Last successful agent job: ${AGENT_LAST_SUCCESS} ago"
+    else
+        echo "WARNING: No completed agent jobs found — data pipeline may be down"
     fi
 else
     echo "WARNING: Agent CronJob '$AGENT_CJ_NAME' not found"
