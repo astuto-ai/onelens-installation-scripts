@@ -34,7 +34,7 @@ send_logs() {
 trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 
 # Phase 2: Environment Variable Setup
-: "${RELEASE_VERSION:=2.1.24}"
+: "${RELEASE_VERSION:=2.1.23}"
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
@@ -439,7 +439,7 @@ if [ "$RELEASE_STATUS" = "failed" ]; then
 fi
 
 CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
-    --version \"\${RELEASE_VERSION:=2.1.24}\" \
+    --version \"\${RELEASE_VERSION:=2.1.23}\" \
     -f $FILE \
     --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
     --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT\" \
