@@ -132,11 +132,13 @@ fi
 # Old deployer charts (<=2.1.21) didn't set this, so Kubernetes defaults to 6.
 CURRENT_BACKOFF=$(kubectl get cronjob onelensupdater -n onelens-agent \
     -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}' 2>/dev/null || true)
-if [ -n "$CURRENT_BACKOFF" ] && [ "$CURRENT_BACKOFF" -gt 0 ] 2>/dev/null; then
-    echo "Updating CronJob backoffLimit from $CURRENT_BACKOFF to 0..."
-    kubectl patch cronjob onelensupdater -n onelens-agent --type='json' -p='[
-      {"op": "replace", "path": "/spec/jobTemplate/spec/backoffLimit", "value": 0}
-    ]' 2>/dev/null && \
+# Empty means Kubernetes default (6). Only skip if explicitly set to 0.
+if [ "$CURRENT_BACKOFF" != "0" ]; then
+    echo "Updating CronJob backoffLimit from ${CURRENT_BACKOFF:-6 (default)} to 0..."
+    # Use strategic merge patch — works whether field exists or not (replace op fails on missing path)
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' -p='
+      {"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}
+    ' 2>/dev/null && \
         echo "CronJob backoffLimit patched successfully" || \
         echo "WARNING: Failed to patch CronJob backoffLimit"
 fi
