@@ -715,6 +715,10 @@ normalize_chart_version() {
 select_resource_tier() {
     local total_pods="$1"
 
+    # CPU values are rounded to cgroup-safe values (multiples of 50m or 100m).
+    # Odd values like 125m, 375m, 440m, 565m can cause "invalid argument" errors
+    # on nodes with older kernels or cgroup v1 configurations.
+
     if [ "$total_pods" -lt 50 ]; then
         # ── Tiny ──
         PROMETHEUS_CPU_REQUEST="100m"
@@ -737,9 +741,9 @@ select_resource_tier() {
         KSM_CPU_LIMIT="50m"
         KSM_MEMORY_LIMIT="64Mi"
 
-        PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="25m"
+        PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="50m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="64Mi"
-        PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="25m"
+        PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="50m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="64Mi"
 
         TIER="tiny"
@@ -756,9 +760,9 @@ select_resource_tier() {
         OPENCOST_CPU_LIMIT="100m"
         OPENCOST_MEMORY_LIMIT="192Mi"
 
-        ONELENS_CPU_REQUEST="125m"
+        ONELENS_CPU_REQUEST="150m"
         ONELENS_MEMORY_REQUEST="320Mi"
-        ONELENS_CPU_LIMIT="375m"
+        ONELENS_CPU_LIMIT="400m"
         ONELENS_MEMORY_LIMIT="480Mi"
 
         KSM_CPU_REQUEST="50m"
@@ -766,9 +770,9 @@ select_resource_tier() {
         KSM_CPU_LIMIT="50m"
         KSM_MEMORY_LIMIT="128Mi"
 
-        PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="25m"
+        PROMETHEUS_PUSHGATEWAY_CPU_REQUEST="50m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="64Mi"
-        PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="25m"
+        PROMETHEUS_PUSHGATEWAY_CPU_LIMIT="50m"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="64Mi"
 
         TIER="small"
@@ -785,9 +789,9 @@ select_resource_tier() {
         OPENCOST_CPU_LIMIT="100m"
         OPENCOST_MEMORY_LIMIT="256Mi"
 
-        ONELENS_CPU_REQUEST="125m"
+        ONELENS_CPU_REQUEST="150m"
         ONELENS_MEMORY_REQUEST="480Mi"
-        ONELENS_CPU_LIMIT="375m"
+        ONELENS_CPU_LIMIT="400m"
         ONELENS_MEMORY_LIMIT="640Mi"
 
         KSM_CPU_REQUEST="50m"
@@ -814,9 +818,9 @@ select_resource_tier() {
         OPENCOST_CPU_LIMIT="150m"
         OPENCOST_MEMORY_LIMIT="384Mi"
 
-        ONELENS_CPU_REQUEST="125m"
+        ONELENS_CPU_REQUEST="150m"
         ONELENS_MEMORY_REQUEST="640Mi"
-        ONELENS_CPU_LIMIT="440m"
+        ONELENS_CPU_LIMIT="500m"
         ONELENS_MEMORY_LIMIT="800Mi"
 
         KSM_CPU_REQUEST="50m"
@@ -843,7 +847,7 @@ select_resource_tier() {
         OPENCOST_CPU_LIMIT="150m"
         OPENCOST_MEMORY_LIMIT="512Mi"
 
-        ONELENS_CPU_REQUEST="125m"
+        ONELENS_CPU_REQUEST="150m"
         ONELENS_MEMORY_REQUEST="800Mi"
         ONELENS_CPU_LIMIT="500m"
         ONELENS_MEMORY_LIMIT="960Mi"
@@ -872,9 +876,9 @@ select_resource_tier() {
         OPENCOST_CPU_LIMIT="200m"
         OPENCOST_MEMORY_LIMIT="768Mi"
 
-        ONELENS_CPU_REQUEST="190m"
+        ONELENS_CPU_REQUEST="200m"
         ONELENS_MEMORY_REQUEST="960Mi"
-        ONELENS_CPU_LIMIT="565m"
+        ONELENS_CPU_LIMIT="600m"
         ONELENS_MEMORY_LIMIT="1280Mi"
 
         KSM_CPU_REQUEST="100m"
@@ -2172,7 +2176,36 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     echo "WARNING: No logs available for agent pod $AGENT_FAIL_POD (pod may have been cleaned up)"
                 fi
 
-                # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch (takes effect on next agent run)
+                # Fix: if cgroup CPU error, round CPU to next 100m via kubectl patch
+                if [ "$AGENT_EXIT_CODE" = "128" ] && echo "$AGENT_FAIL_EVENTS" | grep -qiE 'cgroup.*cpu|cpu.*cgroup|cfs_quota' 2>/dev/null; then
+                    AGENT_CPU_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
+                        -o jsonpath='{.spec.containers[0].resources.limits.cpu}' 2>/dev/null || true)
+                    AGENT_CPU_MC=$(_cpu_to_millicores "${AGENT_CPU_LIMIT:-400m}")
+                    if [ "$AGENT_CPU_MC" -ge "$_USAGE_CAP_CPU" ] 2>/dev/null; then
+                        echo "Agent cgroup CPU error but already at cap (${AGENT_CPU_LIMIT}). Manual investigation needed."
+                    else
+                        # Round up to next 100m
+                        AGENT_NEW_CPU=$(( ((AGENT_CPU_MC + 99) / 100) * 100 ))
+                        if [ "$AGENT_NEW_CPU" -eq "$AGENT_CPU_MC" ]; then
+                            AGENT_NEW_CPU=$((AGENT_CPU_MC + 100))
+                        fi
+                        # Cap at _USAGE_CAP_CPU
+                        if [ "$AGENT_NEW_CPU" -gt "$_USAGE_CAP_CPU" ] 2>/dev/null; then
+                            AGENT_NEW_CPU="$_USAGE_CAP_CPU"
+                        fi
+                        echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
+                        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+                            \"name\":\"$AGENT_CONTAINER_NAME\",
+                            \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
+                          }]}}}}}
+                        }" 2>/dev/null && \
+                            echo "Agent CronJob CPU patched to ${AGENT_NEW_CPU}m" || \
+                            echo "WARNING: Failed to patch agent CronJob CPU"
+                    fi
+                fi
+
+                # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch
                 if [ "$AGENT_TERM_REASON" = "OOMKilled" ] || [ "$AGENT_EXIT_CODE" = "137" ] || echo "$AGENT_FAIL_LOGS" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
                     AGENT_CUR_MI=$(_memory_to_mi "${AGENT_MEM_LIMIT:-384Mi}")
                     if [ "$AGENT_CUR_MI" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then

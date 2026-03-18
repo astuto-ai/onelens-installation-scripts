@@ -59,7 +59,7 @@ assert_all_resource_vars "tiny(0)" \
     "100m" "128Mi"  "100m" "128Mi"  \
     "100m" "256Mi"  "300m" "384Mi"  \
     "50m"  "64Mi"   "50m"  "64Mi"   \
-    "25m"  "64Mi"   "25m"  "64Mi"
+    "50m"  "64Mi"   "50m"  "64Mi"
 
 echo ""
 echo "--- select_resource_tier: tiny tier (49 pods) — boundary ---"
@@ -73,9 +73,9 @@ assert_eq "$(get_tier)" "small" "50 pods -> small tier"
 assert_all_resource_vars "small(50)" \
     "100m" "275Mi"  "100m" "275Mi"  \
     "100m" "192Mi"  "100m" "192Mi"  \
-    "125m" "320Mi"  "375m" "480Mi"  \
+    "150m" "320Mi"  "400m" "480Mi"  \
     "50m"  "128Mi"  "50m"  "128Mi"  \
-    "25m"  "64Mi"   "25m"  "64Mi"
+    "50m"  "64Mi"   "50m"  "64Mi"
 
 echo ""
 echo "--- select_resource_tier: small tier (99 pods) — boundary ---"
@@ -89,7 +89,7 @@ assert_eq "$(get_tier)" "medium" "100 pods -> medium tier"
 assert_all_resource_vars "medium(100)" \
     "150m" "420Mi"  "150m" "420Mi"  \
     "100m" "256Mi"  "100m" "256Mi"  \
-    "125m" "480Mi"  "375m" "640Mi"  \
+    "150m" "480Mi"  "400m" "640Mi"  \
     "50m"  "192Mi"  "50m"  "192Mi"  \
     "50m"  "100Mi"  "50m"  "100Mi"
 
@@ -105,7 +105,7 @@ assert_eq "$(get_tier)" "large" "500 pods -> large tier"
 assert_all_resource_vars "large(500)" \
     "250m"  "720Mi"  "250m"  "720Mi"  \
     "150m"  "384Mi"  "150m"  "384Mi"  \
-    "125m"  "640Mi"  "440m"  "800Mi"  \
+    "150m"  "640Mi"  "500m"  "800Mi"  \
     "50m"   "256Mi"  "50m"   "256Mi"  \
     "50m"   "100Mi"  "50m"   "100Mi"
 
@@ -121,7 +121,7 @@ assert_eq "$(get_tier)" "extra-large" "1000 pods -> extra-large tier"
 assert_all_resource_vars "extra-large(1000)" \
     "400m"  "1600Mi" "400m"  "1600Mi" \
     "150m"  "512Mi"  "150m"  "512Mi"  \
-    "125m"  "800Mi"  "500m"  "960Mi"  \
+    "150m"  "800Mi"  "500m"  "960Mi"  \
     "100m"  "384Mi"  "100m"  "384Mi"  \
     "50m"   "128Mi"  "50m"   "128Mi"
 
@@ -137,7 +137,7 @@ assert_eq "$(get_tier)" "very-large" "1500 pods -> very-large tier"
 assert_all_resource_vars "very-large(1500)" \
     "600m"  "2400Mi"  "600m"  "2400Mi"  \
     "200m"  "768Mi"   "200m"  "768Mi"   \
-    "190m"  "960Mi"   "565m"  "1280Mi"  \
+    "200m"  "960Mi"   "600m"  "1280Mi"  \
     "100m"  "512Mi"   "100m"  "512Mi"   \
     "50m"   "128Mi"   "50m"   "128Mi"
 

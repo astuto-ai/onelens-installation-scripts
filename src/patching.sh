@@ -1419,7 +1419,36 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     echo "WARNING: No logs available for agent pod $AGENT_FAIL_POD (pod may have been cleaned up)"
                 fi
 
-                # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch (takes effect on next agent run)
+                # Fix: if cgroup CPU error, round CPU to next 100m via kubectl patch
+                if [ "$AGENT_EXIT_CODE" = "128" ] && echo "$AGENT_FAIL_EVENTS" | grep -qiE 'cgroup.*cpu|cpu.*cgroup|cfs_quota' 2>/dev/null; then
+                    AGENT_CPU_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
+                        -o jsonpath='{.spec.containers[0].resources.limits.cpu}' 2>/dev/null || true)
+                    AGENT_CPU_MC=$(_cpu_to_millicores "${AGENT_CPU_LIMIT:-400m}")
+                    if [ "$AGENT_CPU_MC" -ge "$_USAGE_CAP_CPU" ] 2>/dev/null; then
+                        echo "Agent cgroup CPU error but already at cap (${AGENT_CPU_LIMIT}). Manual investigation needed."
+                    else
+                        # Round up to next 100m
+                        AGENT_NEW_CPU=$(( ((AGENT_CPU_MC + 99) / 100) * 100 ))
+                        if [ "$AGENT_NEW_CPU" -eq "$AGENT_CPU_MC" ]; then
+                            AGENT_NEW_CPU=$((AGENT_CPU_MC + 100))
+                        fi
+                        # Cap at _USAGE_CAP_CPU
+                        if [ "$AGENT_NEW_CPU" -gt "$_USAGE_CAP_CPU" ] 2>/dev/null; then
+                            AGENT_NEW_CPU="$_USAGE_CAP_CPU"
+                        fi
+                        echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
+                        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+                            \"name\":\"$AGENT_CONTAINER_NAME\",
+                            \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
+                          }]}}}}}
+                        }" 2>/dev/null && \
+                            echo "Agent CronJob CPU patched to ${AGENT_NEW_CPU}m" || \
+                            echo "WARNING: Failed to patch agent CronJob CPU"
+                    fi
+                fi
+
+                # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch
                 if [ "$AGENT_TERM_REASON" = "OOMKilled" ] || [ "$AGENT_EXIT_CODE" = "137" ] || echo "$AGENT_FAIL_LOGS" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
                     AGENT_CUR_MI=$(_memory_to_mi "${AGENT_MEM_LIMIT:-384Mi}")
                     if [ "$AGENT_CUR_MI" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
