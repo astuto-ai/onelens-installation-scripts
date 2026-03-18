@@ -1437,14 +1437,14 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
-                        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
                           }]}}}}}
-                        }" 2>/dev/null && \
+                        }" 2>&1) && \
                             echo "Agent CronJob CPU patched to ${AGENT_NEW_CPU}m" || \
-                            echo "WARNING: Failed to patch agent CronJob CPU"
+                            echo "WARNING: Failed to patch agent CronJob CPU: $_agent_cpu_patch_err"
                     fi
                 fi
 
@@ -1461,14 +1461,14 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_MEM="${_USAGE_CAP_AGENT_MEM}Mi"
                         fi
                         echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
-                        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
                           }]}}}}}
-                        }" 2>/dev/null && \
+                        }" 2>&1) && \
                             echo "Agent CronJob memory patched to $AGENT_NEW_MEM" || \
-                            echo "WARNING: Failed to patch agent CronJob memory"
+                            echo "WARNING: Failed to patch agent CronJob memory: $_agent_mem_patch_err"
                     fi
                 fi
             fi
