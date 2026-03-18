@@ -126,6 +126,21 @@ if [ -n "$CURRENT_CPU" ]; then
     fi
 fi
 
+# Ensure deployer CronJob has backoffLimit=0 (no internal retries).
+# The 5-min CronJob schedule is the retry mechanism. Internal retries just burn time
+# in exponential backoff (10s, 20s, 40s...) while concurrencyPolicy: Forbid blocks new runs.
+# Old deployer charts (<=2.1.21) didn't set this, so Kubernetes defaults to 6.
+CURRENT_BACKOFF=$(kubectl get cronjob onelensupdater -n onelens-agent \
+    -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}' 2>/dev/null || true)
+if [ -n "$CURRENT_BACKOFF" ] && [ "$CURRENT_BACKOFF" -gt 0 ] 2>/dev/null; then
+    echo "Updating CronJob backoffLimit from $CURRENT_BACKOFF to 0..."
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='json' -p='[
+      {"op": "replace", "path": "/spec/jobTemplate/spec/backoffLimit", "value": 0}
+    ]' 2>/dev/null && \
+        echo "CronJob backoffLimit patched successfully" || \
+        echo "WARNING: Failed to patch CronJob backoffLimit"
+fi
+
 # Detect deployer chart version — used for dormant cluster warning and final API report.
 # Old deployers (<=2.1.18) set patching_enabled=false after patching.sh exits, causing
 # the cluster to go dormant. We can't prevent this from patching.sh (the old entrypoint
