@@ -161,5 +161,29 @@ assert_eq "$(evaluate_fixed_container_sizing "agent" "384Mi" "true" | grep '^MEM
     "480Mi" "Fixed: OOM → 1.25x (384Mi → 480Mi)"
 
 ###############################################################################
+# calculate_wal_oom_memory
+###############################################################################
+echo ""
+echo "--- calculate_wal_oom_memory ---"
+
+# 1.5x normal: 400Mi → 600Mi
+assert_eq "$(calculate_wal_oom_memory "400Mi" 4800)" "600Mi" "WAL OOM: 400Mi × 1.5 = 600Mi"
+
+# At cap boundary: 3600Mi → 4800Mi (capped)
+assert_eq "$(calculate_wal_oom_memory "3600Mi" 4800)" "4800Mi" "WAL OOM: 3600Mi × 1.5 = 5400Mi → capped at 4800Mi"
+
+# Already at cap: 4800Mi → 4800Mi (no change)
+assert_eq "$(calculate_wal_oom_memory "4800Mi" 4800)" "4800Mi" "WAL OOM: already at cap (4800Mi → 4800Mi)"
+
+# Small value: 150Mi → 225Mi
+assert_eq "$(calculate_wal_oom_memory "150Mi" 4800)" "225Mi" "WAL OOM: 150Mi × 1.5 = 225Mi"
+
+# Convergence chain: 600→900
+assert_eq "$(calculate_wal_oom_memory "600Mi" 4800)" "900Mi" "WAL OOM chain: 600Mi → 900Mi"
+
+# Convergence chain: 900→1350
+assert_eq "$(calculate_wal_oom_memory "900Mi" 4800)" "1350Mi" "WAL OOM chain: 900Mi → 1350Mi"
+
+###############################################################################
 test_summary
 exit $?

@@ -101,6 +101,55 @@ if [ -n "$PATCH_JSON" ]; then
         echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
 
+# Ensure deployer CronJob has enough CPU for large clusters (kubectl + jq + helm on 1000+ pods)
+# Only patch UP — never downgrade a customer who set a higher value explicitly.
+# Note: _cpu_to_millicores is not available yet (library embedded below), so parse manually.
+MIN_CPU_MILLICORES=200
+CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
+if [ -n "$CURRENT_CPU" ]; then
+    # Convert to millicores: "50m" → 50, "0.2" → 200
+    if echo "$CURRENT_CPU" | grep -q 'm$'; then
+        CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | sed 's/m$//')
+    else
+        CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | awk '{printf "%.0f", $1 * 1000}')
+    fi
+    if [ "$CURRENT_CPU_MILLICORES" -lt "$MIN_CPU_MILLICORES" ] 2>/dev/null; then
+        echo "Updating CronJob CPU from ${CURRENT_CPU} to ${MIN_CPU_MILLICORES}m..."
+        kubectl patch cronjob onelensupdater -n onelens-agent --type='json' -p='[
+          {"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/resources/requests/cpu", "value": "'"${MIN_CPU_MILLICORES}m"'"},
+          {"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/resources/limits/cpu", "value": "'"${MIN_CPU_MILLICORES}m"'"}
+        ]' 2>/dev/null && \
+            echo "CronJob CPU patched successfully" || \
+            echo "WARNING: Failed to patch CronJob CPU"
+    else
+        echo "CronJob CPU already sufficient (${CURRENT_CPU})"
+    fi
+fi
+
+# Detect deployer chart version — used for dormant cluster warning and final API report.
+# Old deployers (<=2.1.18) set patching_enabled=false after patching.sh exits, causing
+# the cluster to go dormant. We can't prevent this from patching.sh (the old entrypoint
+# runs AFTER this script and overwrites the flag). Log a warning so it appears in logs.
+DEPLOYER_VERSION=""
+DEPLOYER_CHART_RAW=$(helm list -n onelens-agent -o json 2>/dev/null \
+    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' 2>/dev/null || true)
+if [ -n "$DEPLOYER_CHART_RAW" ]; then
+    DEPLOYER_VERSION=$(echo "$DEPLOYER_CHART_RAW" | sed 's/onelensdeployer-//')
+    DEPLOYER_MAJOR=$(echo "$DEPLOYER_VERSION" | cut -d. -f1)
+    DEPLOYER_MINOR=$(echo "$DEPLOYER_VERSION" | cut -d. -f2)
+    DEPLOYER_PATCH=$(echo "$DEPLOYER_VERSION" | cut -d. -f3)
+    # Proper semver <=2.1.18 check: major < 2, or (major == 2 and minor < 1), or (2.1.x and patch <= 18)
+    _deployer_is_old=false
+    if [ "$DEPLOYER_MAJOR" -lt 2 ] 2>/dev/null; then _deployer_is_old=true
+    elif [ "$DEPLOYER_MAJOR" -eq 2 ] 2>/dev/null && [ "$DEPLOYER_MINOR" -lt 1 ] 2>/dev/null; then _deployer_is_old=true
+    elif [ "$DEPLOYER_MAJOR" -eq 2 ] 2>/dev/null && [ "$DEPLOYER_MINOR" -eq 1 ] 2>/dev/null && [ "$DEPLOYER_PATCH" -le 18 ] 2>/dev/null; then _deployer_is_old=true
+    fi
+    if [ "$_deployer_is_old" = "true" ]; then
+        echo "WARNING: Deployer chart $DEPLOYER_VERSION (<=2.1.18) will set patching_enabled=false after this script exits."
+        echo "This cluster will go dormant until the deployer chart is manually upgraded by a cluster admin."
+    fi
+fi
+
 # Phase 4: Cluster Pod Count and Resource Allocation
 
 # BEGIN_EMBED lib/resource-sizing.sh
@@ -270,6 +319,17 @@ calculate_oom_response_memory() {
     local doubled=$(( c * 2 ))
     doubled=$(_clamp_resource "$doubled" "$c" "$cap")
     echo "${doubled}Mi"
+}
+
+# calculate_wal_oom_memory "$current_mem_str" "$cap"
+# Bump current memory by 1.5x (for WAL replay OOM recovery), capped at $cap Mi.
+# Returns Mi string. Uses a gentler multiplier than the 2x OOM response.
+calculate_wal_oom_memory() {
+    local current="$1" cap="$2"
+    local c=$(_memory_to_mi "$current")
+    local bumped=$(( c * 3 / 2 ))
+    bumped=$(_clamp_resource "$bumped" "$c" "$cap")
+    echo "${bumped}Mi"
 }
 
 ###############################################################################
@@ -566,10 +626,12 @@ count_sts_pods() {
     ' 2>/dev/null || echo "0"
 }
 
-# count_ds_pods "$num_nodes" "$num_daemonsets"
-# Estimate DaemonSet pod count: nodes * daemonsets.
+# count_ds_pods "$daemonsets_json"
+# Count expected DaemonSet pods from status.desiredNumberScheduled.
+# Accepts the full `kubectl get daemonsets -o json` output.
 count_ds_pods() {
-    echo "$(( $1 * $2 ))"
+    local ds_json="$1"
+    echo "$ds_json" | jq '[.items[].status.desiredNumberScheduled // 0] | add // 0' 2>/dev/null || echo "0"
 }
 
 # calculate_total_pods "$deploy_pods" "$sts_pods" "$ds_pods"
@@ -854,13 +916,13 @@ echo "Calculating cluster pod capacity from workload controllers..."
 HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 STS_JSON=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+DS_JSON=$(kubectl get daemonsets --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-NUM_DAEMONSETS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
 # Calculate pod counts using library functions
 DEPLOY_PODS=$(count_deploy_pods "$DEPLOY_JSON" "$HPA_JSON")
 STS_PODS=$(count_sts_pods "$STS_JSON" "$HPA_JSON")
-DS_PODS=$(count_ds_pods "$NUM_NODES" "$NUM_DAEMONSETS")
+DS_PODS=$(count_ds_pods "$DS_JSON")
 DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
 TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
 
@@ -1493,6 +1555,70 @@ else
     echo "No Prometheus PVC found in onelens-agent namespace. PV may not be enabled."
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FailedAttachVolume Remediation — delete pods stuck in ContainerCreating
+# ═══════════════════════════════════════════════════════════════════════════
+# If a pod is stuck in ContainerCreating/Pending with FailedAttachVolume or
+# FailedMount events for >5min, delete it so K8s reschedules with a new volume.
+# 30-minute cooldown per component prevents delete-looping.
+
+_remediate_stuck_volume_pod() {
+    local component="$1"
+    local pod_name pod_status pod_age_secs pod_events last_delete_at
+
+    # Find pod matching component in stuck state
+    pod_name=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | awk -v c="$component" '$1 ~ c && ($3 == "ContainerCreating" || $3 == "Pending") {print $1; exit}' || true)
+    if [ -z "$pod_name" ]; then return 0; fi
+
+    # Check pod age > 5 minutes
+    local pod_start
+    pod_start=$(kubectl get pod "$pod_name" -n onelens-agent -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
+    if [ -z "$pod_start" ]; then return 0; fi
+    pod_age_secs=$(seconds_since "$pod_start")
+    if [ -z "$pod_age_secs" ] || [ "$pod_age_secs" -lt 300 ] 2>/dev/null; then return 0; fi
+
+    # Check events for FailedAttachVolume/FailedMount (not image pull issues)
+    pod_events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$pod_name" --no-headers 2>/dev/null \
+        | grep -iE 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+    if [ -z "$pod_events" ]; then return 0; fi
+
+    # Cooldown: check ConfigMap for last deletion timestamp
+    local cm_key="${component}.last_volume_delete_at"
+    last_delete_at=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent \
+        -o jsonpath="{.data['${cm_key}']}" 2>/dev/null || true)
+    if [ -n "$last_delete_at" ]; then
+        local secs_since_delete
+        secs_since_delete=$(seconds_since "$last_delete_at")
+        if [ -n "$secs_since_delete" ] && [ "$secs_since_delete" -lt 1800 ] 2>/dev/null; then
+            echo "Volume remediation: $component pod '$pod_name' still stuck but was deleted ${secs_since_delete}s ago. Requires customer action."
+            return 0
+        fi
+    fi
+
+    # Delete the stuck pod
+    echo "Volume remediation: deleting $component pod '$pod_name' stuck for $((pod_age_secs / 60))m with FailedAttachVolume"
+    kubectl delete pod "$pod_name" -n onelens-agent --grace-period=0 2>/dev/null || true
+
+    # Record deletion timestamp in ConfigMap
+    local now_ts
+    now_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge \
+        -p "{\"data\":{\"${cm_key}\":\"${now_ts}\"}}" 2>/dev/null || true
+
+    # Wait briefly for reschedule
+    sleep 30
+    local new_status
+    new_status=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | awk -v c="$component" '$1 ~ c && $3 != "Terminating" {print $1, $3; exit}' || true)
+    echo "Volume remediation: $component post-delete status: $new_status"
+}
+
+# Remediate stuck volume pods for all onelens components
+for _vol_component in prometheus-server kube-state-metrics opencost prometheus-pushgateway; do
+    _remediate_stuck_volume_pod "$_vol_component"
+done
+
 # Phase 6: Helm Upgrade with Dynamic Resource Allocation
 
 # Select retention tier based on pod count (sets PROMETHEUS_RETENTION, PROMETHEUS_RETENTION_SIZE, PROMETHEUS_VOLUME_SIZE)
@@ -1687,22 +1813,168 @@ if [ -n "$TERMINATING_PODS" ]; then
     done
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Helm upgrade with WAL OOM retry loop
+# ═══════════════════════════════════════════════════════════════════════════
+# If Prometheus OOMs during WAL replay after upgrade, bump memory and retry
+# immediately instead of waiting for the next 5-min CronJob cycle.
+
+# _detect_prom_startup_failure — check if Prometheus is repeatedly failing to start.
+# Returns 0 (true) if Prometheus is crash-looping/erroring and memory bump may help.
+# Sets _PROM_FAIL_DIAG with details and _PROM_FAIL_REASON with category:
+#   "oom"     — OOMKilled or memory allocation failure, bump will likely help
+#   "other"   — config error, image issue, etc. bump won't help
+_detect_prom_startup_failure() {
+    _PROM_FAIL_DIAG=""
+    _PROM_FAIL_REASON=""
+    local prom_pod pod_status restart_count term_reason prom_logs
+
+    prom_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | awk '/prometheus-server/{print $1; exit}' || true)
+    if [ -z "$prom_pod" ]; then return 1; fi
+
+    pod_status=$(kubectl get pod "$prom_pod" -n onelens-agent \
+        -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    restart_count=$(kubectl get pod "$prom_pod" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[?(@.name=="prometheus-server")].restartCount}' 2>/dev/null || echo "0")
+    term_reason=$(kubectl get pod "$prom_pod" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[?(@.name=="prometheus-server")].lastState.terminated.reason}' 2>/dev/null || true)
+
+    # Pod must be failing: restartCount >= 2 or not Running
+    if [ "$restart_count" -lt 2 ] 2>/dev/null && [ "$pod_status" = "Running" ]; then
+        return 1
+    fi
+
+    # Gather evidence from logs and events
+    prom_logs=$(kubectl logs "$prom_pod" -n onelens-agent -c prometheus-server --previous --tail=50 2>/dev/null || true)
+    local events
+    events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$prom_pod" --no-headers 2>/dev/null | tail -10 || true)
+
+    # Check for FailedScheduling — bumping memory won't help if nodes can't fit the request
+    if echo "$events" | grep -qiE 'FailedScheduling.*Insufficient memory'; then
+        _PROM_FAIL_REASON="other"
+        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status reason=FailedScheduling_insufficient_memory (requested=$PROMETHEUS_MEMORY_LIMIT, node can't fit)"
+        return 0
+    fi
+
+    # Classify the failure
+    if [ "$term_reason" = "OOMKilled" ]; then
+        _PROM_FAIL_REASON="oom"
+        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=OOMKilled"
+    elif echo "$prom_logs" | grep -qiE 'out of memory|cannot allocate|mmap.*enomem'; then
+        _PROM_FAIL_REASON="oom"
+        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=memory_allocation_failure"
+    elif echo "$prom_logs" | grep -qiE 'wal|replay|checkpoint' && [ "$restart_count" -ge 2 ] 2>/dev/null; then
+        # Crash during WAL replay without explicit OOM — likely memory-related
+        _PROM_FAIL_REASON="oom"
+        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=crash_during_wal_replay"
+    else
+        # Not memory-related: config error, image pull, permission issue, etc.
+        _PROM_FAIL_REASON="other"
+        local snippet
+        snippet=$(echo "$prom_logs" | tail -5 | tr '\n' ' ' | cut -c1-200)
+        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=$term_reason logs=$snippet"
+    fi
+
+    # Append WAL evidence if present
+    if echo "$prom_logs" | grep -qiE 'wal|replay|checkpoint'; then
+        _PROM_FAIL_DIAG="$_PROM_FAIL_DIAG [WAL replay in logs]"
+    fi
+
+    return 0
+}
+
+WAL_OOM_APPLIED=false
+UPGRADE_FAILED=false
+_PROM_RETRIES=0
+_MAX_PROM_RETRIES=3
+
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"
-
 UPGRADE_EXIT=$?
-if [ $UPGRADE_EXIT -ne 0 ]; then
-    echo "WARNING: helm upgrade failed (exit $UPGRADE_EXIT) but NOT rolling back."
-    echo "Old pods remain running. 5-min schedule will proceed"
-    echo "so the next healthcheck can retry or allow quick analysis."
-    echo "--- Pod Status After Failed Upgrade ---"
-    kubectl get pods -n onelens-agent -o wide --no-headers 2>/dev/null || true
-    echo "--- Events After Failed Upgrade ---"
-    kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -10 || true
-    UPGRADE_FAILED=true
-else
-    UPGRADE_FAILED=false
-fi
+
+# Retry loop: if Prometheus is crash-looping due to OOM/WAL, bump memory and retry immediately
+while true; do
+    if [ $UPGRADE_EXIT -eq 0 ]; then
+        # Upgrade succeeded, but Prometheus might still be crash-looping.
+        # Wait for pods to attempt startup before checking.
+        sleep 15
+        if ! _detect_prom_startup_failure; then
+            UPGRADE_FAILED=false
+            break
+        fi
+        echo "Helm upgrade succeeded but Prometheus is failing: $_PROM_FAIL_DIAG"
+    else
+        echo "Helm upgrade failed (exit $UPGRADE_EXIT)."
+        if ! _detect_prom_startup_failure; then
+            echo "Prometheus pod not found or not failing. Other issue:"
+            kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
+            kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -5 || true
+            UPGRADE_FAILED=true
+            break
+        fi
+        echo "Prometheus startup failure detected: $_PROM_FAIL_DIAG"
+    fi
+
+    # Only retry for memory-related failures. Config errors, image pull, etc. won't be fixed by bumping memory.
+    if [ "$_PROM_FAIL_REASON" != "oom" ]; then
+        echo "Prometheus failure is not memory-related (reason=$_PROM_FAIL_REASON). Not retrying."
+        _fail_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+            | awk '/prometheus-server/{print $1; exit}' || true)
+        if [ -n "$_fail_pod" ]; then
+            echo "--- Prometheus logs (last 20 lines) ---"
+            kubectl logs "$_fail_pod" -n onelens-agent -c prometheus-server --previous --tail=20 2>/dev/null || true
+            echo "--- Events ---"
+            kubectl get events -n onelens-agent --field-selector "involvedObject.name=$_fail_pod" --no-headers 2>/dev/null | tail -5 || true
+        fi
+        UPGRADE_FAILED=true
+        break
+    fi
+
+    # Check retry limit
+    if [ "$_PROM_RETRIES" -ge "$_MAX_PROM_RETRIES" ]; then
+        echo "Prometheus OOM: exhausted $_MAX_PROM_RETRIES retries at $PROMETHEUS_MEMORY_LIMIT."
+        _CAP_MI=$(_memory_to_mi "${_USAGE_CAP_PROM_MEM}Mi")
+        _CUR_MI=$(_memory_to_mi "$PROMETHEUS_MEMORY_LIMIT")
+        if [ "$_CUR_MI" -ge "$_CAP_MI" ] 2>/dev/null; then
+            echo "At memory cap (${_USAGE_CAP_PROM_MEM}Mi). Manual action: kubectl delete pvc onelens-agent-prometheus-server -n onelens-agent"
+        fi
+        echo "--- Final pod status ---"
+        kubectl get pods -n onelens-agent --no-headers 2>/dev/null | grep prometheus-server || true
+        _fail_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+            | awk '/prometheus-server/{print $1; exit}' || true)
+        if [ -n "$_fail_pod" ]; then
+            echo "--- Prometheus logs (last 20 lines) ---"
+            kubectl logs "$_fail_pod" -n onelens-agent -c prometheus-server --previous --tail=20 2>/dev/null || true
+        fi
+        UPGRADE_FAILED=true
+        break
+    fi
+
+    # Bump Prometheus memory 1.5x and retry
+    _OLD_MEM="$PROMETHEUS_MEMORY_LIMIT"
+    PROMETHEUS_MEMORY_LIMIT=$(calculate_wal_oom_memory "$PROMETHEUS_MEMORY_LIMIT" "$_USAGE_CAP_PROM_MEM")
+    PROMETHEUS_MEMORY_REQUEST="$PROMETHEUS_MEMORY_LIMIT"
+    _PROM_RETRIES=$((_PROM_RETRIES + 1))
+
+    if [ "$PROMETHEUS_MEMORY_LIMIT" = "$_OLD_MEM" ]; then
+        echo "Prometheus OOM: at memory cap ($PROMETHEUS_MEMORY_LIMIT). Manual action: kubectl delete pvc onelens-agent-prometheus-server -n onelens-agent"
+        UPGRADE_FAILED=true
+        break
+    fi
+
+    echo "Prometheus OOM recovery (retry $_PROM_RETRIES/$_MAX_PROM_RETRIES): bumping memory $_OLD_MEM -> $PROMETHEUS_MEMORY_LIMIT"
+    WAL_OOM_APPLIED=true
+
+    # Re-run helm upgrade with bumped memory (last --set wins, overrides earlier values)
+    # Use shorter timeout for retries — only Prometheus is restarting, not full rollout
+    WAL_RETRY_CMD="$HELM_CMD \
+      --timeout=3m \
+      --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
+      --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\""
+    eval "$WAL_RETRY_CMD"
+    UPGRADE_EXIT=$?
+done
 
 # Clean up temp file
 if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
@@ -1743,6 +2015,9 @@ echo ""
 echo "=== POST-PATCH ==="
 echo "Chart: $DEPLOYED_VERSION | Tier: $TIER | Pods: $TOTAL_PODS | Labels: ${LABEL_MULTIPLIER}x"
 echo "Retention: $PROMETHEUS_RETENTION | Size: $PROMETHEUS_RETENTION_SIZE | PVC: $PROMETHEUS_VOLUME_SIZE"
+if [ "$WAL_OOM_APPLIED" = "true" ]; then
+    echo "WAL OOM recovery: applied (Prometheus memory bumped 1.5x)"
+fi
 echo "Applied limits:"
 echo "  prom: cpu=$PROMETHEUS_CPU_LIMIT mem=$PROMETHEUS_MEMORY_LIMIT"
 echo "  ksm: cpu=$KSM_CPU_LIMIT mem=$KSM_MEMORY_LIMIT"
@@ -1762,9 +2037,7 @@ fi
 # Activate healthcheck mode via API — tells backend this cluster is ready for
 # self-healing. Also reports deployer_version so we can track fleet state.
 echo "Activating healthcheck mode..."
-FINAL_DEPLOYER_VERSION=$(helm list -n onelens-agent -o json 2>/dev/null \
-    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' \
-    | sed 's/onelensdeployer-//' || true)
+FINAL_DEPLOYER_VERSION="${DEPLOYER_VERSION:-unknown}"
 current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 if [ "$UPGRADE_FAILED" = "true" ]; then
     # Upgrade failed — activate healthcheck + deployer version but don't claim healthy

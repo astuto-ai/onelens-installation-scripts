@@ -166,6 +166,17 @@ calculate_oom_response_memory() {
     echo "${doubled}Mi"
 }
 
+# calculate_wal_oom_memory "$current_mem_str" "$cap"
+# Bump current memory by 1.5x (for WAL replay OOM recovery), capped at $cap Mi.
+# Returns Mi string. Uses a gentler multiplier than the 2x OOM response.
+calculate_wal_oom_memory() {
+    local current="$1" cap="$2"
+    local c=$(_memory_to_mi "$current")
+    local bumped=$(( c * 3 / 2 ))
+    bumped=$(_clamp_resource "$bumped" "$c" "$cap")
+    echo "${bumped}Mi"
+}
+
 ###############################################################################
 # Usage-based sizing — ConfigMap state parsing (Phase 2)
 ###############################################################################
@@ -460,10 +471,12 @@ count_sts_pods() {
     ' 2>/dev/null || echo "0"
 }
 
-# count_ds_pods "$num_nodes" "$num_daemonsets"
-# Estimate DaemonSet pod count: nodes * daemonsets.
+# count_ds_pods "$daemonsets_json"
+# Count expected DaemonSet pods from status.desiredNumberScheduled.
+# Accepts the full `kubectl get daemonsets -o json` output.
 count_ds_pods() {
-    echo "$(( $1 * $2 ))"
+    local ds_json="$1"
+    echo "$ds_json" | jq '[.items[].status.desiredNumberScheduled // 0] | add // 0' 2>/dev/null || echo "0"
 }
 
 # calculate_total_pods "$deploy_pods" "$sts_pods" "$ds_pods"

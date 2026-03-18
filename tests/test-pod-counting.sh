@@ -67,17 +67,29 @@ assert_eq "$result" "15" "StatefulSet with HPA → maxReplicas = 15"
 echo ""
 echo "--- count_ds_pods ---"
 
-result=$(count_ds_pods 0 0)
-assert_eq "$result" "0" "0 nodes, 0 daemonsets → 0"
+# Empty daemonsets → 0
+result=$(count_ds_pods '{"items":[]}')
+assert_eq "$result" "0" "empty daemonsets → 0"
 
-result=$(count_ds_pods 3 5)
-assert_eq "$result" "15" "3 nodes, 5 daemonsets → 15"
+# 3 daemonsets with varying desiredNumberScheduled
+DS_3='{"items":[{"status":{"desiredNumberScheduled":5}},{"status":{"desiredNumberScheduled":3}},{"status":{"desiredNumberScheduled":7}}]}'
+result=$(count_ds_pods "$DS_3")
+assert_eq "$result" "15" "3 daemonsets (5+3+7) → 15"
 
-result=$(count_ds_pods 10 0)
-assert_eq "$result" "0" "10 nodes, 0 daemonsets → 0"
+# Missing status.desiredNumberScheduled defaults to 0
+DS_MISSING='{"items":[{"status":{}},{"status":{"desiredNumberScheduled":10}}]}'
+result=$(count_ds_pods "$DS_MISSING")
+assert_eq "$result" "10" "missing desiredNumberScheduled defaults to 0 → 10"
 
-result=$(count_ds_pods 1 1)
-assert_eq "$result" "1" "1 node, 1 daemonset → 1"
+# Single daemonset
+DS_SINGLE='{"items":[{"status":{"desiredNumberScheduled":1}}]}'
+result=$(count_ds_pods "$DS_SINGLE")
+assert_eq "$result" "1" "single daemonset → 1"
+
+# High DS count (browserstack scenario: 800 DS but actual desired is much lower)
+DS_HIGH='{"items":[{"status":{"desiredNumberScheduled":2}},{"status":{"desiredNumberScheduled":1}},{"status":{"desiredNumberScheduled":3}}]}'
+result=$(count_ds_pods "$DS_HIGH")
+assert_eq "$result" "6" "3 daemonsets with low desired (2+1+3) → 6"
 
 ###############################################################################
 # calculate_total_pods
@@ -119,9 +131,10 @@ assert_eq "$deploy_pods" "92" "mixed deploy pods: 3 HPA-targeted (30+50+10) + 2 
 sts_pods=$(count_sts_pods "$MIXED_STS" "$MIXED_HPA")
 assert_eq "$sts_pods" "14" "mixed sts pods: redis→9 (HPA) + kafka→5 = 14"
 
-# DS pods: assume 5 nodes, 3 daemonsets = 15
-ds_pods=$(count_ds_pods 5 3)
-assert_eq "$ds_pods" "15" "mixed ds pods: 5 nodes * 3 daemonsets = 15"
+# DS pods: 3 daemonsets across 5 nodes — desiredNumberScheduled = 5+5+5 = 15
+MIXED_DS='{"items":[{"status":{"desiredNumberScheduled":5}},{"status":{"desiredNumberScheduled":5}},{"status":{"desiredNumberScheduled":5}}]}'
+ds_pods=$(count_ds_pods "$MIXED_DS")
+assert_eq "$ds_pods" "15" "mixed ds pods: 3 daemonsets × 5 desired each = 15"
 
 # Total: (92 + 14 + 15) * 1.25 + 0.99 = 121 * 1.25 + 0.99 = 152.24 → 152
 total=$(calculate_total_pods "$deploy_pods" "$sts_pods" "$ds_pods")
