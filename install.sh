@@ -296,6 +296,24 @@ source "$SCRIPT_DIR/lib/resource-sizing.sh"
 # --- Pod count: use desired/max replicas from workload controllers ---
 echo "Calculating cluster pod capacity from workload controllers..."
 
+# Wait for RBAC to propagate — the ClusterRoleBinding granting cluster-wide read
+# may not be cached by the API server yet (created moments ago by helm install).
+# Without this, kubectl get deployments --all-namespaces returns 403 silently,
+# causing 0 deploy/0 sts counts and wrong tier selection.
+echo "Checking cluster-wide read access..."
+_rbac_ready=false
+for _rw in 1 2 3 4 5; do
+    if kubectl get nodes --no-headers >/dev/null 2>&1; then
+        _rbac_ready=true
+        break
+    fi
+    echo "Waiting for RBAC propagation (attempt $_rw/5)..."
+    sleep 5
+done
+if [ "$_rbac_ready" != "true" ]; then
+    echo "WARNING: Cluster-wide read access not available. Pod counting may be inaccurate."
+fi
+
 # Collect cluster data (kubectl calls stay here; logic is in the library)
 HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')

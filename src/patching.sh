@@ -956,19 +956,39 @@ fi
 # upgrade calls fail with "another operation (install/upgrade/rollback) is in progress".
 # Fix: rollback to the last successful revision before attempting upgrade.
 RELEASE_STATUS=$(helm status onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.info.status' || true)
+SKIP_HELM_UPGRADE=false
 if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-rollback" ] || [ "$RELEASE_STATUS" = "pending-install" ]; then
     echo "Helm release stuck in '$RELEASE_STATUS' — rolling back to last successful revision..."
     LAST_GOOD_REV=$(helm history onelens-agent -n onelens-agent -o json 2>/dev/null \
         | jq -r '[.[] | select(.status == "deployed" or .status == "superseded")] | last | .revision' || true)
     if [ -n "$LAST_GOOD_REV" ] && [ "$LAST_GOOD_REV" != "null" ]; then
-        helm rollback onelens-agent "$LAST_GOOD_REV" -n onelens-agent --timeout=3m 2>&1 && \
-            echo "Rolled back to revision $LAST_GOOD_REV" || \
-            echo "WARNING: Rollback failed — helm upgrade may also fail"
+        _rollback_err=$(helm rollback onelens-agent "$LAST_GOOD_REV" -n onelens-agent --timeout=3m 2>&1)
+        _rollback_exit=$?
+        if [ $_rollback_exit -eq 0 ]; then
+            echo "Rolled back to revision $LAST_GOOD_REV"
+        else
+            echo "WARNING: Rollback failed (exit $_rollback_exit): $_rollback_err"
+            # If rollback failed due to RBAC (forbidden), skip helm upgrade entirely.
+            # The deployer SA can't write to the namespace — helm upgrade will also fail.
+            # Continue to healthcheck/diagnostics so we still get patching_logs.
+            if echo "$_rollback_err" | grep -qiE 'forbidden|cannot .* resource'; then
+                echo "RBAC ERROR: Deployer SA cannot write to onelens-agent namespace."
+                echo "The RoleBinding may be broken (common on clusters upgraded from v1.x deployer)."
+                echo "Fix: customer must upgrade the deployer chart as cluster admin to restore RBAC permissions."
+                echo "Skipping helm upgrade — continuing with diagnostics only."
+                SKIP_HELM_UPGRADE=true
+            fi
+        fi
     else
         echo "WARNING: No previous successful revision found — attempting upgrade anyway"
     fi
 fi
 
+# Skip helm upgrade if RBAC is broken — go straight to diagnostics
+if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
+    UPGRADE_FAILED=true
+    WAL_OOM_APPLIED=false
+else
 # Build helm upgrade command
 # Key design: NO --reuse-values
 #   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
@@ -1239,6 +1259,8 @@ while true; do
     eval "$WAL_RETRY_CMD"
     UPGRADE_EXIT=$?
 done
+
+fi  # end SKIP_HELM_UPGRADE else block
 
 # Clean up temp file
 if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
