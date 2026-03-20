@@ -23,10 +23,11 @@ assert_gt "$install_tier" "0" "install.sh calls select_resource_tier"
 assert_gt "$patching_tier" "0" "patching.sh calls select_resource_tier"
 
 # ---------------------------------------------------------------------------
-# Test 3: Both scripts call the same pod counting functions
+# Test 3: Both scripts call calculate_total_pods
 # ---------------------------------------------------------------------------
-# count_ds_pods not called directly — DS pods calculated via jsonpath for memory efficiency
-for fn in count_deploy_pods count_sts_pods calculate_total_pods; do
+# count_deploy_pods/count_sts_pods/count_ds_pods not called directly —
+# pod counts calculated via text output (--no-headers) + awk for memory efficiency
+for fn in calculate_total_pods; do
     install_has=$(grep -c "$fn" "$ROOT/install.sh" || true)
     patching_has=$(grep -c "$fn" "$ROOT/src/patching.sh" || true)
     assert_gt "$install_has" "0" "install.sh calls $fn"

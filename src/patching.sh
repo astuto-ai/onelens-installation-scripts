@@ -189,36 +189,41 @@ if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
     echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
 fi
 
-# Collect cluster data — extract only needed fields to minimize memory usage.
-# Full JSON for 1200+ pods can be 30-50MB. Slim JSON is <200KB.
+# Collect cluster data using text output (--no-headers) — zero JSON buffering.
+# jsonpath truncates on large clusters (1200+ deployments returns only 304).
+# Text output with awk is reliable at any scale and uses minimal memory.
 
-# HPAs: only need namespace, scaleTargetRef, maxReplicas
-HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null \
-    | jq '{items: [.items[] | {metadata: {namespace: .metadata.namespace}, spec: {scaleTargetRef: .spec.scaleTargetRef, maxReplicas: .spec.maxReplicas}}]}' 2>/dev/null \
-    || echo '{"items":[]}')
+# HPAs: extract to temp file for join (needed by both deploy and sts counts)
+_HPA_TMP=$(mktemp 2>/dev/null || echo "/tmp/_hpa_$$")
+kubectl get hpa --all-namespaces --no-headers 2>/dev/null \
+    | awk '{split($3,ref,"/"); print $1 "\t" ref[1] "\t" ref[2] "\t" $(NF-2)}' > "$_HPA_TMP"
 
-# Deployments: only need name, namespace, replicas
-DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null \
-    | jq '{items: [.items[] | {metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {replicas: (.spec.replicas // 0)}}]}' 2>/dev/null \
-    || echo '{"items":[]}')
+# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from READY column)
+DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers 2>/dev/null \
+    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+    | awk -v kind="Deployment" '
+BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
+{ key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
+END { print total+0 }')
 
-# StatefulSets: only need name, namespace, replicas
-STS_JSON=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null \
-    | jq '{items: [.items[] | {metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {replicas: (.spec.replicas // 0)}}]}' 2>/dev/null \
-    || echo '{"items":[]}')
+# StatefulSets: HPA-aware count (same logic)
+STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers 2>/dev/null \
+    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+    | awk -v kind="StatefulSet" '
+BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
+{ key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
+END { print total+0 }')
 
-# DaemonSets: only need desiredNumberScheduled — use jsonpath, no JSON stored
-DS_PODS=$(kubectl get daemonsets --all-namespaces \
-    -o jsonpath='{range .items[*]}{.status.desiredNumberScheduled}{"\n"}{end}' 2>/dev/null \
-    | awk '{s+=$1} END{print s+0}')
+rm -f "$_HPA_TMP"
+
+# DaemonSets: sum DESIRED column (col 3 in text output)
+DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null \
+    | awk '{total+=$3} END{print total+0}')
 
 # Node count for logging
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
-# Calculate pod counts using library functions
-DEPLOY_PODS=$(count_deploy_pods "$DEPLOY_JSON" "$HPA_JSON")
-STS_PODS=$(count_sts_pods "$STS_JSON" "$HPA_JSON")
-# DS_PODS already calculated above via jsonpath
+# Pod counts calculated above via text+awk (no library functions needed)
 DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
 TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
 
@@ -234,11 +239,17 @@ echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, St
 echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
 
 # --- Label density measurement ---
-# Pipe directly to jq — never store full pod JSON in variable (30-50MB on large clusters)
+# Use custom-columns to avoid fetching full pod JSON (which OOMs kubectl on 1200+ pod clusters).
+# custom-columns streams labels only. Sample 100 pods — gives same average without memory cost.
 echo "Measuring label density across pods..."
-AVG_LABELS=$(kubectl get pods --all-namespaces -o json 2>/dev/null \
-    | jq '[.items[].metadata.labels | length] | if length > 0 then add / length | floor else 0 end' 2>/dev/null \
-    || echo "0")
+AVG_LABELS=$(kubectl get pods --all-namespaces --no-headers -o custom-columns='LABELS:.metadata.labels' 2>/dev/null \
+    | grep -v '<none>' \
+    | head -100 \
+    | sed 's/^map\[//; s/\]$//' \
+    | awk '{s+=NF; n++} END{if(n>0) printf "%d", s/n; else print 0}')
+if [ -z "$AVG_LABELS" ] || [ "$AVG_LABELS" -le 0 ] 2>/dev/null; then
+    AVG_LABELS="0"
+fi
 LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 
 echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
