@@ -96,7 +96,7 @@ if [ -n "$CURRENT_DEADLINE" ] && [ "$CURRENT_DEADLINE" -lt "$TARGET_DEADLINE" ] 
 fi
 if [ -n "$PATCH_JSON" ]; then
     PATCH_JSON="${PATCH_JSON}}}"
-    kubectl patch cronjob onelensupdater -n onelens-agent -p "$PATCH_JSON" 2>/dev/null && \
+    kubectl patch cronjob onelensupdater -n onelens-agent -p "$PATCH_JSON" --field-manager='Helm' --force-conflicts 2>/dev/null && \
         echo "CronJob patched successfully" || \
         echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
@@ -115,10 +115,12 @@ if [ -n "$CURRENT_CPU" ]; then
     fi
     if [ "$CURRENT_CPU_MILLICORES" -lt "$MIN_CPU_MILLICORES" ] 2>/dev/null; then
         echo "Updating CronJob CPU from ${CURRENT_CPU} to ${MIN_CPU_MILLICORES}m..."
-        kubectl patch cronjob onelensupdater -n onelens-agent --type='json' -p='[
-          {"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/resources/requests/cpu", "value": "'"${MIN_CPU_MILLICORES}m"'"},
-          {"op": "replace", "path": "/spec/jobTemplate/spec/template/spec/containers/0/resources/limits/cpu", "value": "'"${MIN_CPU_MILLICORES}m"'"}
-        ]' 2>/dev/null && \
+        kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
+          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+            \"name\":\"onelensupdater\",
+            \"resources\":{\"requests\":{\"cpu\":\"${MIN_CPU_MILLICORES}m\"},\"limits\":{\"cpu\":\"${MIN_CPU_MILLICORES}m\"}}
+          }]}}}}}
+        }" 2>/dev/null && \
             echo "CronJob CPU patched successfully" || \
             echo "WARNING: Failed to patch CronJob CPU"
     else
@@ -130,13 +132,16 @@ fi
 # The 5-min CronJob schedule is the retry mechanism. Internal retries just burn time
 # in exponential backoff (10s, 20s, 40s...) while concurrencyPolicy: Forbid blocks new runs.
 # Old deployer charts (<=2.1.21) didn't set this, so Kubernetes defaults to 6.
+# Only patch backoffLimit if it's explicitly set to a non-zero value in the spec.
+# If empty (not in spec), Kubernetes defaults to 6 — but patching it would steal
+# field ownership from helm, causing conflicts on next helm upgrade.
+# The chart (>=2.1.22) already sets backoffLimit=0. For old charts, the first
+# helm upgrade will set it. Don't kubectl-patch unless it's explicitly wrong.
 CURRENT_BACKOFF=$(kubectl get cronjob onelensupdater -n onelens-agent \
     -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}' 2>/dev/null || true)
-# Empty means Kubernetes default (6). Only skip if explicitly set to 0.
-if [ "$CURRENT_BACKOFF" != "0" ]; then
-    echo "Updating CronJob backoffLimit from ${CURRENT_BACKOFF:-6 (default)} to 0..."
-    # Use strategic merge patch — works whether field exists or not (replace op fails on missing path)
-    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' -p='
+if [ -n "$CURRENT_BACKOFF" ] && [ "$CURRENT_BACKOFF" != "0" ] 2>/dev/null; then
+    echo "Updating CronJob backoffLimit from $CURRENT_BACKOFF to 0..."
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='
       {"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}
     ' 2>/dev/null && \
         echo "CronJob backoffLimit patched successfully" || \
@@ -2114,14 +2119,15 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
     # Fix: unsuspend if suspended
     if [ "$AGENT_SUSPENDED" = "true" ]; then
         echo "WARNING: Agent CronJob is suspended. Unsuspending..."
-        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p='{"spec":{"suspend":false}}' 2>/dev/null && \
+        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='{"spec":{"suspend":false}}' 2>/dev/null && \
             echo "Agent CronJob unsuspended" || echo "WARNING: Failed to unsuspend agent CronJob"
     fi
 
-    # Fix: patch backoffLimit to 0 (same rationale as deployer)
-    if [ "$AGENT_BACKOFF" != "0" ]; then
-        echo "Patching agent CronJob backoffLimit from ${AGENT_BACKOFF:-default} to 0..."
-        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p='{"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}' 2>/dev/null && \
+    # Fix: patch backoffLimit to 0 only if explicitly set to non-zero.
+    # Don't patch if empty (not in spec) — avoids stealing field ownership from helm.
+    if [ -n "$AGENT_BACKOFF" ] && [ "$AGENT_BACKOFF" != "0" ] 2>/dev/null; then
+        echo "Patching agent CronJob backoffLimit from $AGENT_BACKOFF to 0..."
+        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='{"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}' 2>/dev/null && \
             echo "Agent CronJob backoffLimit patched" || echo "WARNING: Failed to patch agent backoffLimit"
     fi
 
@@ -2224,7 +2230,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
-                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
@@ -2248,7 +2254,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_MEM="${_USAGE_CAP_AGENT_MEM}Mi"
                         fi
                         echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
-                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' -p="{
+                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
