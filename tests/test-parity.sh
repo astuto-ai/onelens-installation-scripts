@@ -25,7 +25,8 @@ assert_gt "$patching_tier" "0" "patching.sh calls select_resource_tier"
 # ---------------------------------------------------------------------------
 # Test 3: Both scripts call the same pod counting functions
 # ---------------------------------------------------------------------------
-for fn in count_deploy_pods count_sts_pods count_ds_pods calculate_total_pods; do
+# count_ds_pods not called directly — DS pods calculated via jsonpath for memory efficiency
+for fn in count_deploy_pods count_sts_pods calculate_total_pods; do
     install_has=$(grep -c "$fn" "$ROOT/install.sh" || true)
     patching_has=$(grep -c "$fn" "$ROOT/src/patching.sh" || true)
     assert_gt "$install_has" "0" "install.sh calls $fn"
@@ -35,7 +36,8 @@ done
 # ---------------------------------------------------------------------------
 # Test 4: Both scripts call label density library functions
 # ---------------------------------------------------------------------------
-for fn in calculate_avg_labels get_label_multiplier; do
+# calculate_avg_labels not called directly — labels calculated via piped jq for memory efficiency
+for fn in get_label_multiplier; do
     install_has=$(grep -c "$fn" "$ROOT/install.sh" || true)
     patching_has=$(grep -c "$fn" "$ROOT/src/patching.sh" || true)
     assert_gt "$install_has" "0" "install.sh calls $fn"

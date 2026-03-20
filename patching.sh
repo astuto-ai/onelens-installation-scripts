@@ -946,17 +946,36 @@ if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
     echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
 fi
 
-# Collect cluster data (kubectl calls stay here; logic is in the library)
-HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
-DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
-STS_JSON=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
-DS_JSON=$(kubectl get daemonsets --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
+# Collect cluster data — extract only needed fields to minimize memory usage.
+# Full JSON for 1200+ pods can be 30-50MB. Slim JSON is <200KB.
+
+# HPAs: only need namespace, scaleTargetRef, maxReplicas
+HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null \
+    | jq '{items: [.items[] | {metadata: {namespace: .metadata.namespace}, spec: {scaleTargetRef: .spec.scaleTargetRef, maxReplicas: .spec.maxReplicas}}]}' 2>/dev/null \
+    || echo '{"items":[]}')
+
+# Deployments: only need name, namespace, replicas
+DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null \
+    | jq '{items: [.items[] | {metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {replicas: (.spec.replicas // 0)}}]}' 2>/dev/null \
+    || echo '{"items":[]}')
+
+# StatefulSets: only need name, namespace, replicas
+STS_JSON=$(kubectl get statefulsets --all-namespaces -o json 2>/dev/null \
+    | jq '{items: [.items[] | {metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {replicas: (.spec.replicas // 0)}}]}' 2>/dev/null \
+    || echo '{"items":[]}')
+
+# DaemonSets: only need desiredNumberScheduled — use jsonpath, no JSON stored
+DS_PODS=$(kubectl get daemonsets --all-namespaces \
+    -o jsonpath='{range .items[*]}{.status.desiredNumberScheduled}{"\n"}{end}' 2>/dev/null \
+    | awk '{s+=$1} END{print s+0}')
+
+# Node count for logging
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
 # Calculate pod counts using library functions
 DEPLOY_PODS=$(count_deploy_pods "$DEPLOY_JSON" "$HPA_JSON")
 STS_PODS=$(count_sts_pods "$STS_JSON" "$HPA_JSON")
-DS_PODS=$(count_ds_pods "$DS_JSON")
+# DS_PODS already calculated above via jsonpath
 DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
 TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
 
@@ -972,9 +991,11 @@ echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, St
 echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
 
 # --- Label density measurement ---
+# Pipe directly to jq — never store full pod JSON in variable (30-50MB on large clusters)
 echo "Measuring label density across pods..."
-PODS_JSON=$(kubectl get pods --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
-AVG_LABELS=$(calculate_avg_labels "$PODS_JSON")
+AVG_LABELS=$(kubectl get pods --all-namespaces -o json 2>/dev/null \
+    | jq '[.items[].metadata.labels | length] | if length > 0 then add / length | floor else 0 end' 2>/dev/null \
+    || echo "0")
 LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 
 echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
@@ -1868,165 +1889,211 @@ if [ -n "$TERMINATING_PODS" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Helm upgrade with WAL OOM retry loop
+# Helm upgrade with pod failure retry loop
 # ═══════════════════════════════════════════════════════════════════════════
-# If Prometheus OOMs during WAL replay after upgrade, bump memory and retry
+# If any pod OOMs after upgrade, bump that component's memory and retry
 # immediately instead of waiting for the next 5-min CronJob cycle.
 
-# _detect_prom_startup_failure — check if Prometheus is repeatedly failing to start.
-# Returns 0 (true) if Prometheus is crash-looping/erroring and memory bump may help.
-# Sets _PROM_FAIL_DIAG with details and _PROM_FAIL_REASON with category:
-#   "oom"     — OOMKilled or memory allocation failure, bump will likely help
-#   "other"   — config error, image issue, etc. bump won't help
-_detect_prom_startup_failure() {
-    _PROM_FAIL_DIAG=""
-    _PROM_FAIL_REASON=""
-    local prom_pod pod_status restart_count term_reason prom_logs
+# _detect_pod_failure — check if any onelens pod is failing after upgrade.
+# Scans all pods. Returns 0 (true) if a failing pod is found.
+# Sets: _FAIL_POD, _FAIL_COMPONENT, _FAIL_REASON ("oom" or "other"), _FAIL_DIAG
+_detect_pod_failure() {
+    _FAIL_POD=""
+    _FAIL_COMPONENT=""
+    _FAIL_REASON=""
+    _FAIL_DIAG=""
 
-    prom_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | awk '/prometheus-server/{print $1; exit}' || true)
-    if [ -z "$prom_pod" ]; then return 1; fi
+    local pods_raw
+    pods_raw=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | grep -vE 'Completed|Running' || true)
+    # Also check Running pods with high restart count (OOM crash loop shows as Running between restarts)
+    pods_raw="$pods_raw
+$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | awk '$4+0 >= 2 {print}' || true)"
 
-    pod_status=$(kubectl get pod "$prom_pod" -n onelens-agent \
-        -o jsonpath='{.status.phase}' 2>/dev/null || true)
-    restart_count=$(kubectl get pod "$prom_pod" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[?(@.name=="prometheus-server")].restartCount}' 2>/dev/null || echo "0")
-    term_reason=$(kubectl get pod "$prom_pod" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[?(@.name=="prometheus-server")].lastState.terminated.reason}' 2>/dev/null || true)
+    if [ -z "$(echo "$pods_raw" | tr -d '[:space:]')" ]; then return 1; fi
 
-    # Pod must be failing: restartCount >= 2 or not Running
-    if [ "$restart_count" -lt 2 ] 2>/dev/null && [ "$pod_status" = "Running" ]; then
-        return 1
+    # Check Prometheus readiness first — OpenCost depends on it
+    local _prom_ready=false
+    local _prom_pod_check
+    _prom_pod_check=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | awk '/prometheus-server/{print $2, $3; exit}' || true)
+    if echo "$_prom_pod_check" | grep -q 'Running' && echo "$_prom_pod_check" | grep -qE '^2/2|^1/1'; then
+        _prom_ready=true
     fi
 
-    # Gather evidence from logs and events
-    prom_logs=$(kubectl logs "$prom_pod" -n onelens-agent -c prometheus-server --previous --tail=50 2>/dev/null || true)
-    local events
-    events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$prom_pod" --no-headers 2>/dev/null | tail -10 || true)
+    # Check each component in dependency order
+    local component
+    for component in prometheus-server kube-state-metrics prometheus-opencost-exporter prometheus-pushgateway; do
+        # Skip OpenCost if Prometheus is not ready — OpenCost depends on Prometheus
+        if [ "$component" = "prometheus-opencost-exporter" ] && [ "$_prom_ready" != "true" ]; then
+            continue
+        fi
 
-    # Check for FailedScheduling — bumping memory won't help if nodes can't fit the request
-    if echo "$events" | grep -qiE 'FailedScheduling.*Insufficient memory'; then
-        _PROM_FAIL_REASON="other"
-        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status reason=FailedScheduling_insufficient_memory (requested=$PROMETHEUS_MEMORY_LIMIT, node can't fit)"
-        return 0
-    fi
+        local pod_name pod_status container_name restart_count term_reason pod_logs events
 
-    # Classify the failure
-    if [ "$term_reason" = "OOMKilled" ]; then
-        _PROM_FAIL_REASON="oom"
-        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=OOMKilled"
-    elif echo "$prom_logs" | grep -qiE 'out of memory|cannot allocate|mmap.*enomem'; then
-        _PROM_FAIL_REASON="oom"
-        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=memory_allocation_failure"
-    elif echo "$prom_logs" | grep -qiE 'wal|replay|checkpoint' && [ "$restart_count" -ge 2 ] 2>/dev/null; then
-        # Crash during WAL replay without explicit OOM — likely memory-related
-        _PROM_FAIL_REASON="oom"
-        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=crash_during_wal_replay"
-    else
-        # Not memory-related: config error, image pull, permission issue, etc.
-        _PROM_FAIL_REASON="other"
-        local snippet
-        snippet=$(echo "$prom_logs" | tail -5 | tr '\n' ' ' | cut -c1-200)
-        _PROM_FAIL_DIAG="pod=$prom_pod status=$pod_status restarts=$restart_count reason=$term_reason logs=$snippet"
-    fi
+        pod_name=$(echo "$pods_raw" | awk -v p="$component" '$1 ~ p {print $1; exit}' || true)
+        if [ -z "$pod_name" ]; then continue; fi
 
-    # Append WAL evidence if present
-    if echo "$prom_logs" | grep -qiE 'wal|replay|checkpoint'; then
-        _PROM_FAIL_DIAG="$_PROM_FAIL_DIAG [WAL replay in logs]"
-    fi
+        pod_status=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.spec.containers[0].name}' 2>/dev/null || echo "$component")
+        restart_count=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || echo "0")
+        term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+        if [ -z "$term_reason" ]; then
+            term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
+                -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
+        fi
 
-    return 0
+        # Skip pods that are Running with low restarts (healthy)
+        if [ "$pod_status" = "Running" ] && [ "$restart_count" -lt 2 ] 2>/dev/null; then continue; fi
+
+        events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$pod_name" --no-headers 2>/dev/null | tail -5 || true)
+        pod_logs=$(kubectl logs "$pod_name" -n onelens-agent -c "$container_name" --previous --tail=30 2>/dev/null || \
+            kubectl logs "$pod_name" -n onelens-agent -c "$container_name" --tail=30 2>/dev/null || true)
+
+        _FAIL_POD="$pod_name"
+        _FAIL_COMPONENT="$component"
+
+        # Classify failure
+        if echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
+            _FAIL_REASON="other"
+            _FAIL_DIAG="pod=$pod_name component=$component reason=FailedScheduling (node can't fit resource request)"
+        elif [ "$term_reason" = "OOMKilled" ] || echo "$pod_logs" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
+            _FAIL_REASON="oom"
+            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=OOMKilled"
+        elif echo "$pod_logs" | grep -qiE 'wal|replay|checkpoint' 2>/dev/null && [ "$restart_count" -ge 2 ] 2>/dev/null; then
+            _FAIL_REASON="oom"
+            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=crash_during_wal_replay"
+        else
+            _FAIL_REASON="other"
+            local snippet
+            snippet=$(echo "$pod_logs" | tail -3 | tr '\n' ' ' | cut -c1-150)
+            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=$term_reason logs=$snippet"
+        fi
+
+        return 0  # Found a failing pod
+    done
+
+    return 1  # No failing pods
+}
+
+# _bump_component_memory — bump memory for a failing component.
+# Prometheus/KSM/OpenCost: 1.5x (heavy workloads). Pushgateway: 1.25x (lightweight).
+# Returns "old_mem new_mem --set flags" for helm retry.
+_bump_component_memory() {
+    local component="$1"
+    local old_mem new_mem cap set_flags=""
+
+    case "$component" in
+        prometheus-server)
+            old_mem="$PROMETHEUS_MEMORY_LIMIT"
+            cap="$_USAGE_CAP_PROM_MEM"
+            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
+            PROMETHEUS_MEMORY_REQUEST="$new_mem"; PROMETHEUS_MEMORY_LIMIT="$new_mem"
+            set_flags="--set prometheus.server.resources.requests.memory=\"$new_mem\" --set prometheus.server.resources.limits.memory=\"$new_mem\""
+            ;;
+        kube-state-metrics)
+            old_mem="$KSM_MEMORY_LIMIT"
+            cap="$_USAGE_CAP_KSM_MEM"
+            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
+            KSM_MEMORY_REQUEST="$new_mem"; KSM_MEMORY_LIMIT="$new_mem"
+            set_flags="--set prometheus.kube-state-metrics.resources.requests.memory=\"$new_mem\" --set prometheus.kube-state-metrics.resources.limits.memory=\"$new_mem\""
+            ;;
+        prometheus-opencost-exporter)
+            old_mem="$OPENCOST_MEMORY_LIMIT"
+            cap="$_USAGE_CAP_OPENCOST_MEM"
+            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
+            OPENCOST_MEMORY_REQUEST="$new_mem"; OPENCOST_MEMORY_LIMIT="$new_mem"
+            set_flags="--set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$new_mem\" --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$new_mem\""
+            ;;
+        prometheus-pushgateway)
+            old_mem="$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
+            new_mem=$(apply_memory_multiplier "$old_mem" 1.25)  # 1.25x — lightweight
+            local new_mi=$(_memory_to_mi "$new_mem")
+            if [ "$new_mi" -gt 256 ] 2>/dev/null; then new_mem="256Mi"; fi
+            PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="$new_mem"; PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="$new_mem"
+            set_flags="--set prometheus.prometheus-pushgateway.resources.requests.memory=\"$new_mem\" --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$new_mem\""
+            ;;
+    esac
+
+    echo "$old_mem $new_mem $set_flags"
 }
 
 WAL_OOM_APPLIED=false
 UPGRADE_FAILED=false
-_PROM_RETRIES=0
-_MAX_PROM_RETRIES=3
+_UPGRADE_RETRIES=0
+_MAX_UPGRADE_RETRIES=3
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"
 UPGRADE_EXIT=$?
 
-# Retry loop: if Prometheus is crash-looping due to OOM/WAL, bump memory and retry immediately
+# Retry loop: if any pod OOMs after upgrade, bump that component and retry immediately
 while true; do
     if [ $UPGRADE_EXIT -eq 0 ]; then
-        # Upgrade succeeded, but Prometheus might still be crash-looping.
-        # Wait for pods to attempt startup before checking.
         sleep 15
-        if ! _detect_prom_startup_failure; then
+        if ! _detect_pod_failure; then
             UPGRADE_FAILED=false
             break
         fi
-        echo "Helm upgrade succeeded but Prometheus is failing: $_PROM_FAIL_DIAG"
+        echo "Helm upgrade succeeded but pod failing: $_FAIL_DIAG"
     else
         echo "Helm upgrade failed (exit $UPGRADE_EXIT)."
-        if ! _detect_prom_startup_failure; then
-            echo "Prometheus pod not found or not failing. Other issue:"
+        if ! _detect_pod_failure; then
+            echo "No specific pod failure detected. Pod status:"
             kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
             kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -5 || true
             UPGRADE_FAILED=true
             break
         fi
-        echo "Prometheus startup failure detected: $_PROM_FAIL_DIAG"
+        echo "Pod failure detected: $_FAIL_DIAG"
     fi
 
-    # Only retry for memory-related failures. Config errors, image pull, etc. won't be fixed by bumping memory.
-    if [ "$_PROM_FAIL_REASON" != "oom" ]; then
-        echo "Prometheus failure is not memory-related (reason=$_PROM_FAIL_REASON). Not retrying."
-        _fail_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-            | awk '/prometheus-server/{print $1; exit}' || true)
-        if [ -n "$_fail_pod" ]; then
-            echo "--- Prometheus logs (last 20 lines) ---"
-            kubectl logs "$_fail_pod" -n onelens-agent -c prometheus-server --previous --tail=20 2>/dev/null || true
+    # Only retry for OOM failures
+    if [ "$_FAIL_REASON" != "oom" ]; then
+        echo "Failure is not memory-related (reason=$_FAIL_REASON). Not retrying."
+        if [ -n "$_FAIL_POD" ]; then
+            echo "--- Pod logs ---"
+            kubectl logs "$_FAIL_POD" -n onelens-agent --previous --tail=20 2>/dev/null || \
+                kubectl logs "$_FAIL_POD" -n onelens-agent --tail=20 2>/dev/null || true
             echo "--- Events ---"
-            kubectl get events -n onelens-agent --field-selector "involvedObject.name=$_fail_pod" --no-headers 2>/dev/null | tail -5 || true
+            kubectl get events -n onelens-agent --field-selector "involvedObject.name=$_FAIL_POD" --no-headers 2>/dev/null | tail -5 || true
         fi
         UPGRADE_FAILED=true
         break
     fi
 
     # Check retry limit
-    if [ "$_PROM_RETRIES" -ge "$_MAX_PROM_RETRIES" ]; then
-        echo "Prometheus OOM: exhausted $_MAX_PROM_RETRIES retries at $PROMETHEUS_MEMORY_LIMIT."
-        _CAP_MI=$(_memory_to_mi "${_USAGE_CAP_PROM_MEM}Mi")
-        _CUR_MI=$(_memory_to_mi "$PROMETHEUS_MEMORY_LIMIT")
-        if [ "$_CUR_MI" -ge "$_CAP_MI" ] 2>/dev/null; then
-            echo "At memory cap (${_USAGE_CAP_PROM_MEM}Mi). Manual action: kubectl delete pvc onelens-agent-prometheus-server -n onelens-agent"
-        fi
+    if [ "$_UPGRADE_RETRIES" -ge "$_MAX_UPGRADE_RETRIES" ]; then
+        echo "OOM: exhausted $_MAX_UPGRADE_RETRIES retries. Component=$_FAIL_COMPONENT"
         echo "--- Final pod status ---"
-        kubectl get pods -n onelens-agent --no-headers 2>/dev/null | grep prometheus-server || true
-        _fail_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-            | awk '/prometheus-server/{print $1; exit}' || true)
-        if [ -n "$_fail_pod" ]; then
-            echo "--- Prometheus logs (last 20 lines) ---"
-            kubectl logs "$_fail_pod" -n onelens-agent -c prometheus-server --previous --tail=20 2>/dev/null || true
-        fi
+        kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
         UPGRADE_FAILED=true
         break
     fi
 
-    # Bump Prometheus memory 1.5x and retry
-    _OLD_MEM="$PROMETHEUS_MEMORY_LIMIT"
-    PROMETHEUS_MEMORY_LIMIT=$(calculate_wal_oom_memory "$PROMETHEUS_MEMORY_LIMIT" "$_USAGE_CAP_PROM_MEM")
-    PROMETHEUS_MEMORY_REQUEST="$PROMETHEUS_MEMORY_LIMIT"
-    _PROM_RETRIES=$((_PROM_RETRIES + 1))
+    # Bump the failing component's memory
+    _bump_result=$(_bump_component_memory "$_FAIL_COMPONENT")
+    _old_mem=$(echo "$_bump_result" | awk '{print $1}')
+    _new_mem=$(echo "$_bump_result" | awk '{print $2}')
+    _set_flags=$(echo "$_bump_result" | cut -d' ' -f3-)
 
-    if [ "$PROMETHEUS_MEMORY_LIMIT" = "$_OLD_MEM" ]; then
-        echo "Prometheus OOM: at memory cap ($PROMETHEUS_MEMORY_LIMIT). Manual action: kubectl delete pvc onelens-agent-prometheus-server -n onelens-agent"
+    if [ "$_new_mem" = "$_old_mem" ]; then
+        echo "$_FAIL_COMPONENT OOM: at memory cap ($_old_mem). Cannot bump further."
         UPGRADE_FAILED=true
         break
     fi
 
-    echo "Prometheus OOM recovery (retry $_PROM_RETRIES/$_MAX_PROM_RETRIES): bumping memory $_OLD_MEM -> $PROMETHEUS_MEMORY_LIMIT"
+    _UPGRADE_RETRIES=$((_UPGRADE_RETRIES + 1))
+    echo "OOM recovery (retry $_UPGRADE_RETRIES/$_MAX_UPGRADE_RETRIES): $_FAIL_COMPONENT memory $_old_mem -> $_new_mem"
     WAL_OOM_APPLIED=true
 
-    # Re-run helm upgrade with bumped memory (last --set wins, overrides earlier values)
-    # Use shorter timeout for retries — only Prometheus is restarting, not full rollout
-    WAL_RETRY_CMD="$HELM_CMD \
-      --timeout=3m \
-      --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
-      --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\""
-    eval "$WAL_RETRY_CMD"
+    RETRY_CMD="$HELM_CMD --timeout=3m $_set_flags"
+    eval "$RETRY_CMD"
     UPGRADE_EXIT=$?
 done
 
@@ -2247,7 +2314,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     if [ "$AGENT_CUR_MI" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
                         echo "Agent OOMKilled but already at memory cap (${AGENT_MEM_LIMIT}). Manual investigation needed."
                     else
-                        AGENT_NEW_MEM=$(apply_memory_multiplier "${AGENT_MEM_LIMIT:-384Mi}" 1.25)
+                        AGENT_NEW_MEM=$(calculate_wal_oom_memory "${AGENT_MEM_LIMIT:-384Mi}" "$_USAGE_CAP_AGENT_MEM")
                         # Cap at _USAGE_CAP_AGENT_MEM
                         AGENT_NEW_MI=$(_memory_to_mi "$AGENT_NEW_MEM")
                         if [ "$AGENT_NEW_MI" -gt "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
@@ -2299,6 +2366,50 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
         echo "Last successful agent job: ${AGENT_LAST_SUCCESS} ago"
     else
         echo "WARNING: No completed agent jobs found — data pipeline may be down"
+    fi
+
+    # Trigger immediate agent run if data is stale and dependencies are healthy.
+    # The agent CronJob runs hourly. If the last run failed, data is stale until
+    # the next hourly trigger. Instead of waiting, create a one-off Job now.
+    # Only trigger if:
+    #   - Agent had failures (failed pods found) or no successful run recently
+    #   - Prometheus and OpenCost are Running+Ready (agent needs both)
+    #   - No agent Job is currently active (avoid duplicates)
+    _should_trigger=false
+    if [ -n "$AGENT_FAILED_PODS" ]; then
+        _should_trigger=true
+    elif [ -z "$AGENT_LAST_SUCCESS" ]; then
+        _should_trigger=true
+    fi
+
+    if [ "$_should_trigger" = "true" ]; then
+        # Check if Prometheus and OpenCost are healthy
+        _prom_ok=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+            | awk '/prometheus-server/{split($2,a,"/"); if(a[1]==a[2] && $3=="Running") print "yes"; exit}' || true)
+        _oc_ok=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+            | awk '/opencost/{split($2,a,"/"); if(a[1]==a[2] && $3=="Running") print "yes"; exit}' || true)
+
+        # Check no active agent Job running (includes scheduled and manually triggered jobs)
+        _agent_active=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
+            | grep -E "^${AGENT_CJ_NAME}-" | grep -v 'Complete\|Failed' | head -1 || true)
+
+        if [ "$_prom_ok" = "yes" ] && [ "$_oc_ok" = "yes" ] && [ -z "$_agent_active" ]; then
+            # Clean up completed/failed manual jobs (not managed by CronJob historyLimit)
+            kubectl delete jobs -n onelens-agent -l created-by=patching-manual-trigger 2>/dev/null || true
+
+            echo "Triggering immediate agent run (last run failed/stale, dependencies healthy)..."
+            _trigger_job="onelens-agent-manual-$(date +%s)"
+            if kubectl create job "$_trigger_job" --from=cronjob/"$AGENT_CJ_NAME" -n onelens-agent 2>/dev/null; then
+                kubectl label job "$_trigger_job" -n onelens-agent created-by=patching-manual-trigger 2>/dev/null || true
+                echo "Agent job '$_trigger_job' created"
+            else
+                echo "WARNING: Failed to create manual agent job"
+            fi
+        elif [ -n "$_agent_active" ]; then
+            echo "Agent job already active — skipping manual trigger"
+        else
+            echo "Skipping agent trigger — dependencies not ready (prom=$_prom_ok opencost=$_oc_ok)"
+        fi
     fi
 else
     echo "WARNING: Agent CronJob '$AGENT_CJ_NAME' not found"
