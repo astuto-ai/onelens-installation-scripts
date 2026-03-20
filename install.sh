@@ -825,12 +825,23 @@ INSTALL_EXIT=$?
 
 while true; do
     if [ $INSTALL_EXIT -eq 0 ]; then
-        # Install succeeded — wait for pods to attempt startup, then check
-        sleep 15
-        if ! _detect_pod_failure; then
+        # Install succeeded — poll for pods to stabilize before declaring failure.
+        # OpenCost crashes on startup (Prometheus not ready yet) and recovers in 30-60s.
+        # A genuine OOM will still be failing after 5 minutes.
+        _pods_ok=false
+        for _poll in 1 2 3 4 5; do
+            echo "Checking pod health (attempt $_poll/5)..."
+            sleep 60
+            if ! _detect_pod_failure; then
+                _pods_ok=true
+                break
+            fi
+            echo "  Pods not stable yet: $_FAIL_DIAG"
+        done
+        if [ "$_pods_ok" = "true" ]; then
             break  # All pods healthy
         fi
-        echo "Helm install succeeded but pod failing: $_FAIL_DIAG"
+        echo "Pods still failing after 5 min: $_FAIL_DIAG"
     else
         echo "Helm install failed (exit $INSTALL_EXIT)."
         if ! _detect_pod_failure; then

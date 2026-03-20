@@ -1280,12 +1280,24 @@ UPGRADE_EXIT=$?
 # Retry loop: if any pod OOMs after upgrade, bump that component and retry immediately
 while true; do
     if [ $UPGRADE_EXIT -eq 0 ]; then
-        sleep 15
-        if ! _detect_pod_failure; then
+        # Poll for pods to stabilize — transient startup failures (OpenCost before
+        # Prometheus) resolve in 30-60s. Shorter window than install.sh because
+        # patching runs under activeDeadlineSeconds.
+        _pods_ok=false
+        for _poll in 1 2 3; do
+            echo "Checking pod health (attempt $_poll/3)..."
+            sleep 30
+            if ! _detect_pod_failure; then
+                _pods_ok=true
+                break
+            fi
+            echo "  Pods not stable yet: $_FAIL_DIAG"
+        done
+        if [ "$_pods_ok" = "true" ]; then
             UPGRADE_FAILED=false
             break
         fi
-        echo "Helm upgrade succeeded but pod failing: $_FAIL_DIAG"
+        echo "Pods still failing after 90s: $_FAIL_DIAG"
     else
         echo "Helm upgrade failed (exit $UPGRADE_EXIT)."
         if ! _detect_pod_failure; then
