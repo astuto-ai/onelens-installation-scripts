@@ -688,10 +688,12 @@ _detect_pod_failure() {
     local pods_raw
     pods_raw=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         | grep -vE 'Completed|Running' || true)
-    # Also check Running pods with high restart count (OOM crash loop shows as Running between restarts)
+    # Also check Running pods with high restart count that are NOT fully Ready.
+    # A Running+Ready pod with restarts has recovered from a transient issue — skip it.
+    # A Running but not Ready pod with restarts is still crash-looping.
     pods_raw="$pods_raw
 $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | awk '$4+0 >= 2 {print}' || true)"
+    | awk '$4+0 >= 2 {split($2,a,"/"); if(a[1]!=a[2]) print}' || true)"
 
     if [ -z "$(echo "$pods_raw" | tr -d '[:space:]')" ]; then return 1; fi
 
