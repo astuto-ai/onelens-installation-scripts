@@ -933,6 +933,14 @@ select_retention_tier() {
 # --- Pod count: use desired/max replicas from workload controllers ---
 echo "Calculating cluster pod capacity from workload controllers..."
 
+# Check cluster-wide read access — if the deployer SA can't list resources across
+# namespaces (broken RoleBinding from v1.x upgrade), pod counting returns 0 silently.
+# Warn but proceed — usage-based sizing will correct after Prometheus has data.
+if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
+    echo "WARNING: Cannot list nodes cluster-wide. Pod counting may be inaccurate (possible RBAC issue)."
+    echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
+fi
+
 # Collect cluster data (kubectl calls stay here; logic is in the library)
 HPA_JSON=$(kubectl get hpa --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')
 DEPLOY_JSON=$(kubectl get deployments --all-namespaces -o json 2>/dev/null || echo '{"items":[]}')

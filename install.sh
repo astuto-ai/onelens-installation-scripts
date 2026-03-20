@@ -302,16 +302,24 @@ echo "Calculating cluster pod capacity from workload controllers..."
 # causing 0 deploy/0 sts counts and wrong tier selection.
 echo "Checking cluster-wide read access..."
 _rbac_ready=false
-for _rw in 1 2 3 4 5; do
+for _rw in 1 2 3 4 5 6; do
     if kubectl get nodes --no-headers >/dev/null 2>&1; then
         _rbac_ready=true
         break
     fi
-    echo "Waiting for RBAC propagation (attempt $_rw/5)..."
+    echo "Waiting for RBAC propagation (attempt $_rw/6)..."
     sleep 5
 done
 if [ "$_rbac_ready" != "true" ]; then
-    echo "WARNING: Cluster-wide read access not available. Pod counting may be inaccurate."
+    echo "ERROR: Cluster-wide read access not available after 30s."
+    echo "The deployer ServiceAccount cannot list nodes/deployments/pods across namespaces."
+    echo "This means pod counting will be wrong and resource sizing will be incorrect."
+    echo "Possible causes:"
+    echo "  - ClusterRoleBinding not yet propagated (retry install)"
+    echo "  - ClusterRole missing required permissions (check deployer RBAC)"
+    echo "  - Kubernetes API server RBAC cache delay (wait and retry)"
+    echo "Aborting install to prevent incorrect resource allocation."
+    exit 1
 fi
 
 # Collect cluster data (kubectl calls stay here; logic is in the library)
