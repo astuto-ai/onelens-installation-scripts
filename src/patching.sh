@@ -1029,8 +1029,29 @@ if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-r
     fi
 fi
 
-# Skip helm upgrade if RBAC is broken — go straight to diagnostics
+# Skip helm upgrade if RBAC is broken — apply resources via kubectl instead
 if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
+    echo "Helm blocked — applying resource right-sizing via kubectl patch..."
+    _kubectl_set_resources() {
+        local deploy="$1" container="$2" cpu_req="$3" mem_req="$4" cpu_lim="$5" mem_lim="$6"
+        if kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
+            kubectl set resources deployment "$deploy" -n onelens-agent \
+                -c "$container" \
+                --requests="cpu=${cpu_req},memory=${mem_req}" \
+                --limits="cpu=${cpu_lim},memory=${mem_lim}" \
+                2>&1 || echo "  WARNING: failed to patch $deploy"
+        fi
+    }
+    _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
+        "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-kube-state-metrics" "kube-state-metrics" \
+        "$KSM_CPU_REQUEST" "$KSM_MEMORY_REQUEST" "$KSM_CPU_LIMIT" "$KSM_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-prometheus-opencost-exporter" "opencost" \
+        "$OPENCOST_CPU_REQUEST" "$OPENCOST_MEMORY_REQUEST" "$OPENCOST_CPU_LIMIT" "$OPENCOST_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-prometheus-pushgateway" "prometheus-pushgateway" \
+        "$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" "$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
+        "$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
+    echo "kubectl resource patching complete."
     UPGRADE_FAILED=true
     WAL_OOM_APPLIED=false
 else
@@ -1279,10 +1300,382 @@ _bump_component_memory() {
     echo "$old_mem $new_mem $set_flags"
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Pod Remediation Module (v2.1.33+)
+# ═══════════════════════════════════════════════════════════════════════════
+# Intelligently remediate stuck OneLens pods: OOMKilled, transient crashes,
+# scheduling failures. Prevents infinite loops with 30-min cooldown per pod.
+# All actions logged to stdout (visible to customer via patching_logs).
+
+# --- STATE TRACKING (ConfigMap-based) ---
+# Prevents infinite remediation loops by tracking last remediation time per pod
+
+_get_remediation_state() {
+    local pod_name="$1"
+    local state_key="${pod_name}.last_remediation_at"
+
+    kubectl get configmap onelens-agent-remediation-state -n onelens-agent \
+        -o jsonpath="{.data['${state_key}']}" 2>/dev/null || echo ""
+}
+
+_set_remediation_state() {
+    local pod_name="$1"
+    local state_key="${pod_name}.last_remediation_at"
+    local now_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Ensure ConfigMap exists
+    kubectl get configmap onelens-agent-remediation-state -n onelens-agent >/dev/null 2>&1 || \
+        kubectl create configmap onelens-agent-remediation-state -n onelens-agent 2>/dev/null || true
+
+    # Update timestamp
+    kubectl patch configmap onelens-agent-remediation-state -n onelens-agent --type merge \
+        -p "{\"data\":{\"${state_key}\":\"${now_ts}\"}}" 2>/dev/null || true
+}
+
+_can_remediate() {
+    local pod_name="$1"
+    local cooldown_mins="${2:-30}"  # Default 30 min cooldown
+
+    local last_remediation=$(_get_remediation_state "$pod_name")
+    if [ -z "$last_remediation" ]; then
+        return 0  # Never remediated, can try
+    fi
+
+    # Check if cooldown passed
+    local last_secs=$(date -d "$last_remediation" +%s 2>/dev/null || echo 0)
+    local now_secs=$(date +%s)
+    local secs_since=$((now_secs - last_secs))
+    local cooldown_secs=$((cooldown_mins * 60))
+
+    if [ $secs_since -ge $cooldown_secs ]; then
+        return 0  # Cooldown passed
+    fi
+
+    return 1  # Still in cooldown
+}
+
+# --- POD FAILURE CLASSIFICATION ---
+
+_get_pod_failure_reason() {
+    local pod_name="$1"
+
+    # Check container status first (more reliable)
+    local status=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null)
+
+    if echo "$status" | grep -q "waiting"; then
+        echo "$status" | jq -r '.waiting.reason' 2>/dev/null
+    elif echo "$status" | grep -q "terminated"; then
+        local reason=$(echo "$status" | jq -r '.terminated.reason' 2>/dev/null)
+        if [ "$reason" = "OOMKilled" ]; then
+            echo "OOMKilled"
+        else
+            echo "Terminated"
+        fi
+    else
+        # Fallback: check pod conditions
+        kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "Unknown"
+    fi
+}
+
+# --- INTELLIGENT REMEDIATION HANDLERS ---
+
+_remediate_oomkilled_pod() {
+    local pod_name="$1"
+    local component="$2"
+    local current_memory
+
+    echo ""
+    echo "🔧 Attempting remediation: OOMKilled pod $pod_name"
+
+    # Get current memory limit
+    current_memory=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.spec.containers[0].resources.limits.memory}' 2>/dev/null)
+
+    if [ -z "$current_memory" ]; then
+        echo "⚠️  Cannot determine current memory limit for $pod_name"
+        return 1
+    fi
+
+    # Convert to bytes for calculation
+    local mem_bytes=$(echo "$current_memory" | sed 's/Mi$/\*1024\*1024/' | bc 2>/dev/null || echo 0)
+
+    if [ $mem_bytes -le 0 ]; then
+        echo "⚠️  Cannot parse memory value: $current_memory"
+        return 1
+    fi
+
+    # Increase by 1.5x
+    local new_bytes=$((mem_bytes * 150 / 100))
+    local new_memory_mi=$((new_bytes / 1024 / 1024))
+
+    echo "  Current memory: $current_memory → Increasing to ${new_memory_mi}Mi (1.5x)"
+
+    # Update deployment resource limit
+    if kubectl set resources deployment "$component" -n onelens-agent \
+        --limits=memory="${new_memory_mi}Mi" 2>/dev/null; then
+
+        echo "  ✅ Memory limit increased to ${new_memory_mi}Mi"
+        echo "  Deleting $pod_name to restart with new limits..."
+
+        # Delete pod to trigger restart with new limits
+        if kubectl delete pod "$pod_name" -n onelens-agent --grace-period=5 2>/dev/null; then
+            echo "  ✅ Pod deleted, will restart with increased memory"
+            _set_remediation_state "$pod_name"
+            return 0
+        else
+            echo "  ❌ Failed to delete pod $pod_name"
+            return 1
+        fi
+    else
+        echo "  ❌ Failed to update memory limit for $component"
+        return 1
+    fi
+}
+
+_remediate_transient_crash() {
+    local pod_name="$1"
+    local reason="$2"
+
+    echo ""
+    echo "🔧 Attempting remediation: Transient error in $pod_name"
+    echo "  Reason: $reason"
+    echo "  Deleting pod for retry..."
+
+    if kubectl delete pod "$pod_name" -n onelens-agent --grace-period=5 2>/dev/null; then
+        echo "  ✅ Pod deleted, will retry automatically"
+        _set_remediation_state "$pod_name"
+        return 0
+    else
+        echo "  ❌ Failed to delete pod $pod_name"
+        return 1
+    fi
+}
+
+_remediate_scheduling_failure() {
+    local pod_name="$1"
+    local pod_memory
+
+    echo ""
+    echo "🔧 Attempting remediation: FailedScheduling pod $pod_name"
+
+    # Get pod memory request
+    pod_memory=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.spec.containers[0].resources.requests.memory}' 2>/dev/null)
+
+    if [ -z "$pod_memory" ]; then
+        echo "  ⚠️  Cannot determine memory request"
+        return 1
+    fi
+
+    echo "  Pod memory requirement: $pod_memory"
+    echo "  Checking node capacity..."
+
+    # Get allocatable memory across all nodes
+    local nodes_with_capacity
+    nodes_with_capacity=$(kubectl get nodes --no-headers 2>/dev/null | \
+        while read node_line; do
+            local node_name=$(echo "$node_line" | awk '{print $1}')
+            local allocatable=$(kubectl get node "$node_name" \
+                -o jsonpath='{.status.allocatable.memory}' 2>/dev/null | sed 's/Ki//')
+            local used=$(kubectl top node "$node_name" 2>/dev/null | tail -1 | awk '{print $3}' | sed 's/Mi//')
+
+            # Convert allocatable from Ki to Mi
+            local allocatable_mi=$((allocatable / 1024))
+            local free_mi=$((allocatable_mi - used))
+
+            # Extract numeric part of pod memory (e.g., "592Mi" -> 592)
+            local pod_mem_mi=$(echo "$pod_memory" | sed 's/Mi//')
+
+            if [ -n "$free_mi" ] && [ "$free_mi" -gt "$pod_mem_mi" ]; then
+                echo "$node_name"
+                return 0
+            fi
+        done | head -1)
+
+    if [ -n "$nodes_with_capacity" ]; then
+        echo "  ✅ Found node with capacity: $nodes_with_capacity"
+        echo "  Deleting pod for reschedule..."
+
+        if kubectl delete pod "$pod_name" -n onelens-agent --grace-period=5 2>/dev/null; then
+            echo "  ✅ Pod deleted, will reschedule to node with capacity"
+            _set_remediation_state "$pod_name"
+            return 0
+        else
+            echo "  ❌ Failed to delete pod"
+            return 1
+        fi
+    else
+        echo "  ❌ No nodes have sufficient capacity"
+        echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  🚨 ALERT: NODE CAPACITY EXHAUSTED"
+        echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Pod $pod_name cannot be scheduled due to insufficient node memory"
+        echo "  "
+        echo "  ACTION REQUIRED (Customer):"
+        echo "    1. Scale up node group (add more nodes)"
+        echo "    2. Increase node instance size"
+        echo "    3. Scale down non-OneLens workloads"
+        echo "  "
+        echo "  Patching will retry once node capacity becomes available."
+        echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        return 1
+    fi
+}
+
+_alert_image_build_failed() {
+    local pod_name="$1"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🚨 CRITICAL: IMAGE BUILD FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Pod: $pod_name (Status: ImagePullBackOff)"
+    echo ""
+    echo "ACTION REQUIRED (OneLens Team):"
+    echo "  1. Check image build logs in CI/CD"
+    echo "  2. Verify image exists in registry: docker://..."
+    echo "  3. Check image pull secrets in cluster"
+    echo "  4. If build failed, fix and redeploy"
+    echo ""
+    echo "Patching will NOT retry this automatically until image is fixed."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+_alert_code_bug() {
+    local pod_name="$1"
+    local logs="$2"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🚨 CODE BUG: POD REPEATEDLY CRASHING"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Pod: $pod_name (Status: CrashLoopBackOff)"
+    echo ""
+    echo "Recent logs:"
+    echo "$logs" | head -5 | sed 's/^/  /'
+    echo ""
+    echo "ACTION REQUIRED (OneLens Team):"
+    echo "  1. Debug pod logs: kubectl logs -n onelens-agent $pod_name"
+    echo "  2. Fix the underlying code/config issue"
+    echo "  3. Deploy v2.1.33+ with fix"
+    echo ""
+    echo "Patching will continue retrying until fixed."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+}
+
+# --- MAIN POD REMEDIATION FUNCTION ---
+
+_remediate_stuck_pods() {
+    local stuck_pods
+    local pod_name pod_status failure_reason pod_logs
+
+    echo ""
+    echo "=== POD HEALTH CHECK & REMEDIATION (v2.1.33+) ==="
+
+    # Get all unhealthy pods in onelens-agent namespace
+    stuck_pods=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | \
+        awk '$3 !~ /^Running$|^Completed$/ {print $1}' | head -20)
+
+    if [ -z "$stuck_pods" ]; then
+        echo "✅ All OneLens pods are healthy"
+        echo ""
+        return 0
+    fi
+
+    # Process each stuck pod
+    while IFS= read -r pod_name; do
+        [ -z "$pod_name" ] && continue
+
+        # Skip if in cooldown
+        if ! _can_remediate "$pod_name"; then
+            continue
+        fi
+
+        # Get pod status and failure reason
+        pod_status=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.phase}' 2>/dev/null)
+        failure_reason=$(_get_pod_failure_reason "$pod_name")
+
+        echo ""
+        echo "Pod: $pod_name | Status: $pod_status | Reason: $failure_reason"
+
+        # Route to appropriate handler
+        case "$failure_reason" in
+            OOMKilled)
+                # Extract component name from pod name
+                local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+                _remediate_oomkilled_pod "$pod_name" "$component"
+                ;;
+
+            ConnectionRefused|Timeout|EOF|Failed)
+                _remediate_transient_crash "$pod_name" "$failure_reason"
+                ;;
+
+            Unschedulable)
+                _remediate_scheduling_failure "$pod_name"
+                ;;
+
+            ImagePullBackOff|ErrImagePull)
+                _alert_image_build_failed "$pod_name"
+                # Don't set remediation state - we won't retry this automatically
+                ;;
+
+            CrashLoopBackOff)
+                # Check logs to distinguish transient vs permanent
+                pod_logs=$(kubectl logs "$pod_name" -n onelens-agent --tail=20 2>/dev/null || echo "")
+
+                if echo "$pod_logs" | grep -iq "OOMKilled\|out of memory"; then
+                    local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+                    _remediate_oomkilled_pod "$pod_name" "$component"
+                elif echo "$pod_logs" | grep -iq "connection.*refused\|timeout\|eof"; then
+                    _remediate_transient_crash "$pod_name" "transient error"
+                else
+                    _alert_code_bug "$pod_name" "$pod_logs"
+                fi
+                ;;
+
+            Pending)
+                # Check if pending > 10 min
+                local pod_age=$(kubectl get pod "$pod_name" -n onelens-agent \
+                    -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null)
+                local age_secs=$(( ($(date +%s) - $(date -d "$pod_age" +%s 2>/dev/null || echo 0)) ))
+
+                if [ $age_secs -gt 600 ]; then
+                    # Check if it's scheduling issue
+                    local events=$(kubectl get events -n onelens-agent \
+                        --field-selector involvedObject.name=$pod_name \
+                        --no-headers 2>/dev/null | head -1)
+
+                    if echo "$events" | grep -q "FailedScheduling"; then
+                        _remediate_scheduling_failure "$pod_name"
+                    else
+                        echo "  ⚠️  Pod stuck Pending > 10min (no scheduling event found)"
+                    fi
+                fi
+                ;;
+
+            *)
+                echo "  ⚠️  Unknown failure reason: $failure_reason"
+                ;;
+        esac
+
+    done <<< "$stuck_pods"
+
+    echo ""
+}
+
 WAL_OOM_APPLIED=false
 UPGRADE_FAILED=false
 _UPGRADE_RETRIES=0
 _MAX_UPGRADE_RETRIES=3
+
+# Run pod remediation before helm upgrade (auto-fix stuck pods)
+_remediate_stuck_pods || true  # Don't fail patching if remediation fails
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"
