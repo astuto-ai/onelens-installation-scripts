@@ -258,12 +258,11 @@ AVG_LABELS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Run
     | head -500 \
     | sed 's/^map\[//; s/\]$//' \
     | awk 'NF>0 {
-        # Normalize label separators and count key=value pairs
-        gsub(/[,:]/, " ");
-        count=0;
-        for(i=1; i<=NF; i++) {
-            if($i ~ /=/) count++
-        }
+        # Count colons: each Kubernetes label is key:value format with exactly one colon.
+        # Example: "app:myapp component:api tier:frontend" has 3 labels (3 colons).
+        # Previous approach tried to parse format but failed because labels use ":" not "=",
+        # causing label count to always return 0 and trigger unsafe 1.3x memory multiplier.
+        count = gsub(/:/, ":");
         if(count>0) { s+=count; n++ }
     }
     END {if(n>0) printf "%d", s/n; else print 0}')
