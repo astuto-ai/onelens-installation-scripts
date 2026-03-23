@@ -951,21 +951,27 @@ fi
 # Text output with awk is reliable at any scale and uses minimal memory.
 
 # HPAs: extract to temp file for join (needed by both deploy and sts counts)
+# Use explicit custom-columns to avoid field position errors with variable-width columns
 _HPA_TMP=$(mktemp 2>/dev/null || echo "/tmp/_hpa_$$")
-kubectl get hpa --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,ref,"/"); print $1 "\t" ref[1] "\t" ref[2] "\t" $(NF-2)}' > "$_HPA_TMP"
+kubectl get hpa --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,KIND:.spec.scaleTargetRef.kind,NAME:.spec.scaleTargetRef.name,MAX:.spec.maxReplicas \
+    2>/dev/null | awk '{print $1 "\t" $2 "\t" $3 "\t" $4}' > "$_HPA_TMP"
 
-# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from READY column)
-DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from spec.replicas)
+# Use custom-columns to avoid field position errors with variable-width NAME columns
+DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
+    2>/dev/null \
     | awk -v kind="Deployment" '
 BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
 { key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
 END { print total+0 }')
 
 # StatefulSets: HPA-aware count (same logic)
-STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+# Use custom-columns to avoid field position errors
+STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
+    2>/dev/null \
     | awk -v kind="StatefulSet" '
 BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
 { key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
@@ -973,9 +979,12 @@ END { print total+0 }')
 
 rm -f "$_HPA_TMP"
 
-# DaemonSets: sum DESIRED column (col 3 in text output)
-DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null \
-    | awk '{total+=$3} END{print total+0}')
+# DaemonSets: sum desiredNumberScheduled from status
+# Use custom-columns to avoid field position errors
+DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,DESIRED:.status.desiredNumberScheduled \
+    2>/dev/null \
+    | awk '{total+=$2} END{print total+0}')
 
 # Node count for logging
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
@@ -997,13 +1006,24 @@ echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
 
 # --- Label density measurement ---
 # Use custom-columns to avoid fetching full pod JSON (which OOMs kubectl on 1200+ pod clusters).
-# custom-columns streams labels only. Sample 100 pods — gives same average without memory cost.
+# Restrict to Running pods only to reduce output size. Sample 500 pods for statistical accuracy.
+# Robustly handle different label output formats (map[...], YAML, etc).
 echo "Measuring label density across pods..."
-AVG_LABELS=$(kubectl get pods --all-namespaces --no-headers -o custom-columns='LABELS:.metadata.labels' 2>/dev/null \
+AVG_LABELS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running \
+    --no-headers -o custom-columns='LABELS:.metadata.labels' 2>/dev/null \
     | grep -v '<none>' \
-    | head -100 \
+    | head -500 \
     | sed 's/^map\[//; s/\]$//' \
-    | awk '{s+=NF; n++} END{if(n>0) printf "%d", s/n; else print 0}')
+    | awk 'NF>0 {
+        # Normalize label separators and count key=value pairs
+        gsub(/[,:]/, " ");
+        count=0;
+        for(i=1; i<=NF; i++) {
+            if($i ~ /=/) count++
+        }
+        if(count>0) { s+=count; n++ }
+    }
+    END {if(n>0) printf "%d", s/n; else print 0}')
 if [ -z "$AVG_LABELS" ] || [ "$AVG_LABELS" -le 0 ] 2>/dev/null; then
     AVG_LABELS="0"
 fi
