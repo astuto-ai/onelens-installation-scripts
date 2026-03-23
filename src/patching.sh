@@ -1361,8 +1361,12 @@ _can_remediate() {
         return 0  # Never remediated, can try
     fi
 
-    # Check if cooldown passed
-    local last_secs=$(date -d "$last_remediation" +%s 2>/dev/null || echo 0)
+    # Check if cooldown passed (portable date command with fallbacks for GNU and BSD)
+    local last_secs=$(
+        date -d "$last_remediation" +%s 2>/dev/null || \
+        date -juf "%Y-%m-%dT%H:%M:%SZ" "$last_remediation" +%s 2>/dev/null || \
+        echo 0
+    )
     local now_secs=$(date +%s)
     local secs_since=$((now_secs - last_secs))
     local cooldown_secs=$((cooldown_mins * 60))
@@ -1418,13 +1422,13 @@ _remediate_oomkilled_pod() {
         return 1
     fi
 
-    # Convert to bytes for calculation
-    local mem_bytes=$(echo "$current_memory" | sed 's/Mi$/\*1024\*1024/' | bc 2>/dev/null || echo 0)
-
-    if [ $mem_bytes -le 0 ]; then
+    # Convert to bytes for calculation (pure bash, no bc dependency)
+    local mem_mi="${current_memory%Mi}"  # Remove "Mi" suffix
+    if ! [[ "$mem_mi" =~ ^[0-9]+$ ]]; then
         echo "⚠️  Cannot parse memory value: $current_memory"
         return 1
     fi
+    local mem_bytes=$((mem_mi * 1024 * 1024))
 
     # Increase by 1.5x
     local new_bytes=$((mem_bytes * 150 / 100))
@@ -1492,27 +1496,14 @@ _remediate_scheduling_failure() {
     echo "  Pod memory requirement: $pod_memory"
     echo "  Checking node capacity..."
 
-    # Get allocatable memory across all nodes
+    # Get allocatable memory across all nodes (single fast jq call, not per-node kubectl top)
+    # kubectl top is 30-60s per node (too slow); instead check if ANY node has allocatable memory
     local nodes_with_capacity
-    nodes_with_capacity=$(kubectl get nodes --no-headers 2>/dev/null | \
-        while read node_line; do
-            local node_name=$(echo "$node_line" | awk '{print $1}')
-            local allocatable=$(kubectl get node "$node_name" \
-                -o jsonpath='{.status.allocatable.memory}' 2>/dev/null | sed 's/Ki//')
-            local used=$(kubectl top node "$node_name" 2>/dev/null | tail -1 | awk '{print $3}' | sed 's/Mi//')
-
-            # Convert allocatable from Ki to Mi
-            local allocatable_mi=$((allocatable / 1024))
-            local free_mi=$((allocatable_mi - used))
-
-            # Extract numeric part of pod memory (e.g., "592Mi" -> 592)
-            local pod_mem_mi=$(echo "$pod_memory" | sed 's/Mi//')
-
-            if [ -n "$free_mi" ] && [ "$free_mi" -gt "$pod_mem_mi" ]; then
-                echo "$node_name"
-                return 0
-            fi
-        done | head -1)
+    nodes_with_capacity=$(kubectl get nodes -o json 2>/dev/null | jq -r '
+        .items[] |
+        select(.status.allocatable.memory != null) |
+        .metadata.name
+    ' 2>/dev/null | head -1)
 
     if [ -n "$nodes_with_capacity" ]; then
         echo "  ✅ Found node with capacity: $nodes_with_capacity"
@@ -1663,7 +1654,13 @@ _remediate_stuck_pods() {
                 # Check if pending > 10 min
                 local pod_age=$(kubectl get pod "$pod_name" -n onelens-agent \
                     -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null)
-                local age_secs=$(( ($(date +%s) - $(date -d "$pod_age" +%s 2>/dev/null || echo 0)) ))
+                # Portable date calculation (GNU and BSD compatible)
+                local pod_age_secs=$(
+                    date -d "$pod_age" +%s 2>/dev/null || \
+                    date -juf "%Y-%m-%dT%H:%M:%SZ" "$pod_age" +%s 2>/dev/null || \
+                    echo 0
+                )
+                local age_secs=$(($(date +%s) - pod_age_secs))
 
                 if [ $age_secs -gt 600 ]; then
                     # Check if it's scheduling issue
