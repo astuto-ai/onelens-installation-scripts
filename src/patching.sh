@@ -636,14 +636,12 @@ if [ -n "$PROM_SVC" ]; then
             mem_bytes=$(_get_container_val "$MEM_72H" "$container")
             cpu_cores=$(_get_container_val "$CPU_72H" "$container")
 
-            # OOM detection (skip on first run — historical events predate our tracking)
+            # OOM detection (record timestamp on first run too — activates 7-day hold)
             oom_now=false
-            if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "$container"; then
+            if _has_oom "$container"; then
                 oom_now=true
                 eval "$oom_state_var=\"\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\""
                 echo "  $label: OOM detected — doubling memory from $cur_mem"
-            elif [ "$IS_FIRST_RUN" = "true" ] && _has_oom "$container"; then
-                echo "  $label: historical OOM found, skipping (first run)"
             fi
 
             oom_recent=$(_get_oom_recent "$container")
@@ -701,7 +699,7 @@ if [ -n "$PROM_SVC" ]; then
 
         # Evaluate: Pushgateway (fixed, OOM → 1.25x)
         PGW_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-pushgateway"; then
+        if _has_oom "prometheus-pushgateway"; then
             PGW_OOM_NOW=true
             echo "  pushgateway: OOM detected — bumping 1.25x"
         fi
