@@ -754,10 +754,48 @@ fi
 
 _PV_NEEDS_MANUAL_FIX=false
 
+# _auto_recover_pvc "$pvc_name" "$old_size"
+# Auto-recover when PV object is gone (deleted from K8s). We have namespace-scoped
+# CRUD on PVCs, so we can: remove finalizers → delete PVC → let helm recreate it.
+# Returns 0 on success, 1 on failure (falls back to manual steps).
+_auto_recover_pvc() {
+    local pvc_name="$1" old_size="$2"
+
+    echo "PV is gone from Kubernetes. Auto-recovering PVC '$pvc_name'..."
+
+    # Step 1: Remove PVC finalizers (kubernetes.io/pv-protection prevents deletion while PV is bound)
+    if kubectl patch pvc "$pvc_name" -n onelens-agent -p '{"metadata":{"finalizers":null}}' 2>/dev/null; then
+        echo "  Removed PVC finalizers."
+    else
+        echo "  WARNING: Failed to remove PVC finalizers — falling back to manual recovery."
+        _do_pv_recovery "$pvc_name" "" "$old_size"
+        return 1
+    fi
+
+    # Step 2: Delete the ghost PVC (use --wait to ensure it's fully gone before helm runs)
+    if kubectl delete pvc "$pvc_name" -n onelens-agent --timeout=30s 2>/dev/null; then
+        echo "  Deleted PVC '$pvc_name' (was bound to non-existent PV)."
+    else
+        echo "  WARNING: Failed to delete PVC — falling back to manual recovery."
+        _do_pv_recovery "$pvc_name" "" "$old_size"
+        return 1
+    fi
+
+    # Step 3: Clear EXISTING_CLAIM_FLAG so helm creates a new PVC instead of binding to the deleted name
+    EXISTING_CLAIM_FLAG=""
+
+    if [ -n "$old_size" ]; then
+        echo "  Previous PVC size was $old_size. Helm upgrade will create a new PVC via onelens-sc StorageClass."
+    else
+        echo "  Helm upgrade will create a new PVC via onelens-sc StorageClass."
+    fi
+    return 0
+}
+
 # _do_pv_recovery "$pvc_name" "$pv_name" "$old_size"
 # Logs PV recovery error with manual remediation steps.
-# We intentionally do NOT have cluster-scoped delete/patch permissions on PVs
-# because that would grant access to ALL PVs in the cluster (security concern).
+# Used when the PV object still exists but is broken (Failed/Released state) —
+# we can't delete cluster-scoped PVs (intentional security restriction).
 # PV recovery must be performed manually by the customer or support team.
 _do_pv_recovery() {
     local pvc_name="$1" pv_name="$2" old_size="$3"
@@ -820,7 +858,42 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     echo "$POD_ISSUES"
                 fi
 
-                _do_pv_recovery "$PROM_PVC_NAME" "" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
+                _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
+            elif [ "$POD_STATUS" = "Running" ]; then
+                # PV is gone but pod is still Running on cached kernel VFS mount.
+                # Data persistence is broken — writes may silently fail or the pod
+                # will crash on next restart. Proactively restart to surface the issue.
+                echo "WARNING: PV '$BOUND_PV' is gone but pod is still Running on cached VFS."
+                echo "Data persistence is broken — restarting pod to surface volume failure."
+                kubectl delete pod "$PROM_POD" -n onelens-agent --grace-period=10 2>/dev/null || true
+
+                echo "Waiting for pod restart..."
+                sleep 45
+                # Re-check: new pod should fail to mount the volume.
+                # Look for FailedMount/FailedAttachVolume events to distinguish from slow image pulls.
+                _new_pod_name=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                    | awk '/prometheus-server/ && !/Terminating/{print $1; exit}' || true)
+                _new_pod_status=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                    | awk '/prometheus-server/ && !/Terminating/{print $3; exit}' || true)
+                echo "Pod status after restart: ${_new_pod_status:-unknown}"
+
+                if [ "$_new_pod_status" = "Running" ]; then
+                    echo "Pod restarted and remounted successfully — volume was not actually gone."
+                elif [ -n "$_new_pod_name" ]; then
+                    # Confirm it's a volume issue, not a slow image pull or scheduling delay
+                    _mount_events=$(kubectl get events -n onelens-agent \
+                        --field-selector "involvedObject.name=$_new_pod_name" --no-headers 2>/dev/null \
+                        | grep -iE 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+                    if [ -n "$_mount_events" ]; then
+                        echo "Volume mount failure confirmed. Auto-recovering PVC..."
+                        _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
+                    else
+                        echo "Pod not Running but no mount errors detected (may be slow startup). Skipping auto-recovery."
+                        echo "Next patching run will re-evaluate."
+                    fi
+                else
+                    echo "No prometheus-server pod found after restart. Skipping auto-recovery."
+                fi
             else
                 echo "PV is missing but PVC is '$PVC_STATUS' and pod is '$POD_STATUS'. Skipping recovery."
             fi
@@ -1819,6 +1892,16 @@ for i in 1 2 3 4 5 6; do
 done
 if [ "$STABLE" != "true" ]; then
     echo "WARNING: Pods did not fully stabilize within 60s"
+fi
+
+# If the upgrade retry loop flagged failure (e.g., OpenCost transient crash during
+# Prometheus restart) but all pods recovered during the stabilization window above,
+# reset the failure flag. OpenCost crashes with "connection refused" when Prometheus
+# service IP is switching endpoints — this resolves in 30-60s, well within our 60s
+# stabilization window. A genuine failure would still be non-Ready here.
+if [ "$UPGRADE_FAILED" = "true" ] && [ "$STABLE" = "true" ]; then
+    echo "Upgrade was flagged failed but all pods recovered. Resetting upgrade status."
+    UPGRADE_FAILED=false
 fi
 
 # Deployer chart is NOT self-upgraded here. The deployer SA cannot grant itself
