@@ -402,7 +402,8 @@ is_full_eval_due() {
 # parse_sizing_state "$configmap_json"
 # Parse ConfigMap JSON into shell variables. Sets:
 #   STATE_LAST_FULL_EVAL, STATE_LAST_OOM_prometheus_server,
-#   STATE_LAST_OOM_kube_state_metrics, STATE_LAST_OOM_opencost
+#   STATE_LAST_OOM_kube_state_metrics, STATE_LAST_OOM_opencost,
+#   STATE_LAST_OOM_pushgateway
 # Returns 1 if JSON is empty/invalid.
 parse_sizing_state() {
     local json="$1"
@@ -411,29 +412,33 @@ parse_sizing_state() {
         STATE_LAST_OOM_prometheus_server=""
         STATE_LAST_OOM_kube_state_metrics=""
         STATE_LAST_OOM_opencost=""
+        STATE_LAST_OOM_pushgateway=""
         return 1
     fi
     STATE_LAST_FULL_EVAL=$(echo "$json" | jq -r '.data.last_full_evaluation // empty' 2>/dev/null || true)
     STATE_LAST_OOM_prometheus_server=$(echo "$json" | jq -r '.data["prometheus-server.last_oom_at"] // empty' 2>/dev/null || true)
     STATE_LAST_OOM_kube_state_metrics=$(echo "$json" | jq -r '.data["kube-state-metrics.last_oom_at"] // empty' 2>/dev/null || true)
     STATE_LAST_OOM_opencost=$(echo "$json" | jq -r '.data["opencost.last_oom_at"] // empty' 2>/dev/null || true)
+    STATE_LAST_OOM_pushgateway=$(echo "$json" | jq -r '.data["pushgateway.last_oom_at"] // empty' 2>/dev/null || true)
     return 0
 }
 
-# build_sizing_state_patch "$last_full_eval" "$prom_oom" "$ksm_oom" "$opencost_oom"
+# build_sizing_state_patch "$last_full_eval" "$prom_oom" "$ksm_oom" "$opencost_oom" "$pgw_oom"
 # Generate JSON string for kubectl patch. All args are ISO timestamps or empty.
 build_sizing_state_patch() {
-    local eval_ts="$1" prom_oom="$2" ksm_oom="$3" opencost_oom="$4"
+    local eval_ts="$1" prom_oom="$2" ksm_oom="$3" opencost_oom="$4" pgw_oom="$5"
     jq -n \
         --arg eval "$eval_ts" \
         --arg prom "$prom_oom" \
         --arg ksm "$ksm_oom" \
         --arg oc "$opencost_oom" \
+        --arg pgw "$pgw_oom" \
         '{data: {
             last_full_evaluation: $eval,
             "prometheus-server.last_oom_at": $prom,
             "kube-state-metrics.last_oom_at": $ksm,
-            "opencost.last_oom_at": $oc
+            "opencost.last_oom_at": $oc,
+            "pushgateway.last_oom_at": $pgw
         }}'
 }
 
@@ -1015,12 +1020,11 @@ AVG_LABELS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Run
     | head -500 \
     | sed 's/^map\[//; s/\]$//' \
     | awk 'NF>0 {
-        # Normalize label separators and count key=value pairs
-        gsub(/[,:]/, " ");
-        count=0;
-        for(i=1; i<=NF; i++) {
-            if($i ~ /=/) count++
-        }
+        # Count colons: each Kubernetes label is key:value format with exactly one colon.
+        # Example: "app:myapp component:api tier:frontend" has 3 labels (3 colons).
+        # Previous approach tried to parse format but failed because labels use ":" not "=",
+        # causing label count to always return 0 and trigger unsafe 1.3x memory multiplier.
+        count = gsub(/:/, ":");
         if(count>0) { s+=count; n++ }
     }
     END {if(n>0) printf "%d", s/n; else print 0}')
@@ -1326,12 +1330,14 @@ if [ -n "$PROM_SVC" ]; then
             --from-literal=last_full_evaluation="$NOW_TS" \
             --from-literal=prometheus-server.last_oom_at="" \
             --from-literal=kube-state-metrics.last_oom_at="" \
-            --from-literal=opencost.last_oom_at="" 2>/dev/null || true
+            --from-literal=opencost.last_oom_at="" \
+            --from-literal=pushgateway.last_oom_at="" 2>/dev/null || true
         echo "Created sizing state ConfigMap (first run, downsize deferred 72h)"
         STATE_LAST_FULL_EVAL="$NOW_TS"
         STATE_LAST_OOM_prometheus_server=""
         STATE_LAST_OOM_kube_state_metrics=""
         STATE_LAST_OOM_opencost=""
+        STATE_LAST_OOM_pushgateway=""
     else
         parse_sizing_state "$CM_JSON"
     fi
@@ -1379,6 +1385,7 @@ if [ -n "$PROM_SVC" ]; then
         NEW_PROM_OOM="$STATE_LAST_OOM_prometheus_server"
         NEW_KSM_OOM="$STATE_LAST_OOM_kube_state_metrics"
         NEW_OC_OOM="$STATE_LAST_OOM_opencost"
+        NEW_PGW_OOM="$STATE_LAST_OOM_pushgateway"
         SIZING_CHANGES=0
 
         # _evaluate_and_log "$label" "$container_name" "$current_mem" "$current_cpu" \
@@ -1393,14 +1400,16 @@ if [ -n "$PROM_SVC" ]; then
             mem_bytes=$(_get_container_val "$MEM_72H" "$container")
             cpu_cores=$(_get_container_val "$CPU_72H" "$container")
 
-            # OOM detection (skip on first run — historical events predate our tracking)
+            # OOM detection (record timestamp on first run too — activates 7-day hold)
             oom_now=false
-            if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "$container"; then
+            if _has_oom "$container"; then
                 oom_now=true
                 eval "$oom_state_var=\"\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\""
-                echo "  $label: OOM detected — doubling memory from $cur_mem"
-            elif [ "$IS_FIRST_RUN" = "true" ] && _has_oom "$container"; then
-                echo "  $label: historical OOM found, skipping (first run)"
+                if [ "$IS_FIRST_RUN" = "true" ]; then
+                    echo "  $label: OOM detected on first run — recording for 7-day hold (no resize)"
+                else
+                    echo "  $label: OOM detected — doubling memory from $cur_mem"
+                fi
             fi
 
             oom_recent=$(_get_oom_recent "$container")
@@ -1458,8 +1467,9 @@ if [ -n "$PROM_SVC" ]; then
 
         # Evaluate: Pushgateway (fixed, OOM → 1.25x)
         PGW_OOM_NOW=false
-        if [ "$IS_FIRST_RUN" = "false" ] && _has_oom "prometheus-pushgateway"; then
+        if _has_oom "prometheus-pushgateway"; then
             PGW_OOM_NOW=true
+            NEW_PGW_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             echo "  pushgateway: OOM detected — bumping 1.25x"
         fi
         PGW_RESULT=$(evaluate_fixed_container_sizing "pushgateway" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$PGW_OOM_NOW")
@@ -1485,7 +1495,7 @@ if [ -n "$PROM_SVC" ]; then
         if [ "$FULL_EVAL_DUE" = "true" ]; then
             NEW_EVAL_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         fi
-        PATCH_JSON=$(build_sizing_state_patch "$NEW_EVAL_TS" "$NEW_PROM_OOM" "$NEW_KSM_OOM" "$NEW_OC_OOM")
+        PATCH_JSON=$(build_sizing_state_patch "$NEW_EVAL_TS" "$NEW_PROM_OOM" "$NEW_KSM_OOM" "$NEW_OC_OOM" "$NEW_PGW_OOM")
         kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
     else
         echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"
@@ -1811,13 +1821,28 @@ if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
     echo "Helm blocked — applying resource right-sizing via kubectl patch..."
     _kubectl_set_resources() {
         local deploy="$1" container="$2" cpu_req="$3" mem_req="$4" cpu_lim="$5" mem_lim="$6"
-        if kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
-            kubectl set resources deployment "$deploy" -n onelens-agent \
-                -c "$container" \
-                --requests="cpu=${cpu_req},memory=${mem_req}" \
-                --limits="cpu=${cpu_lim},memory=${mem_lim}" \
-                2>&1 || echo "  WARNING: failed to patch $deploy"
+        if ! kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
+            return
         fi
+        # Discover actual container name — chart versions use different naming conventions.
+        local actual_container="$container"
+        local containers
+        containers=$(kubectl get deployment "$deploy" -n onelens-agent \
+            -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || true)
+        if [ -n "$containers" ] && ! echo " $containers " | grep -q " $container "; then
+            for c in $containers; do
+                case "$c" in
+                    *configmap-reload*|*sidecar*) continue ;;
+                    *) actual_container="$c"; break ;;
+                esac
+            done
+            echo "  Container '$container' not found in $deploy, using '$actual_container'"
+        fi
+        kubectl set resources deployment "$deploy" -n onelens-agent \
+            -c "$actual_container" \
+            --requests="cpu=${cpu_req},memory=${mem_req}" \
+            --limits="cpu=${cpu_lim},memory=${mem_lim}" \
+            2>&1 || echo "  WARNING: failed to patch $deploy"
     }
     _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
         "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
