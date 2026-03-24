@@ -1059,13 +1059,28 @@ if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
     echo "Helm blocked — applying resource right-sizing via kubectl patch..."
     _kubectl_set_resources() {
         local deploy="$1" container="$2" cpu_req="$3" mem_req="$4" cpu_lim="$5" mem_lim="$6"
-        if kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
-            kubectl set resources deployment "$deploy" -n onelens-agent \
-                -c "$container" \
-                --requests="cpu=${cpu_req},memory=${mem_req}" \
-                --limits="cpu=${cpu_lim},memory=${mem_lim}" \
-                2>&1 || echo "  WARNING: failed to patch $deploy"
+        if ! kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
+            return
         fi
+        # Discover actual container name — chart versions use different naming conventions.
+        local actual_container="$container"
+        local containers
+        containers=$(kubectl get deployment "$deploy" -n onelens-agent \
+            -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || true)
+        if [ -n "$containers" ] && ! echo " $containers " | grep -q " $container "; then
+            for c in $containers; do
+                case "$c" in
+                    *configmap-reload*|*sidecar*) continue ;;
+                    *) actual_container="$c"; break ;;
+                esac
+            done
+            echo "  Container '$container' not found in $deploy, using '$actual_container'"
+        fi
+        kubectl set resources deployment "$deploy" -n onelens-agent \
+            -c "$actual_container" \
+            --requests="cpu=${cpu_req},memory=${mem_req}" \
+            --limits="cpu=${cpu_lim},memory=${mem_lim}" \
+            2>&1 || echo "  WARNING: failed to patch $deploy"
     }
     _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
         "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
