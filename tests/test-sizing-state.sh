@@ -15,22 +15,27 @@ FIXTURES="$(fixtures_dir)"
 parse_sizing_state "$(cat "$FIXTURES/sizing-state-empty.json")" || true
 assert_eq "$STATE_LAST_FULL_EVAL" "" "parse empty ConfigMap: STATE_LAST_FULL_EVAL is empty"
 assert_eq "$STATE_LAST_OOM_prometheus_server" "" "parse empty ConfigMap: no OOM for prometheus"
+assert_eq "$STATE_LAST_OOM_pushgateway" "" "parse empty ConfigMap: no OOM for pushgateway"
 
 # Normal state (48h ago eval, no OOM)
 parse_sizing_state "$(cat "$FIXTURES/sizing-state-normal.json")"
 assert_ne "$STATE_LAST_FULL_EVAL" "" "parse normal: STATE_LAST_FULL_EVAL is set"
 assert_contains "$STATE_LAST_FULL_EVAL" "2026-03-14" "parse normal: eval date is 2026-03-14"
 assert_eq "$STATE_LAST_OOM_prometheus_server" "" "parse normal: no OOM for prometheus"
+assert_eq "$STATE_LAST_OOM_pushgateway" "" "parse normal: no OOM for pushgateway"
 
 # OOM recent state
 parse_sizing_state "$(cat "$FIXTURES/sizing-state-oom-recent.json")"
 assert_ne "$STATE_LAST_OOM_prometheus_server" "" "parse OOM recent: prometheus OOM is set"
 assert_contains "$STATE_LAST_OOM_prometheus_server" "2026-03-14" "parse OOM recent: OOM date"
 assert_eq "$STATE_LAST_OOM_kube_state_metrics" "" "parse OOM recent: KSM has no OOM"
+assert_ne "$STATE_LAST_OOM_pushgateway" "" "parse OOM recent: pushgateway OOM is set"
+assert_contains "$STATE_LAST_OOM_pushgateway" "2026-03-14" "parse OOM recent: pushgateway OOM date"
 
 # Invalid JSON
 parse_sizing_state "" || true
 assert_eq "$STATE_LAST_FULL_EVAL" "" "parse invalid: empty JSON returns empty state"
+assert_eq "$STATE_LAST_OOM_pushgateway" "" "parse invalid: pushgateway OOM is empty"
 
 parse_sizing_state "not-json" || true
 assert_eq "$STATE_LAST_FULL_EVAL" "" "parse invalid: bad JSON returns empty state"
@@ -77,15 +82,24 @@ assert_exit_code 1 "is_full_eval_due: empty = not due (first run)" is_full_eval_
 # build_sizing_state_patch
 ###############################################################################
 
-PATCH=$(build_sizing_state_patch "2026-03-15T06:00:00Z" "2026-03-15T04:00:00Z" "" "")
+PATCH=$(build_sizing_state_patch "2026-03-15T06:00:00Z" "2026-03-15T04:00:00Z" "" "" "2026-03-15T05:00:00Z")
 assert_contains "$PATCH" "last_full_evaluation" "build_sizing_state_patch: has eval key"
 assert_contains "$PATCH" "2026-03-15T06:00:00Z" "build_sizing_state_patch: has eval timestamp"
 assert_contains "$PATCH" "prometheus-server.last_oom_at" "build_sizing_state_patch: has prom OOM key"
 assert_contains "$PATCH" "2026-03-15T04:00:00Z" "build_sizing_state_patch: has prom OOM timestamp"
+assert_contains "$PATCH" "pushgateway.last_oom_at" "build_sizing_state_patch: has pushgateway OOM key"
+assert_contains "$PATCH" "2026-03-15T05:00:00Z" "build_sizing_state_patch: has pushgateway OOM timestamp"
 
 # Verify it's valid JSON
 echo "$PATCH" | jq -e . >/dev/null 2>&1
 assert_eq "$?" "0" "build_sizing_state_patch: output is valid JSON"
+
+# Empty pushgateway OOM still produces valid JSON
+PATCH_EMPTY_PGW=$(build_sizing_state_patch "2026-03-15T06:00:00Z" "" "" "" "")
+echo "$PATCH_EMPTY_PGW" | jq -e . >/dev/null 2>&1
+assert_eq "$?" "0" "build_sizing_state_patch: empty pushgateway still valid JSON"
+PGW_VAL=$(echo "$PATCH_EMPTY_PGW" | jq -r '.data["pushgateway.last_oom_at"]')
+assert_eq "$PGW_VAL" "" "build_sizing_state_patch: empty pushgateway value is empty string"
 
 ###############################################################################
 # seconds_since

@@ -225,7 +225,8 @@ is_full_eval_due() {
 # parse_sizing_state "$configmap_json"
 # Parse ConfigMap JSON into shell variables. Sets:
 #   STATE_LAST_FULL_EVAL, STATE_LAST_OOM_prometheus_server,
-#   STATE_LAST_OOM_kube_state_metrics, STATE_LAST_OOM_opencost
+#   STATE_LAST_OOM_kube_state_metrics, STATE_LAST_OOM_opencost,
+#   STATE_LAST_OOM_pushgateway
 # Returns 1 if JSON is empty/invalid.
 parse_sizing_state() {
     local json="$1"
@@ -234,29 +235,33 @@ parse_sizing_state() {
         STATE_LAST_OOM_prometheus_server=""
         STATE_LAST_OOM_kube_state_metrics=""
         STATE_LAST_OOM_opencost=""
+        STATE_LAST_OOM_pushgateway=""
         return 1
     fi
     STATE_LAST_FULL_EVAL=$(echo "$json" | jq -r '.data.last_full_evaluation // empty' 2>/dev/null || true)
     STATE_LAST_OOM_prometheus_server=$(echo "$json" | jq -r '.data["prometheus-server.last_oom_at"] // empty' 2>/dev/null || true)
     STATE_LAST_OOM_kube_state_metrics=$(echo "$json" | jq -r '.data["kube-state-metrics.last_oom_at"] // empty' 2>/dev/null || true)
     STATE_LAST_OOM_opencost=$(echo "$json" | jq -r '.data["opencost.last_oom_at"] // empty' 2>/dev/null || true)
+    STATE_LAST_OOM_pushgateway=$(echo "$json" | jq -r '.data["pushgateway.last_oom_at"] // empty' 2>/dev/null || true)
     return 0
 }
 
-# build_sizing_state_patch "$last_full_eval" "$prom_oom" "$ksm_oom" "$opencost_oom"
+# build_sizing_state_patch "$last_full_eval" "$prom_oom" "$ksm_oom" "$opencost_oom" "$pgw_oom"
 # Generate JSON string for kubectl patch. All args are ISO timestamps or empty.
 build_sizing_state_patch() {
-    local eval_ts="$1" prom_oom="$2" ksm_oom="$3" opencost_oom="$4"
+    local eval_ts="$1" prom_oom="$2" ksm_oom="$3" opencost_oom="$4" pgw_oom="$5"
     jq -n \
         --arg eval "$eval_ts" \
         --arg prom "$prom_oom" \
         --arg ksm "$ksm_oom" \
         --arg oc "$opencost_oom" \
+        --arg pgw "$pgw_oom" \
         '{data: {
             last_full_evaluation: $eval,
             "prometheus-server.last_oom_at": $prom,
             "kube-state-metrics.last_oom_at": $ksm,
-            "opencost.last_oom_at": $oc
+            "opencost.last_oom_at": $oc,
+            "pushgateway.last_oom_at": $pgw
         }}'
 }
 

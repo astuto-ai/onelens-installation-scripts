@@ -568,12 +568,14 @@ if [ -n "$PROM_SVC" ]; then
             --from-literal=last_full_evaluation="$NOW_TS" \
             --from-literal=prometheus-server.last_oom_at="" \
             --from-literal=kube-state-metrics.last_oom_at="" \
-            --from-literal=opencost.last_oom_at="" 2>/dev/null || true
+            --from-literal=opencost.last_oom_at="" \
+            --from-literal=pushgateway.last_oom_at="" 2>/dev/null || true
         echo "Created sizing state ConfigMap (first run, downsize deferred 72h)"
         STATE_LAST_FULL_EVAL="$NOW_TS"
         STATE_LAST_OOM_prometheus_server=""
         STATE_LAST_OOM_kube_state_metrics=""
         STATE_LAST_OOM_opencost=""
+        STATE_LAST_OOM_pushgateway=""
     else
         parse_sizing_state "$CM_JSON"
     fi
@@ -621,6 +623,7 @@ if [ -n "$PROM_SVC" ]; then
         NEW_PROM_OOM="$STATE_LAST_OOM_prometheus_server"
         NEW_KSM_OOM="$STATE_LAST_OOM_kube_state_metrics"
         NEW_OC_OOM="$STATE_LAST_OOM_opencost"
+        NEW_PGW_OOM="$STATE_LAST_OOM_pushgateway"
         SIZING_CHANGES=0
 
         # _evaluate_and_log "$label" "$container_name" "$current_mem" "$current_cpu" \
@@ -640,7 +643,11 @@ if [ -n "$PROM_SVC" ]; then
             if _has_oom "$container"; then
                 oom_now=true
                 eval "$oom_state_var=\"\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\""
-                echo "  $label: OOM detected — doubling memory from $cur_mem"
+                if [ "$IS_FIRST_RUN" = "true" ]; then
+                    echo "  $label: OOM detected on first run — recording for 7-day hold (no resize)"
+                else
+                    echo "  $label: OOM detected — doubling memory from $cur_mem"
+                fi
             fi
 
             oom_recent=$(_get_oom_recent "$container")
@@ -700,6 +707,7 @@ if [ -n "$PROM_SVC" ]; then
         PGW_OOM_NOW=false
         if _has_oom "prometheus-pushgateway"; then
             PGW_OOM_NOW=true
+            NEW_PGW_OOM=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             echo "  pushgateway: OOM detected — bumping 1.25x"
         fi
         PGW_RESULT=$(evaluate_fixed_container_sizing "pushgateway" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT" "$PGW_OOM_NOW")
@@ -725,7 +733,7 @@ if [ -n "$PROM_SVC" ]; then
         if [ "$FULL_EVAL_DUE" = "true" ]; then
             NEW_EVAL_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         fi
-        PATCH_JSON=$(build_sizing_state_patch "$NEW_EVAL_TS" "$NEW_PROM_OOM" "$NEW_KSM_OOM" "$NEW_OC_OOM")
+        PATCH_JSON=$(build_sizing_state_patch "$NEW_EVAL_TS" "$NEW_PROM_OOM" "$NEW_KSM_OOM" "$NEW_OC_OOM" "$NEW_PGW_OOM")
         kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
     else
         echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"

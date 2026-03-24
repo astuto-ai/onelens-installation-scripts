@@ -1,1 +1,1 @@
-{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"onelens-agent-sizing-state","namespace":"onelens-agent"},"data":{"last_full_evaluation":"2026-03-14T06:00:00Z","prometheus-server.last_oom_at":"","kube-state-metrics.last_oom_at":"","opencost.last_oom_at":""}}
+{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"onelens-agent-sizing-state","namespace":"onelens-agent"},"data":{"last_full_evaluation":"2026-03-14T06:00:00Z","prometheus-server.last_oom_at":"","kube-state-metrics.last_oom_at":"","opencost.last_oom_at":"","pushgateway.last_oom_at":""}}
