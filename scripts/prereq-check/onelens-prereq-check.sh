@@ -562,6 +562,26 @@ check_ebs_driver() {
     return 0
 }
 
+# EFS CSI driver check (AWS) — informational, not required
+check_efs_driver() {
+    print_step "Checking EFS CSI driver (optional, for multi-AZ storage)..."
+
+    if kubectl get csidriver efs.csi.aws.com &> /dev/null; then
+        print_success "EFS CSI driver is available"
+        echo "  You can use multi-AZ storage by setting EFS_FILESYSTEM_ID at install time."
+        echo "  This eliminates PV availability zone scheduling issues (recommended for spot instances)."
+        echo "  See: https://github.com/astuto-ai/onelens-installation-scripts#multi-az-storage"
+        add_confirmed_detail "EFS CSI Driver: Available (multi-AZ storage option)"
+    else
+        print_info "EFS CSI driver not found (optional)"
+        echo "  OneLens will use EBS (default). If you need multi-AZ storage to avoid"
+        echo "  AZ-lock scheduling issues (common with spot instances), install the EFS CSI driver:"
+        echo "    aws eks create-addon --cluster-name <cluster-name> --addon-name aws-efs-csi-driver"
+        echo "  See: https://github.com/astuto-ai/onelens-installation-scripts#multi-az-storage"
+        add_confirmed_detail "EFS CSI Driver: Not installed (optional — EBS will be used)"
+    fi
+}
+
 # Azure Disk CSI driver check (Azure)
 check_azure_disk_driver() {
     print_step "Checking Azure Disk CSI driver installation..."
@@ -666,6 +686,26 @@ check_azure_disk_driver() {
     return 0
 }
 
+# Azure Files CSI driver check (Azure) — informational, not required
+check_azure_files_driver() {
+    print_step "Checking Azure Files CSI driver (optional, for multi-AZ storage)..."
+
+    if kubectl get csidriver file.csi.azure.com &> /dev/null; then
+        print_success "Azure Files CSI driver is available"
+        echo "  You can use multi-AZ storage by setting AZURE_FILES_ENABLED=true at install time."
+        echo "  This eliminates PV availability zone scheduling issues (recommended for spot instances)."
+        echo "  See: https://github.com/astuto-ai/onelens-installation-scripts#multi-az-storage"
+        add_confirmed_detail "Azure Files CSI Driver: Available (multi-AZ storage option)"
+    else
+        print_info "Azure Files CSI driver not found (optional)"
+        echo "  OneLens will use Azure Disk (default). If you need multi-AZ storage to avoid"
+        echo "  AZ-lock scheduling issues (common with spot instances), enable the Azure Files CSI driver:"
+        echo "    az aks update -g <resource-group> -n <cluster-name> --enable-file-driver"
+        echo "  See: https://github.com/astuto-ai/onelens-installation-scripts#multi-az-storage"
+        add_confirmed_detail "Azure Files CSI Driver: Not installed (optional — Azure Disk will be used)"
+    fi
+}
+
 # Print summary for AWS
 print_summary_aws() {
     echo ""
@@ -690,7 +730,7 @@ print_summary_aws() {
     echo "STORAGE:"
     echo "--------"
     for detail in "${CONFIRMED_DETAILS[@]}"; do
-        if [[ "$detail" =~ ^EBS ]]; then
+        if [[ "$detail" =~ ^EBS|^EFS ]]; then
             echo "  $detail"
         fi
     done
@@ -720,7 +760,7 @@ print_summary_azure() {
     echo "STORAGE:"
     echo "--------"
     for detail in "${CONFIRMED_DETAILS[@]}"; do
-        if [[ "$detail" =~ ^Azure\ Disk ]]; then
+        if [[ "$detail" =~ ^Azure\ Disk|^Azure\ Files ]]; then
             echo "  $detail"
         fi
     done
@@ -760,10 +800,11 @@ run_aws_checks() {
     fi
 
     echo ""
-    print_header "5/5 - EBS CSI Driver Check"
+    print_header "5/5 - Storage CSI Driver Check"
     if check_ebs_driver; then
         ((CHECKS_PASSED++))
     fi
+    check_efs_driver
 }
 
 # Main execution for Azure/AKS
@@ -796,10 +837,11 @@ run_azure_checks() {
     fi
 
     echo ""
-    print_header "5/5 - Azure Disk CSI Driver Check"
+    print_header "5/5 - Storage CSI Driver Check"
     if check_azure_disk_driver; then
         ((CHECKS_PASSED++))
     fi
+    check_azure_files_driver
 }
 
 # Main execution
