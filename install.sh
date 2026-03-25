@@ -552,6 +552,19 @@ elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     CMD+=" --set onelens-agent.storageClass.azure.skuName=\"$STORAGE_CLASS_SKU\""
 fi
 
+# Multi-AZ storage overrides (EFS for AWS, Azure Files for Azure)
+# These override the default block-storage provisioner with a multi-AZ file-storage provisioner,
+# eliminating PV AZ-lock scheduling issues on clusters with spot instances or limited AZ capacity.
+if [ -n "${EFS_FILESYSTEM_ID:-}" ]; then
+    echo "EFS storage configured (filesystem: $EFS_FILESYSTEM_ID). Using multi-AZ storage."
+    CMD+=" --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
+    CMD+=" --set onelens-agent.storageClass.efs.fileSystemId=\"$EFS_FILESYSTEM_ID\""
+fi
+if [ "${AZURE_FILES_ENABLED:-}" = "true" ]; then
+    echo "Azure Files storage configured. Using multi-AZ storage."
+    CMD+=" --set onelens-agent.storageClass.provisioner=file.csi.azure.com"
+fi
+
 # Continue building command
 
 # Append tolerations only if set
@@ -767,7 +780,10 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         _FAIL_COMPONENT="$component"
 
         # Classify failure
-        if echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
+        if echo "$events" | grep -qiE 'FailedScheduling.*PersistentVolume.*node affinity'; then
+            _FAIL_REASON="other"
+            _FAIL_DIAG="pod=$pod_name component=$component reason=PV_AZ_MISMATCH (PV is AZ-locked but no nodes available in that AZ. Customer must ensure node capacity in the PV's availability zone, or reinstall with multi-AZ storage: EFS for AWS, Azure Files for Azure)"
+        elif echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
             _FAIL_REASON="other"
             _FAIL_DIAG="pod=$pod_name component=$component reason=FailedScheduling (node can't fit resource request)"
         elif [ "$term_reason" = "OOMKilled" ] || echo "$pod_logs" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then

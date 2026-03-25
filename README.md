@@ -33,7 +33,7 @@ You only install the **deployer** chart. It handles everything else.
 - Kubernetes cluster (1.25+)
 - Helm 3.0+
 - `kubectl` configured for your cluster
-- AWS EBS CSI driver (for AWS EKS clusters) or Azure Disk CSI driver (for AKS clusters)
+- AWS EBS CSI driver (for AWS EKS clusters) or Azure Disk CSI driver (for AKS clusters). Alternatively, AWS EFS CSI driver or Azure Files CSI driver for multi-AZ storage — see [Multi-AZ Storage](#multi-az-storage)
 - Minimum node resources available: 50m CPU and 256Mi memory for the deployer job
 
 Run the pre-requisite checker to validate your environment before installing. It checks connectivity, tools, Kubernetes version, and CSI driver status:
@@ -98,6 +98,7 @@ All parameters below are passed via `--set` flags during `helm upgrade --install
 
 - [Required Parameters](#required-parameters) — cluster name, region, account, token
 - [Storage Encryption](#storage-encryption) — encrypt Prometheus persistent volumes (AWS EBS / Azure Disk)
+- [Multi-AZ Storage](#multi-az-storage) — use EFS or Azure Files to avoid AZ-lock scheduling issues
 - [Volume Tags](#volume-tags) — apply custom tags to persistent volumes for cost tracking
 - [Node Scheduling](#node-scheduling) — run OneLens pods on dedicated or specific nodes
 - [Labels](#labels) — apply custom labels to all OneLens resources
@@ -197,6 +198,64 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer \
   --set job.env.REGISTRATION_TOKEN=your-token \
   --set job.env.AZURE_DISK_ENCRYPTION_ENABLED=true \
   --set job.env.AZURE_DISK_ENCRYPTION_SET_ID=/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<des-name>
+```
+
+</details>
+
+### Multi-AZ Storage
+
+By default, OneLens uses block storage (EBS on AWS, Azure Disk on AKS) for Prometheus data. These volumes are **AZ-locked** — if the node hosting Prometheus moves to a different availability zone (common with spot instances or node scaling), Prometheus can't start because its volume is in the original AZ.
+
+To avoid this, use multi-AZ file storage instead. This is recommended for clusters that use spot instances or have limited node capacity per AZ.
+
+<details>
+<summary><strong>AWS EFS</strong></summary>
+
+Requires a pre-created EFS filesystem. The EFS CSI driver creates access points inside it automatically.
+
+**Prerequisites:**
+1. [EFS CSI driver](https://docs.aws.amazon.com/eks/latest/userguide/efs-csi.html) installed on your cluster
+2. An EFS filesystem created in the same VPC as your EKS cluster
+3. Mount targets in the subnets where your EKS nodes run
+4. Security group allowing NFS traffic (port 2049) from node security group
+
+| Parameter | Description |
+|---|---|
+| `job.env.EFS_FILESYSTEM_ID` | EFS filesystem ID (e.g., `fs-0abc123def456`) |
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-eks-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.EFS_FILESYSTEM_ID=fs-0abc123def456
+```
+
+</details>
+
+<details>
+<summary><strong>Azure Files</strong></summary>
+
+No pre-created resources needed. The Azure Files CSI driver provisions storage accounts and file shares dynamically.
+
+**Prerequisites:**
+1. [Azure Files CSI driver](https://learn.microsoft.com/en-us/azure/aks/azure-files-csi) enabled on your AKS cluster (enabled by default on AKS 1.21+)
+2. Managed identity with `Storage Account Contributor` role
+
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.AZURE_FILES_ENABLED` | Enable Azure Files instead of Azure Disk | `false` |
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-aks-cluster \
+  --set job.env.REGION=centralindia \
+  --set-string job.env.ACCOUNT=your-subscription-id \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.AZURE_FILES_ENABLED=true
 ```
 
 </details>

@@ -122,7 +122,46 @@ azure_encrypt_code=$(grep -c 'AZURE_DISK_ENCRYPTION_ENABLED' "$ROOT/install.sh" 
 assert_gt "$azure_encrypt_code" "0" "install.sh handles AZURE_DISK_ENCRYPTION_ENABLED"
 
 ###############################################################################
-# Test 8: Retention rendered in prometheus args
+# Test 8: EFS support in values and install.sh
+###############################################################################
+# values.yaml must have efs section with fileSystemId
+efs_values=$(grep -c 'efs:' "$ROOT/charts/onelens-agent/values.yaml" || true)
+assert_gt "$efs_values" "0" "values.yaml has efs section"
+
+efs_fsid=$(grep -c 'fileSystemId' "$ROOT/charts/onelens-agent/values.yaml" || true)
+assert_gt "$efs_fsid" "0" "values.yaml has efs.fileSystemId"
+
+# globalvalues.yaml must have matching efs section
+efs_global=$(grep -c 'efs:' "$ROOT/globalvalues.yaml" || true)
+assert_gt "$efs_global" "0" "globalvalues.yaml has efs section"
+
+# install.sh must accept EFS_FILESYSTEM_ID and set efs.csi.aws.com provisioner
+efs_install=$(grep -c 'EFS_FILESYSTEM_ID' "$ROOT/install.sh" || true)
+assert_gt "$efs_install" "0" "install.sh accepts EFS_FILESYSTEM_ID env var"
+
+efs_provisioner=$(grep -c 'efs.csi.aws.com' "$ROOT/install.sh" || true)
+assert_gt "$efs_provisioner" "0" "install.sh sets efs.csi.aws.com provisioner"
+
+###############################################################################
+# Test 9: Azure Files support in values and install.sh
+###############################################################################
+# values.yaml must have azureFiles section
+azfiles_values=$(grep -c 'azureFiles:' "$ROOT/charts/onelens-agent/values.yaml" || true)
+assert_gt "$azfiles_values" "0" "values.yaml has azureFiles section"
+
+# globalvalues.yaml must have matching azureFiles section
+azfiles_global=$(grep -c 'azureFiles:' "$ROOT/globalvalues.yaml" || true)
+assert_gt "$azfiles_global" "0" "globalvalues.yaml has azureFiles section"
+
+# install.sh must accept AZURE_FILES_ENABLED and set file.csi.azure.com provisioner
+azfiles_install=$(grep -c 'AZURE_FILES_ENABLED' "$ROOT/install.sh" || true)
+assert_gt "$azfiles_install" "0" "install.sh accepts AZURE_FILES_ENABLED env var"
+
+azfiles_provisioner=$(grep -c 'file.csi.azure.com' "$ROOT/install.sh" || true)
+assert_gt "$azfiles_provisioner" "0" "install.sh sets file.csi.azure.com provisioner"
+
+###############################################################################
+# Test 10: Retention rendered in prometheus args
 ###############################################################################
 select_retention_tier 200
 RENDERED_RET=$(helm template test-release onelens/onelens-agent \

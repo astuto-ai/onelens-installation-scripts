@@ -143,7 +143,30 @@ recover_calls=$(echo "$recover_block" | grep -c '_auto_recover_pvc' || true)
 assert_eq "$recover_calls" "2" "Auto-recovery called in both mount-events and no-events paths"
 
 ###############################################################################
-# Test 12: Syntax check — src/patching.sh has valid bash syntax
+# Test 12: PV AZ mismatch detection in _detect_pod_failure
+###############################################################################
+# When FailedScheduling mentions PersistentVolume node affinity, the diagnostic
+# must say PV_AZ_MISMATCH (not generic "node can't fit resource request").
+az_mismatch_check=$(grep -c 'PersistentVolume.*node affinity' "$PATCHING" || true)
+assert_gt "$az_mismatch_check" "0" "patching.sh detects PV AZ mismatch in FailedScheduling events"
+
+az_mismatch_msg=$(grep -c 'PV_AZ_MISMATCH' "$PATCHING" || true)
+assert_gt "$az_mismatch_msg" "0" "patching.sh logs PV_AZ_MISMATCH reason"
+
+# AZ mismatch check must come BEFORE the generic Insufficient check
+az_line=$(grep -n 'PersistentVolume.*node affinity' "$PATCHING" | head -1 | cut -d: -f1)
+insuf_line=$(grep -n 'FailedScheduling.*Insufficient' "$PATCHING" | head -1 | cut -d: -f1)
+if [ -n "$az_line" ] && [ -n "$insuf_line" ]; then
+    assert_gt "$insuf_line" "$az_line" "AZ mismatch check (line $az_line) comes before Insufficient check (line $insuf_line)"
+fi
+
+# Diagnostic mentions EFS and Azure Files as alternatives
+az_diag=$(grep 'PV_AZ_MISMATCH' "$PATCHING" | head -1)
+assert_contains "$az_diag" "EFS for AWS" "AZ mismatch diagnostic mentions EFS"
+assert_contains "$az_diag" "Azure Files for Azure" "AZ mismatch diagnostic mentions Azure Files"
+
+###############################################################################
+# Test 13: Syntax check — src/patching.sh has valid bash syntax
 ###############################################################################
 syntax_check=$(bash -n "$PATCHING" 2>&1); syntax_rc=$?
 assert_eq "$syntax_rc" "0" "src/patching.sh has valid bash syntax after PV detection changes"

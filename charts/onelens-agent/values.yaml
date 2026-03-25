@@ -40,6 +40,16 @@ onelens-agent:
       encryption:
         enabled: false
         diskEncryptionSetID: ""  # Azure Disk Encryption Set resource ID
+    # Azure Files parameters (used when provisioner is file.csi.azure.com)
+    # Multi-AZ storage — eliminates PV AZ-lock scheduling issues.
+    # skuName (Premium_LRS) and protocol (nfs) are hardcoded in the StorageClass template.
+    azureFiles: {}
+    # AWS EFS parameters (used when provisioner is efs.csi.aws.com)
+    # Multi-AZ storage — eliminates PV AZ-lock scheduling issues.
+    # Requires pre-created EFS filesystem. provisioningMode (efs-ap) and directoryPerms (700)
+    # are hardcoded in the StorageClass template.
+    efs:
+      fileSystemId: ""
     labels:
       Application_Name: "OnelensAgent"
       Application_Owner: "Astuto"

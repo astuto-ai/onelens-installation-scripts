@@ -23,6 +23,9 @@ onelens-agent:
       kmsKeyId: ""
     volumeTags:
       enabled: false
+    azureFiles: {}
+    efs:
+      fileSystemId: ""
     labels:
       Application_Name: "OnelensAgent"
       Application_Owner: "Astuto"

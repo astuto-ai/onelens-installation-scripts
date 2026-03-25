@@ -215,5 +215,13 @@ patching_oc_logs=$(grep -c 'Failed to create Prometheus data source' "$ROOT/src/
 assert_gt "$install_oc_logs" "0" "install.sh checks OpenCost logs for Prometheus data source error"
 assert_gt "$patching_oc_logs" "0" "patching.sh checks OpenCost logs for Prometheus data source error"
 
+# ---------------------------------------------------------------------------
+# Test 23: Both scripts detect PV AZ mismatch in _detect_pod_failure
+# ---------------------------------------------------------------------------
+install_az=$(grep -c 'PV_AZ_MISMATCH' "$ROOT/install.sh" || true)
+patching_az=$(grep -c 'PV_AZ_MISMATCH' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_az" "0" "install.sh detects PV_AZ_MISMATCH"
+assert_gt "$patching_az" "0" "patching.sh detects PV_AZ_MISMATCH"
+
 test_summary
 exit $?
