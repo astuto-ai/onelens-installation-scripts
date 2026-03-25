@@ -387,8 +387,11 @@ else
   CLUSTER_NAME=""
   ACCOUNT_ID=""
   API_BASE_URL="https://api-in.onelens.cloud"
-  CLUSTER_TOKEN=""
-  REGISTRATION_ID=""
+  # Preserve CLUSTER_TOKEN and REGISTRATION_ID from environment (injected by deployer CronJob
+  # from onelens-agent-secrets). Don't blank them — they're our fallback when helm get values
+  # fails due to RBAC. Helm upgrade will be skipped but API reporting and diagnostics continue.
+  CLUSTER_TOKEN="${CLUSTER_TOKEN:-}"
+  REGISTRATION_ID="${REGISTRATION_ID:-}"
   DEFAULT_CLUSTER_ID=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
@@ -397,10 +400,12 @@ else
 fi
 
 # Validate required identity values
+SKIP_HELM_UPGRADE=false
 if [ -z "$CLUSTER_TOKEN" ] || [ -z "$REGISTRATION_ID" ]; then
-    echo "ERROR: Could not read CLUSTER_TOKEN or REGISTRATION_ID from existing release."
+    echo "ERROR: Could not read CLUSTER_TOKEN or REGISTRATION_ID from helm release or environment."
     echo "These are required for helm upgrade. Check if onelens-agent is installed."
-    exit 1
+    echo "Skipping helm upgrade — continuing with diagnostics only."
+    SKIP_HELM_UPGRADE=true
 fi
 
 # Phase 5: Capture pre-patch state (compact — fits in 10K log limit for large clusters)
@@ -1133,7 +1138,8 @@ fi
 # upgrade calls fail with "another operation (install/upgrade/rollback) is in progress".
 # Fix: rollback to the last successful revision before attempting upgrade.
 RELEASE_STATUS=$(helm status onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.info.status' || true)
-SKIP_HELM_UPGRADE=false
+# Note: SKIP_HELM_UPGRADE may already be true (set earlier if identity values are missing).
+# Don't reset it here — only set to true, never back to false.
 if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-rollback" ] || [ "$RELEASE_STATUS" = "pending-install" ]; then
     echo "Helm release stuck in '$RELEASE_STATUS' — rolling back to last successful revision..."
     LAST_GOOD_REV=$(helm history onelens-agent -n onelens-agent -o json 2>/dev/null \
