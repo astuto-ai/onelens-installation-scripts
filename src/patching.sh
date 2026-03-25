@@ -1222,7 +1222,7 @@ if [ -n "$PATCHING_VERSION" ]; then
 fi
 HELM_CMD="helm upgrade onelens-agent onelens/onelens-agent \
   -f /globalvalues.yaml \
-  --history-max 200 \
+  --history-max 5 \
   --wait \
   --timeout=10m \
   --namespace onelens-agent"
@@ -1829,6 +1829,28 @@ _MAX_UPGRADE_RETRIES=3
 
 # Run pod remediation before helm upgrade (auto-fix stuck pods)
 _remediate_stuck_pods || true  # Don't fail patching if remediation fails
+
+# Prune stale helm release secrets to prevent ResourceQuota deadlocks.
+# Helm stores each revision as a secret. With 5-min healthcheck upgrades, secrets
+# accumulate fast. If a namespace has a ResourceQuota on secrets, helm upgrade fails
+# because it can't create the new secret, and it can't prune old ones until after
+# a successful upgrade — deadlock. Prune proactively before upgrade.
+_HELM_SECRETS=$(kubectl get secrets -n onelens-agent -l owner=helm,name=onelens-agent \
+    --sort-by=.metadata.creationTimestamp -o name 2>/dev/null || true)
+if [ -n "$_HELM_SECRETS" ]; then
+    _HELM_SECRET_COUNT=$(echo "$_HELM_SECRETS" | grep -c '^' 2>/dev/null || echo "0")
+else
+    _HELM_SECRET_COUNT=0
+fi
+if [ "$_HELM_SECRET_COUNT" -gt 5 ]; then
+    _PRUNE_COUNT=$(( _HELM_SECRET_COUNT - 5 ))
+    echo "Helm release secrets: $_HELM_SECRET_COUNT found, pruning $_PRUNE_COUNT (keeping last 5)"
+    echo "$_HELM_SECRETS" | head -n "$_PRUNE_COUNT" | while read -r secret; do
+        kubectl delete "$secret" -n onelens-agent 2>/dev/null || true
+    done
+else
+    echo "Helm release secrets: $_HELM_SECRET_COUNT found, no pruning needed"
+fi
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 eval "$HELM_CMD"

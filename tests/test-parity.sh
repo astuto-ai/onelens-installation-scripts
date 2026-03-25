@@ -222,5 +222,19 @@ patching_az=$(grep -c 'PV_AZ_MISMATCH' "$ROOT/src/patching.sh" || true)
 assert_gt "$install_az" "0" "install.sh detects PV_AZ_MISMATCH"
 assert_gt "$patching_az" "0" "patching.sh detects PV_AZ_MISMATCH"
 
+# ---------------------------------------------------------------------------
+# Test 24: Both scripts set --history-max 5 on helm commands
+# ---------------------------------------------------------------------------
+install_hm=$(grep -c '\-\-history-max 5' "$ROOT/install.sh" || true)
+patching_hm=$(grep -c '\-\-history-max 5' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_hm" "0" "install.sh sets --history-max 5"
+assert_gt "$patching_hm" "0" "patching.sh sets --history-max 5"
+
+# ---------------------------------------------------------------------------
+# Test 25: Patching.sh prunes helm release secrets before upgrade
+# ---------------------------------------------------------------------------
+patching_prune=$(grep -c 'owner=helm,name=onelens-agent' "$ROOT/src/patching.sh" || true)
+assert_gt "$patching_prune" "0" "patching.sh prunes helm release secrets before upgrade"
+
 test_summary
 exit $?
