@@ -863,6 +863,30 @@ while true; do
             break  # All pods healthy
         fi
         echo "Pods still failing after 5 min: $_FAIL_DIAG"
+
+        # OpenCost transient: crashes with FTL when Prometheus is unreachable during startup.
+        # If Prometheus is now healthy, give OpenCost one extra restart cycle to recover.
+        if [ "$_FAIL_COMPONENT" = "prometheus-opencost-exporter" ] && [ "$_FAIL_REASON" != "oom" ]; then
+            _oc_logs=$(kubectl logs "$_FAIL_POD" -n onelens-agent --tail=10 2>/dev/null || true)
+            if echo "$_oc_logs" | grep -qiE 'Failed to create Prometheus data source|connection refused.*prometheus'; then
+                _prom_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                    | awk '/prometheus-server/{print; exit}')
+                _prom_ready_col=$(echo "$_prom_line" | awk '{print $2}')
+                _prom_status_col=$(echo "$_prom_line" | awk '{print $3}')
+                if [ "$_prom_status_col" = "Running" ] && echo "$_prom_ready_col" | grep -qE '^2/2$|^1/1$'; then
+                    echo "OpenCost failing due to Prometheus dependency (transient). Prometheus is healthy — waiting for OpenCost to recover..."
+                    sleep 60
+                    if ! _detect_pod_failure; then
+                        echo "OpenCost recovered after extended wait."
+                        break
+                    fi
+                    echo "OpenCost still failing after extended wait: $_FAIL_DIAG"
+                else
+                    echo "OpenCost cannot start: Prometheus is not ready (${_prom_ready_col:-?} ${_prom_status_col:-unknown})."
+                    echo "Root cause is Prometheus, not OpenCost. OpenCost will recover once Prometheus is healthy."
+                fi
+            fi
+        fi
     else
         echo "Helm install failed (exit $INSTALL_EXIT)."
         if ! _detect_pod_failure; then

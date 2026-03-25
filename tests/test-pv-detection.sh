@@ -126,7 +126,24 @@ awk_full_line=$(echo "$restart_block" | grep -A1 '_pod_line=.*kubectl' | grep -c
 assert_gt "$awk_full_line" "0" "Awk prints full line (not just \$1) for atomic extraction"
 
 ###############################################################################
-# Test 11: Syntax check — src/patching.sh has valid bash syntax
+# Test 11: Post-restart auto-recovers when PV is gone (no "skipping" message)
+###############################################################################
+# The old behavior said "may be slow startup, skipping auto-recovery" when pod
+# was not Running but no FailedMount events existed. The fix: since PV is
+# confirmed gone, auto-recover regardless of mount events.
+skip_msg=$(grep -c 'may be slow startup.*Skipping auto-recovery' "$PATCHING" || true)
+assert_eq "$skip_msg" "0" "No 'slow startup skipping' message — auto-recovery proceeds when PV is gone"
+
+pv_confirmed_msg=$(grep -c 'PV is confirmed missing and pod did not recover' "$PATCHING" || true)
+assert_gt "$pv_confirmed_msg" "0" "Auto-recovery proceeds when PV confirmed missing and pod not Running"
+
+# Verify the auto-recovery call exists in both the mount-events path AND the no-events path
+recover_block=$(sed -n '/Volume mount failure confirmed/,/No prometheus-server pod found/p' "$PATCHING")
+recover_calls=$(echo "$recover_block" | grep -c '_auto_recover_pvc' || true)
+assert_eq "$recover_calls" "2" "Auto-recovery called in both mount-events and no-events paths"
+
+###############################################################################
+# Test 12: Syntax check — src/patching.sh has valid bash syntax
 ###############################################################################
 syntax_check=$(bash -n "$PATCHING" 2>&1); syntax_rc=$?
 assert_eq "$syntax_rc" "0" "src/patching.sh has valid bash syntax after PV detection changes"

@@ -193,5 +193,27 @@ assert_gt "$patching_cm" "0" "patching.sh manages onelens-agent-sizing-state Con
 patching_fallback=$(grep -c 'USAGE_BASED_APPLIED' "$ROOT/src/patching.sh" || true)
 assert_gt "$patching_fallback" "0" "patching.sh has USAGE_BASED_APPLIED fallback flag"
 
+# ---------------------------------------------------------------------------
+# Test 22: Both scripts handle OpenCost transient Prometheus-dependency crash
+# ---------------------------------------------------------------------------
+# After the pod health poll loop, both scripts must detect OpenCost failures
+# caused by Prometheus being temporarily unreachable and wait for recovery.
+install_oc_transient=$(grep -c 'OpenCost failing due to Prometheus dependency' "$ROOT/install.sh" || true)
+patching_oc_transient=$(grep -c 'OpenCost failing due to Prometheus dependency' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_oc_transient" "0" "install.sh handles OpenCost Prometheus-dependency transient crash"
+assert_gt "$patching_oc_transient" "0" "patching.sh handles OpenCost Prometheus-dependency transient crash"
+
+# Both scripts must check Prometheus readiness before waiting for OpenCost
+install_prom_check=$(grep -c 'OpenCost cannot start: Prometheus is not ready' "$ROOT/install.sh" || true)
+patching_prom_check=$(grep -c 'OpenCost cannot start: Prometheus is not ready' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_prom_check" "0" "install.sh logs root cause when Prometheus is not ready"
+assert_gt "$patching_prom_check" "0" "patching.sh logs root cause when Prometheus is not ready"
+
+# Both scripts must check OpenCost logs for Prometheus connection errors
+install_oc_logs=$(grep -c 'Failed to create Prometheus data source' "$ROOT/install.sh" || true)
+patching_oc_logs=$(grep -c 'Failed to create Prometheus data source' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_oc_logs" "0" "install.sh checks OpenCost logs for Prometheus data source error"
+assert_gt "$patching_oc_logs" "0" "patching.sh checks OpenCost logs for Prometheus data source error"
+
 test_summary
 exit $?

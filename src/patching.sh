@@ -910,8 +910,11 @@ if [ -n "$PROM_PVC_NAME" ]; then
                             echo "Volume mount failure confirmed. Auto-recovering PVC..."
                             _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
                         else
-                            echo "Pod not Running but no mount errors detected (may be slow startup). Skipping auto-recovery."
-                            echo "Next patching run will re-evaluate."
+                            # PV is confirmed gone and pod is not Running after restart.
+                            # Even without explicit FailedMount events (may have expired),
+                            # a missing PV + non-Running pod is sufficient for recovery.
+                            echo "PV is confirmed missing and pod did not recover after restart. Auto-recovering PVC..."
+                            _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
                         fi
                     else
                         echo "No prometheus-server pod found after restart. Skipping auto-recovery."
@@ -1835,6 +1838,31 @@ while true; do
             break
         fi
         echo "Pods still failing after 90s: $_FAIL_DIAG"
+
+        # OpenCost transient: crashes with FTL when Prometheus is unreachable during restart.
+        # If Prometheus is now healthy, give OpenCost one extra restart cycle to recover.
+        if [ "$_FAIL_COMPONENT" = "prometheus-opencost-exporter" ] && [ "$_FAIL_REASON" != "oom" ]; then
+            _oc_logs=$(kubectl logs "$_FAIL_POD" -n onelens-agent --tail=10 2>/dev/null || true)
+            if echo "$_oc_logs" | grep -qiE 'Failed to create Prometheus data source|connection refused.*prometheus'; then
+                _prom_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                    | awk '/prometheus-server/{print; exit}')
+                _prom_ready_col=$(echo "$_prom_line" | awk '{print $2}')
+                _prom_status_col=$(echo "$_prom_line" | awk '{print $3}')
+                if [ "$_prom_status_col" = "Running" ] && echo "$_prom_ready_col" | grep -qE '^2/2$|^1/1$'; then
+                    echo "OpenCost failing due to Prometheus dependency (transient). Prometheus is healthy — waiting for OpenCost to recover..."
+                    sleep 30
+                    if ! _detect_pod_failure; then
+                        echo "OpenCost recovered after extended wait."
+                        UPGRADE_FAILED=false
+                        break
+                    fi
+                    echo "OpenCost still failing after extended wait: $_FAIL_DIAG"
+                else
+                    echo "OpenCost cannot start: Prometheus is not ready (${_prom_ready_col:-?} ${_prom_status_col:-unknown})."
+                    echo "Root cause is Prometheus, not OpenCost. OpenCost will recover once Prometheus is healthy."
+                fi
+            fi
+        fi
     else
         echo "Helm upgrade failed (exit $UPGRADE_EXIT)."
         if ! _detect_pod_failure; then
