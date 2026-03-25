@@ -289,6 +289,25 @@ prometheus:
             - onelens-agent-prometheus-opencost-exporter
           type: 'A'
           port: 9003
+    - job_name: dcgm-gpu-metrics
+      honor_labels: true
+      scrape_interval: 30s
+      scrape_timeout: 10s
+      metrics_path: /metrics
+      scheme: http
+      kubernetes_sd_configs:
+        - role: endpoints
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_service_label_app]
+          regex: nvidia-dcgm-exporter
+          action: keep
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          regex: gpu-metrics
+          action: keep
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
   serverFiles:
     alerting_rules.yml: {}
     alerts: {}

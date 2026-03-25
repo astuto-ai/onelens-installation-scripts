@@ -376,11 +376,29 @@ AVG_LABELS=6
 LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 
+# --- GPU node detection ---
+GPU_NODE_COUNT=0
+TOTAL_GPU_COUNT=0
+gpu_capacities=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.capacity.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null || true)
+if [ -n "$gpu_capacities" ]; then
+    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1+0 > 0 {c++} END {print c+0}')
+    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '{s+=$1} END {print s+0}')
+fi
+if [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
+    dcgm_pods=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    if [ "$dcgm_pods" -eq 0 ] 2>/dev/null; then
+        echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
+    else
+        echo "NVIDIA DCGM exporter running ($dcgm_pods pods)"
+    fi
+fi
+
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
 
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
-echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
+echo "Setting resources for $TIER cluster ($TOTAL_PODS pods) gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
 if [ "$LABEL_MULTIPLIER" != "1.0" ]; then

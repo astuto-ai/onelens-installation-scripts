@@ -281,6 +281,24 @@ AVG_LABELS=6
 LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 
+# --- GPU node detection ---
+GPU_NODE_COUNT=0
+TOTAL_GPU_COUNT=0
+gpu_capacities=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.capacity.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null || true)
+if [ -n "$gpu_capacities" ]; then
+    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1+0 > 0 {c++} END {print c+0}')
+    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '{s+=$1} END {print s+0}')
+fi
+if [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
+    dcgm_pods=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    if [ "$dcgm_pods" -eq 0 ] 2>/dev/null; then
+        echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
+    else
+        echo "NVIDIA DCGM exporter running ($dcgm_pods pods)"
+    fi
+fi
+
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
@@ -429,7 +447,7 @@ if [ -n "$NOT_HEALTHY" ]; then
 fi
 
 # Cluster sizing inputs (the numbers that drive resource allocation)
-echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER"
+echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
 
 # Current resources (compact: cpu/memory limits per component)
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
