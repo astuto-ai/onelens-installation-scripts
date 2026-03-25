@@ -124,14 +124,13 @@ atomic_count=$(grep -c -- '--atomic' "$ROOT/src/patching.sh" || true)
 assert_eq "$atomic_count" "0" "patching does not use --atomic (continue to deployer upgrade on failure)"
 
 # ---------------------------------------------------------------------------
-# Test 14a: Label density counting awk logic matches between scripts
+# Test 14a: Label density hardcoded value matches between scripts
 # ---------------------------------------------------------------------------
-# The kubectl + awk pipeline that counts labels should be identical in both scripts.
-# Extract the full label measurement block (from "Label density measurement" to the AVG_LABELS fallback).
-install_label_measure=$(sed -n '/--- Label density measurement ---/,/LABEL_MULTIPLIER=/p' "$ROOT/install.sh" | sed 's/^[[:space:]]*//')
-patching_label_measure=$(sed -n '/--- Label density measurement ---/,/LABEL_MULTIPLIER=/p' "$ROOT/src/patching.sh" | sed 's/^[[:space:]]*//')
-assert_ne "$install_label_measure" "" "install.sh has label density measurement block"
-assert_eq "$install_label_measure" "$patching_label_measure" "label density measurement code matches (kubectl + awk pipeline)"
+# Both scripts should hardcode AVG_LABELS=6 (no runtime measurement).
+install_label_block=$(sed -n '/--- Label density ---/,/LABEL_MULTIPLIER=/p' "$ROOT/install.sh" | sed 's/^[[:space:]]*//')
+patching_label_block=$(sed -n '/--- Label density ---/,/LABEL_MULTIPLIER=/p' "$ROOT/src/patching.sh" | sed 's/^[[:space:]]*//')
+assert_ne "$install_label_block" "" "install.sh has label density block"
+assert_eq "$install_label_block" "$patching_label_block" "label density code matches (hardcoded AVG_LABELS=6)"
 
 # ---------------------------------------------------------------------------
 # Test 14: Label multiplier application code matches between scripts

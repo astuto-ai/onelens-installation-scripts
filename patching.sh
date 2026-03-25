@@ -1009,31 +1009,13 @@ fi
 echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
 echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
 
-# --- Label density measurement ---
-# Use custom-columns to avoid fetching full pod JSON (which OOMs kubectl on 1200+ pod clusters).
-# Restrict to Running pods only to reduce output size. Sample 500 pods for statistical accuracy.
-# Robustly handle different label output formats (map[...], YAML, etc).
-echo "Measuring label density across pods..."
-AVG_LABELS=$(kubectl get pods --all-namespaces --field-selector=status.phase=Running \
-    --no-headers -o custom-columns='LABELS:.metadata.labels' 2>/dev/null \
-    | grep -v '<none>' \
-    | head -500 \
-    | sed 's/^map\[//; s/\]$//' \
-    | awk 'NF>0 {
-        # Count colons: each Kubernetes label is key:value format with exactly one colon.
-        # Example: "app:myapp component:api tier:frontend" has 3 labels (3 colons).
-        # Previous approach tried to parse format but failed because labels use ":" not "=",
-        # causing label count to always return 0 and trigger unsafe 1.3x memory multiplier.
-        count = gsub(/:/, ":");
-        if(count>0) { s+=count; n++ }
-    }
-    END {if(n>0) printf "%d", s/n; else print 0}')
-if [ -z "$AVG_LABELS" ] || [ "$AVG_LABELS" -le 0 ] 2>/dev/null; then
-    AVG_LABELS="0"
-fi
+# --- Label density ---
+# Hardcoded to 6 (multiplier 1.0x) — no runtime measurement needed.
+# Removes the kubectl call that could require large memory on 500+ pod clusters.
+# If pods OOM due to high label cardinality, bump memory manually.
+AVG_LABELS=6
 LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
-
-echo "Average labels per pod: $AVG_LABELS, Label memory multiplier: ${LABEL_MULTIPLIER}x"
+echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
