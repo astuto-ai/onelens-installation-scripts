@@ -2137,7 +2137,10 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         _FAIL_COMPONENT="$component"
 
         # Classify failure
-        if echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
+        if echo "$events" | grep -qiE 'FailedScheduling.*PersistentVolume.*node affinity'; then
+            _FAIL_REASON="other"
+            _FAIL_DIAG="pod=$pod_name component=$component reason=PV_AZ_MISMATCH (PV is AZ-locked but no nodes available in that AZ. Customer must ensure node capacity in the PV's availability zone, or reinstall with multi-AZ storage: EFS for AWS, Azure Files for Azure)"
+        elif echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
             _FAIL_REASON="other"
             _FAIL_DIAG="pod=$pod_name component=$component reason=FailedScheduling (node can't fit resource request)"
         elif [ "$term_reason" = "OOMKilled" ] || echo "$pod_logs" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
