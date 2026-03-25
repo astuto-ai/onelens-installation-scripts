@@ -1591,9 +1591,15 @@ if [ -n "$PROM_PVC_NAME" ]; then
 
     if [ -n "$BOUND_PV" ]; then
         # Check 1: Does the PV object still exist?
-        PV_EXISTS=$(kubectl get pv "$BOUND_PV" --no-headers 2>/dev/null || true)
+        # Capture stderr to distinguish RBAC errors from genuine "not found".
+        # On clusters with broken ClusterRoleBindings, `kubectl get pv` returns Forbidden
+        # which was previously swallowed by 2>/dev/null, causing false "PV gone" detection.
+        PV_CHECK_RESULT=$(kubectl get pv "$BOUND_PV" --no-headers 2>&1) || true
 
-        if [ -z "$PV_EXISTS" ]; then
+        if echo "$PV_CHECK_RESULT" | grep -qiE 'forbidden|unauthorized'; then
+            echo "WARNING: Cannot verify PV '$BOUND_PV' (RBAC: $(echo "$PV_CHECK_RESULT" | head -1))."
+            echo "Skipping PV health check — RBAC prevents reading cluster-scoped PersistentVolumes."
+        elif [ -z "$PV_CHECK_RESULT" ] || echo "$PV_CHECK_RESULT" | grep -qiE 'not found|error from server'; then
             # Log the old PVC details before deleting
             OLD_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
             OLD_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
@@ -1626,35 +1632,55 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 # Data persistence is broken — writes may silently fail or the pod
                 # will crash on next restart. Proactively restart to surface the issue.
                 echo "WARNING: PV '$BOUND_PV' is gone but pod is still Running on cached VFS."
-                echo "Data persistence is broken — restarting pod to surface volume failure."
-                kubectl delete pod "$PROM_POD" -n onelens-agent --grace-period=10 2>/dev/null || true
 
-                echo "Waiting for pod restart..."
-                sleep 45
-                # Re-check: new pod should fail to mount the volume.
-                # Look for FailedMount/FailedAttachVolume events to distinguish from slow image pulls.
-                _new_pod_name=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                    | awk '/prometheus-server/ && !/Terminating/{print $1; exit}' || true)
-                _new_pod_status=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                    | awk '/prometheus-server/ && !/Terminating/{print $3; exit}' || true)
-                echo "Pod status after restart: ${_new_pod_status:-unknown}"
-
-                if [ "$_new_pod_status" = "Running" ]; then
-                    echo "Pod restarted and remounted successfully — volume was not actually gone."
-                elif [ -n "$_new_pod_name" ]; then
-                    # Confirm it's a volume issue, not a slow image pull or scheduling delay
-                    _mount_events=$(kubectl get events -n onelens-agent \
-                        --field-selector "involvedObject.name=$_new_pod_name" --no-headers 2>/dev/null \
-                        | grep -iE 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
-                    if [ -n "$_mount_events" ]; then
-                        echo "Volume mount failure confirmed. Auto-recovering PVC..."
-                        _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
-                    else
-                        echo "Pod not Running but no mount errors detected (may be slow startup). Skipping auto-recovery."
-                        echo "Next patching run will re-evaluate."
+                # Dedup guard: skip restart if pod started recently (< 10 min ago).
+                # A previous patching run may have already restarted and validated this pod.
+                _skip_restart=false
+                _pod_start=$(kubectl get pod "$PROM_POD" -n onelens-agent -o jsonpath='{.status.startTime}' 2>/dev/null || true)
+                if [ -n "$_pod_start" ]; then
+                    _pod_start_epoch=$(date -d "$_pod_start" "+%s" 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$_pod_start" "+%s" 2>/dev/null || true)
+                    _now_epoch=$(date -u "+%s")
+                    if [ -n "$_pod_start_epoch" ] && [ $((_now_epoch - _pod_start_epoch)) -lt 600 ]; then
+                        echo "Pod '$PROM_POD' started $((_now_epoch - _pod_start_epoch))s ago (< 600s). Skipping PV restart — likely already validated by a recent run."
+                        _skip_restart=true
                     fi
-                else
-                    echo "No prometheus-server pod found after restart. Skipping auto-recovery."
+                fi
+
+                if [ "$_skip_restart" = "false" ]; then
+                    echo "Data persistence is broken — restarting pod to surface volume failure."
+                    kubectl delete pod "$PROM_POD" -n onelens-agent --grace-period=10 2>/dev/null || true
+
+                    echo "Waiting for pod restart..."
+                    sleep 45
+                    # Re-check: new pod should fail to mount the volume.
+                    # Look for FailedMount/FailedAttachVolume events to distinguish from slow image pulls.
+                    # Single kubectl call to avoid race condition between name and status extraction.
+                    _pod_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                        | awk '/prometheus-server/ && !/Terminating/{print; exit}' || true)
+                    _new_pod_name=$(echo "$_pod_line" | awk '{print $1}')
+                    _new_pod_status=$(echo "$_pod_line" | awk '{print $3}')
+                    echo "Pod status after restart: ${_new_pod_status:-unknown}"
+
+                    if [ "$_new_pod_status" = "Running" ]; then
+                        echo "Pod restarted and remounted successfully — volume was not actually gone."
+                    elif [ -n "$_new_pod_name" ]; then
+                        # Confirm it's a volume issue, not a slow image pull or scheduling delay
+                        _mount_events=$(kubectl get events -n onelens-agent \
+                            --field-selector "involvedObject.name=$_new_pod_name" --no-headers 2>/dev/null \
+                            | grep -iE 'FailedAttachVolume|FailedMount|AttachVolume.Attach failed' || true)
+                        if [ -n "$_mount_events" ]; then
+                            echo "Volume mount failure confirmed. Auto-recovering PVC..."
+                            _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
+                        else
+                            # PV is confirmed gone and pod is not Running after restart.
+                            # Even without explicit FailedMount events (may have expired),
+                            # a missing PV + non-Running pod is sufficient for recovery.
+                            echo "PV is confirmed missing and pod did not recover after restart. Auto-recovering PVC..."
+                            _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
+                        fi
+                    else
+                        echo "No prometheus-server pod found after restart. Skipping auto-recovery."
+                    fi
                 fi
             else
                 echo "PV is missing but PVC is '$PVC_STATUS' and pod is '$POD_STATUS'. Skipping recovery."
@@ -2574,6 +2600,31 @@ while true; do
             break
         fi
         echo "Pods still failing after 90s: $_FAIL_DIAG"
+
+        # OpenCost transient: crashes with FTL when Prometheus is unreachable during restart.
+        # If Prometheus is now healthy, give OpenCost one extra restart cycle to recover.
+        if [ "$_FAIL_COMPONENT" = "prometheus-opencost-exporter" ] && [ "$_FAIL_REASON" != "oom" ]; then
+            _oc_logs=$(kubectl logs "$_FAIL_POD" -n onelens-agent --tail=10 2>/dev/null || true)
+            if echo "$_oc_logs" | grep -qiE 'Failed to create Prometheus data source|connection refused.*prometheus'; then
+                _prom_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                    | awk '/prometheus-server/{print; exit}')
+                _prom_ready_col=$(echo "$_prom_line" | awk '{print $2}')
+                _prom_status_col=$(echo "$_prom_line" | awk '{print $3}')
+                if [ "$_prom_status_col" = "Running" ] && echo "$_prom_ready_col" | grep -qE '^2/2$|^1/1$'; then
+                    echo "OpenCost failing due to Prometheus dependency (transient). Prometheus is healthy — waiting for OpenCost to recover..."
+                    sleep 30
+                    if ! _detect_pod_failure; then
+                        echo "OpenCost recovered after extended wait."
+                        UPGRADE_FAILED=false
+                        break
+                    fi
+                    echo "OpenCost still failing after extended wait: $_FAIL_DIAG"
+                else
+                    echo "OpenCost cannot start: Prometheus is not ready (${_prom_ready_col:-?} ${_prom_status_col:-unknown})."
+                    echo "Root cause is Prometheus, not OpenCost. OpenCost will recover once Prometheus is healthy."
+                fi
+            fi
+        fi
     else
         echo "Helm upgrade failed (exit $UPGRADE_EXIT)."
         if ! _detect_pod_failure; then
