@@ -5,5 +5,5 @@ maintainers:
     email: support@onelens.cloud
 name: onelensdeployer
 type: application
-version: 2.1.38
-appVersion: 2.1.38
+version: 2.1.39
+appVersion: 2.1.39
