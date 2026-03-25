@@ -101,31 +101,57 @@ if [ -n "$PATCH_JSON" ]; then
         echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
 
-# Ensure deployer CronJob has enough CPU for large clusters (kubectl + jq + helm on 1000+ pods)
-# Only patch UP — never downgrade a customer who set a higher value explicitly.
+# Reset deployer CronJob resources to chart defaults (200m CPU, 256Mi memory).
+# Previously, clusters with high label density needed inflated resources for the kubectl
+# label measurement call. Since v2.1.39, label density is hardcoded (no kubectl call),
+# so inflated resources are wasteful. Reset to defaults if they differ.
 # Note: _cpu_to_millicores is not available yet (library embedded below), so parse manually.
-MIN_CPU_MILLICORES=200
+TARGET_CPU_MILLICORES=200
+TARGET_MEMORY_MI=256
 CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
+CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || true)
+
+NEED_CPU_PATCH=false
+NEED_MEM_PATCH=false
+
 if [ -n "$CURRENT_CPU" ]; then
-    # Convert to millicores: "50m" → 50, "0.2" → 200
     if echo "$CURRENT_CPU" | grep -q 'm$'; then
         CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | sed 's/m$//')
     else
         CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | awk '{printf "%.0f", $1 * 1000}')
     fi
-    if [ "$CURRENT_CPU_MILLICORES" -lt "$MIN_CPU_MILLICORES" ] 2>/dev/null; then
-        echo "Updating CronJob CPU from ${CURRENT_CPU} to ${MIN_CPU_MILLICORES}m..."
-        kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
-          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
-            \"name\":\"onelensupdater\",
-            \"resources\":{\"requests\":{\"cpu\":\"${MIN_CPU_MILLICORES}m\"},\"limits\":{\"cpu\":\"${MIN_CPU_MILLICORES}m\"}}
-          }]}}}}}
-        }" 2>/dev/null && \
-            echo "CronJob CPU patched successfully" || \
-            echo "WARNING: Failed to patch CronJob CPU"
-    else
-        echo "CronJob CPU already sufficient (${CURRENT_CPU})"
+    if [ "$CURRENT_CPU_MILLICORES" -ne "$TARGET_CPU_MILLICORES" ] 2>/dev/null; then
+        NEED_CPU_PATCH=true
     fi
+fi
+
+if [ -n "$CURRENT_MEM" ]; then
+    # Convert to Mi: "256Mi" → 256, "1Gi" → 1024
+    if echo "$CURRENT_MEM" | grep -q 'Gi$'; then
+        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Gi$//' | awk '{printf "%.0f", $1 * 1024}')
+    else
+        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Mi$//')
+    fi
+    if [ "$CURRENT_MEM_MI" -ne "$TARGET_MEMORY_MI" ] 2>/dev/null; then
+        NEED_MEM_PATCH=true
+    fi
+fi
+
+if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
+    echo "Resetting CronJob resources to defaults (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
+      \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+        \"name\":\"onelensupdater\",
+        \"resources\":{
+          \"requests\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"},
+          \"limits\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"}
+        }
+      }]}}}}}
+    }" 2>/dev/null && \
+        echo "CronJob resources reset successfully" || \
+        echo "WARNING: Failed to reset CronJob resources"
+else
+    echo "CronJob resources already at defaults (${CURRENT_CPU}, ${CURRENT_MEM})"
 fi
 
 # Ensure deployer CronJob has backoffLimit=0 (no internal retries).
