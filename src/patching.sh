@@ -179,8 +179,8 @@ fi
 # the cluster to go dormant. We can't prevent this from patching.sh (the old entrypoint
 # runs AFTER this script and overwrites the flag). Log a warning so it appears in logs.
 DEPLOYER_VERSION=""
-DEPLOYER_CHART_RAW=$(helm list -n onelens-agent -o json 2>/dev/null \
-    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' 2>/dev/null || true)
+DEPLOYER_CHART_RAW=$(helm list -n onelens-agent -f '^onelensdeployer$' -o json 2>/dev/null \
+    | jq -r '.[0].chart // empty' 2>/dev/null || true)
 if [ -n "$DEPLOYER_CHART_RAW" ]; then
     DEPLOYER_VERSION=$(echo "$DEPLOYER_CHART_RAW" | sed 's/onelensdeployer-//')
     DEPLOYER_MAJOR=$(echo "$DEPLOYER_VERSION" | cut -d. -f1)

@@ -66,7 +66,13 @@ elif [ "$deployment_type" = "cronjob" ]; then
   patching_mode=$(echo "$API_RESPONSE" | jq -r '.data.patching_mode // empty')
   healthcheck_failures=$(echo "$API_RESPONSE" | jq -r '.data.healthcheck_failures // "0"')
 
-  echo "Cluster version: $current_version, patching version: $patching_version, enabled: $patching_enabled, mode: ${patching_mode:-oneshot}"
+  # Detect deployer chart version from CronJob image tag (helm not available in this image)
+  DEPLOYER_VERSION=$(kubectl get cronjob onelensupdater -n onelens-agent \
+      -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[?(@.name=="onelensupdater")].image}' \
+      2>/dev/null | sed 's/.*://' | sed 's/^v//')
+  DEPLOYER_VERSION="${DEPLOYER_VERSION:-unknown}"
+
+  echo "Cluster version: $current_version, patching version: $patching_version, enabled: $patching_enabled, mode: ${patching_mode:-oneshot}, deployer: $DEPLOYER_VERSION"
 
   # ─── Mode routing ───────────────────────────────────────────────────
   # STRICT: only literal "healthcheck" activates new mode.
@@ -140,7 +146,8 @@ elif [ "$deployment_type" = "cronjob" ]; then
             --arg reg_id "$REGISTRATION_ID" \
             --arg token "$CLUSTER_TOKEN" \
             --arg ts "$current_timestamp" \
-            '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: "healthy", last_healthy_at: $ts, healthcheck_failures: 0}}')
+            --arg dv "$DEPLOYER_VERSION" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: "healthy", last_healthy_at: $ts, healthcheck_failures: 0, deployer_version: $dv}}')
         curl -s --max-time 10 --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null 2>&1 || true
