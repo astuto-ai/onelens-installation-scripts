@@ -56,7 +56,7 @@ call_tier 0
 assert_eq "$(get_tier)" "tiny" "0 pods -> tiny tier"
 assert_all_resource_vars "tiny(0)" \
     "100m" "150Mi"  "100m" "150Mi"  \
-    "100m" "128Mi"  "100m" "128Mi"  \
+    "100m" "192Mi"  "100m" "192Mi"  \
     "100m" "256Mi"  "300m" "384Mi"  \
     "50m"  "64Mi"   "50m"  "64Mi"   \
     "50m"  "64Mi"   "50m"  "64Mi"
