@@ -179,8 +179,8 @@ fi
 # the cluster to go dormant. We can't prevent this from patching.sh (the old entrypoint
 # runs AFTER this script and overwrites the flag). Log a warning so it appears in logs.
 DEPLOYER_VERSION=""
-DEPLOYER_CHART_RAW=$(helm list -n onelens-agent -o json 2>/dev/null \
-    | jq -r '.[] | select(.name=="onelensdeployer") | .chart' 2>/dev/null || true)
+DEPLOYER_CHART_RAW=$(helm list -n onelens-agent -f '^onelensdeployer$' -o json 2>/dev/null \
+    | jq -r '.[0].chart // empty' 2>/dev/null || true)
 if [ -n "$DEPLOYER_CHART_RAW" ]; then
     DEPLOYER_VERSION=$(echo "$DEPLOYER_CHART_RAW" | sed 's/onelensdeployer-//')
     DEPLOYER_MAJOR=$(echo "$DEPLOYER_VERSION" | cut -d. -f1)
@@ -284,7 +284,7 @@ _max_memory() {
 # These prevent usage-based from going absurdly low (zero usage) or high (runaway OOM doubling).
 _USAGE_FLOOR_PROM_MEM=150   # tiny tier Prometheus memory (Mi)
 _USAGE_FLOOR_KSM_MEM=64     # tiny tier KSM memory (Mi)
-_USAGE_FLOOR_OPENCOST_MEM=128 # tiny tier OpenCost memory (Mi)
+_USAGE_FLOOR_OPENCOST_MEM=192 # tiny tier OpenCost memory (Mi)
 _USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
 _USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
 _USAGE_CAP_PROM_MEM=4800    # 2x very-large Prometheus memory (Mi)
@@ -763,9 +763,9 @@ select_resource_tier() {
         PROMETHEUS_MEMORY_LIMIT="150Mi"
 
         OPENCOST_CPU_REQUEST="100m"
-        OPENCOST_MEMORY_REQUEST="128Mi"
+        OPENCOST_MEMORY_REQUEST="192Mi"
         OPENCOST_CPU_LIMIT="100m"
-        OPENCOST_MEMORY_LIMIT="128Mi"
+        OPENCOST_MEMORY_LIMIT="192Mi"
 
         ONELENS_CPU_REQUEST="100m"
         ONELENS_MEMORY_REQUEST="256Mi"
