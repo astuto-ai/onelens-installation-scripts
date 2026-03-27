@@ -379,7 +379,7 @@ prometheus-opencost-exporter:
           cpu: '10m'
           memory: '55Mi'
         limits:
-          cpu: '999m'
+          cpu: '1'
           memory: '1Gi'
       persistence:
         enabled: false
