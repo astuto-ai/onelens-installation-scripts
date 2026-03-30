@@ -737,6 +737,50 @@ if [ -n "$PROM_SVC" ]; then
             _OUT_CPU="$new_cpu"
         }
 
+        # Before usage-based evaluation, ensure tier values don't drop below helm-current.
+        # Without this, OOM doubling starts from the tier base (e.g., 1600Mi for extra-large)
+        # instead of the actual running value (e.g., 4800Mi), causing a downsize.
+        if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
+            _upguard_mem() {
+                local path="$1" var="$2"
+                local existing
+                existing=$(echo "$CURRENT_VALUES" | jq -r "$path // empty")
+                if [ -n "$existing" ]; then
+                    local kept
+                    kept=$(_max_memory "$existing" "${!var}")
+                    if [ "$kept" != "${!var}" ]; then
+                        echo "  $(echo "$var" | tr '_' ' '): preserving helm-current $existing (tier was ${!var})"
+                    fi
+                    eval "$var=\"$kept\""
+                fi
+            }
+            _upguard_cpu() {
+                local path="$1" var="$2"
+                local existing
+                existing=$(echo "$CURRENT_VALUES" | jq -r "$path // empty")
+                if [ -n "$existing" ]; then
+                    local kept
+                    kept=$(_max_cpu "$existing" "${!var}")
+                    if [ "$kept" != "${!var}" ]; then
+                        echo "  $(echo "$var" | tr '_' ' '): preserving helm-current $existing (tier was ${!var})"
+                    fi
+                    eval "$var=\"$kept\""
+                fi
+            }
+            _upguard_mem '.prometheus.server.resources.limits.memory' PROMETHEUS_MEMORY_LIMIT
+            _upguard_mem '.prometheus.server.resources.requests.memory' PROMETHEUS_MEMORY_REQUEST
+            _upguard_cpu '.prometheus.server.resources.limits.cpu' PROMETHEUS_CPU_LIMIT
+            _upguard_cpu '.prometheus.server.resources.requests.cpu' PROMETHEUS_CPU_REQUEST
+            _upguard_mem '.prometheus["kube-state-metrics"].resources.limits.memory' KSM_MEMORY_LIMIT
+            _upguard_mem '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
+            _upguard_cpu '.prometheus["kube-state-metrics"].resources.limits.cpu' KSM_CPU_LIMIT
+            _upguard_cpu '.prometheus["kube-state-metrics"].resources.requests.cpu' KSM_CPU_REQUEST
+            _upguard_mem '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory' OPENCOST_MEMORY_LIMIT
+            _upguard_mem '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory' OPENCOST_MEMORY_REQUEST
+            _upguard_cpu '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu' OPENCOST_CPU_LIMIT
+            _upguard_cpu '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.cpu' OPENCOST_CPU_REQUEST
+        fi
+
         # Evaluate: Prometheus
         _evaluate_and_log "prometheus-server" "prometheus-server" \
             "$PROMETHEUS_MEMORY_LIMIT" "$PROMETHEUS_CPU_LIMIT" \
