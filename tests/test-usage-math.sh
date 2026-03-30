@@ -9,20 +9,20 @@ set_test_file "test-usage-math.sh"
 # apply_cpu_multiplier
 ###############################################################################
 
-assert_eq "$(apply_cpu_multiplier "100m" 1.25)" "125m" \
-    "apply_cpu_multiplier 100m x 1.25 = 125m"
+assert_eq "$(apply_cpu_multiplier "100m" 1.25)" "150m" \
+    "apply_cpu_multiplier 100m x 1.25 = 150m (rounded to 50m)"
 
 assert_eq "$(apply_cpu_multiplier "1" 1.25)" "1250m" \
     "apply_cpu_multiplier 1 core x 1.25 = 1250m"
 
-assert_eq "$(apply_cpu_multiplier "0.5" 1.25)" "625m" \
-    "apply_cpu_multiplier 0.5 core x 1.25 = 625m"
+assert_eq "$(apply_cpu_multiplier "0.5" 1.25)" "650m" \
+    "apply_cpu_multiplier 0.5 core x 1.25 = 650m (rounded to 50m)"
 
 assert_eq "$(apply_cpu_multiplier "0m" 1.25)" "0m" \
     "apply_cpu_multiplier 0m x 1.25 = 0m"
 
-assert_eq "$(apply_cpu_multiplier "200m" 1.35)" "270m" \
-    "apply_cpu_multiplier 200m x 1.35 = 270m"
+assert_eq "$(apply_cpu_multiplier "200m" 1.35)" "300m" \
+    "apply_cpu_multiplier 200m x 1.35 = 300m (rounded to 50m)"
 
 ###############################################################################
 # _clamp_resource
@@ -47,9 +47,9 @@ assert_eq "$(_clamp_resource 2000 100 2000)" "2000" \
 # calculate_usage_memory
 ###############################################################################
 
-# 200MB * 1.35 = 270MB → 258Mi (200000000 / 1048576 * 1.35 ≈ 257.5 → 258)
-assert_eq "$(calculate_usage_memory 200000000 1.35 150 4800)" "258Mi" \
-    "calculate_usage_memory normal: 200MB * 1.35 = 258Mi"
+# 200MB * 1.35 = 270MB → 258Mi raw → rounded to 300Mi
+assert_eq "$(calculate_usage_memory 200000000 1.35 150 4800)" "300Mi" \
+    "calculate_usage_memory normal: 200MB * 1.35 = 300Mi (rounded to 100)"
 
 # 10MB * 1.35 = 13.5Mi → below floor 150 → 150Mi
 assert_eq "$(calculate_usage_memory 10000000 1.35 150 4800)" "150Mi" \
@@ -67,9 +67,9 @@ assert_eq "$(calculate_usage_memory "" 1.35 150 4800)" "" \
 assert_eq "$(calculate_usage_memory 0 1.35 150 4800)" "" \
     "calculate_usage_memory zero input: returns empty"
 
-# 1GB * 1.35 = 1382Mi
-assert_eq "$(calculate_usage_memory 1073741824 1.35 150 4800)" "1383Mi" \
-    "calculate_usage_memory 1GB * 1.35 = 1383Mi (ceil)"
+# 1GB * 1.35 = 1383Mi raw → rounded to 1400Mi
+assert_eq "$(calculate_usage_memory 1073741824 1.35 150 4800)" "1400Mi" \
+    "calculate_usage_memory 1GB * 1.35 = 1400Mi (rounded to 100)"
 
 ###############################################################################
 # calculate_usage_cpu
@@ -133,8 +133,8 @@ assert_eq "$?" "0" "is_safe_downsize: 500Mi > 400Mi = safe (upsize is always saf
 # calculate_oom_response_memory
 ###############################################################################
 
-assert_eq "$(calculate_oom_response_memory "384Mi" 4800)" "768Mi" \
-    "calculate_oom_response_memory: 384Mi → 768Mi"
+assert_eq "$(calculate_oom_response_memory "384Mi" 4800)" "800Mi" \
+    "calculate_oom_response_memory: 384Mi → 800Mi (768 rounded to 100)"
 
 assert_eq "$(calculate_oom_response_memory "2400Mi" 4800)" "4800Mi" \
     "calculate_oom_response_memory: 2400Mi → 4800Mi (at cap)"

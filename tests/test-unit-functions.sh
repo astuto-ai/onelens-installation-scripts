@@ -21,8 +21,8 @@ assert_eq "$(apply_memory_multiplier "0Mi" 1.3)" "0Mi" \
 assert_eq "$(apply_memory_multiplier "1000Mi" 2.0)" "2000Mi" \
     "apply_memory_multiplier 1000Mi x 2.0 = 2000Mi"
 
-assert_eq "$(apply_memory_multiplier "256Mi" 1.6)" "410Mi" \
-    "apply_memory_multiplier 256Mi x 1.6 = 410Mi"
+assert_eq "$(apply_memory_multiplier "256Mi" 1.6)" "500Mi" \
+    "apply_memory_multiplier 256Mi x 1.6 = 500Mi (410 rounded to 100)"
 
 ###############################################################################
 # _cpu_to_millicores
