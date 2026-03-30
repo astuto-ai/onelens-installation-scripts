@@ -999,6 +999,7 @@ echo "Calculating cluster pod capacity from workload controllers..."
 # Manual override: if POD_COUNT_OVERRIDE is set (via --set podCountOverride=5000),
 # skip all kubectl counting and use the provided value directly.
 # This is a safety valve for clusters where kubectl OOMs even with per-namespace counting.
+_EARLY_EXIT=false
 if [ -n "$POD_COUNT_OVERRIDE" ] && [ "$POD_COUNT_OVERRIDE" -gt 0 ] 2>/dev/null; then
     echo "Using manual pod count override: $POD_COUNT_OVERRIDE (kubectl counting bypassed)"
     DEPLOY_PODS=$POD_COUNT_OVERRIDE
@@ -1014,13 +1015,12 @@ if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
     echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
 fi
 
-# Pod counting via per-namespace kubectl calls.
+# Pod counting via per-namespace kubectl calls with early exit for large clusters.
 # kubectl get --all-namespaces loads ALL objects into memory before output,
-# which OOMs the deployer container on large clusters (4000+ deployments at
-# 50-100KB each with helm annotations and managed-fields exceeds 1Gi).
+# which OOMs the deployer container on large clusters (4000+ deployments).
 # Per-namespace counting keeps memory bounded — each call loads only that
-# namespace's objects. HPA awareness is not used; usage-based sizing in
-# patching corrects tier selection after Prometheus has 72h of data.
+# namespace's objects. If running total exceeds 1500 pods, stop counting
+# and use extra-large tier — OOM recovery + usage-based sizing will adjust.
 
 _NS_RAW=$(kubectl get namespaces --no-headers 2>/dev/null | awk '{print $1}')
 _NS_COUNT=$(echo "$_NS_RAW" | wc -l | tr -d '[:space:]')
@@ -1040,6 +1040,15 @@ while read -r _ns; do
     STS_PODS=$((STS_PODS + _s))
     DS_PODS=$((DS_PODS + _ds))
     _ns_done=$((_ns_done + 1))
+
+    # Early exit: large cluster detected, use extra-large tier
+    _current_total=$((DEPLOY_PODS + STS_PODS + DS_PODS))
+    if [ "$_current_total" -gt 1500 ]; then
+        echo "Large cluster detected ($_current_total pods after $_ns_done/$_NS_COUNT namespaces) — using extra-large tier"
+        _EARLY_EXIT=true
+        break
+    fi
+
     # Log progress every 10 namespaces on large clusters
     if [ "$_NS_COUNT" -gt 20 ] && [ $((_ns_done % 10)) -eq 0 ]; then
         echo "  Scanned $_ns_done/$_NS_COUNT namespaces (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS)..."
@@ -1052,8 +1061,17 @@ fi # end POD_COUNT_OVERRIDE check
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
 # Pod counts calculated above via text+awk (no library functions needed)
-DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
+if [ "$_EARLY_EXIT" = "true" ]; then
+    # Large cluster: use extra-large tier. OOM recovery + usage-based sizing will adjust.
+    # DESIRED_PODS is partial (only counted until threshold). TOTAL_PODS is the tier target.
+    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
+    TOTAL_PODS=1200
+    echo "Cluster pod capacity: $DESIRED_PODS+ desired (partial count, stopped early)"
+    echo "Using extra-large tier (TOTAL_PODS=$TOTAL_PODS) — will self-correct via usage-based sizing"
+else
+    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
+    TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
+fi
 
 # Fallback: if desired pods calculation returned 0 or failed, use running pod count
 if [ "$TOTAL_PODS" -le 0 ]; then
@@ -1063,8 +1081,10 @@ if [ "$TOTAL_PODS" -le 0 ]; then
     TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
 fi
 
-echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
-echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
+if [ "$_EARLY_EXIT" != "true" ]; then
+    echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
+    echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
+fi
 
 # --- Label density ---
 # Hardcoded to 6 (multiplier 1.0x) — no runtime measurement needed.
