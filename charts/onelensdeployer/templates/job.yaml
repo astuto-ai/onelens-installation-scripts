@@ -37,6 +37,10 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            {{- if .Values.podCountOverride }}
+            - name: POD_COUNT_OVERRIDE
+              value: {{ .Values.podCountOverride | quote }}
+            {{- end }}
             {{- $deploymentLabels := merge (default dict (default dict .Values.globals).labels) (default dict .Values.job.labels) }}
             {{- if $deploymentLabels }}
             - name: DEPLOYMENT_LABELS

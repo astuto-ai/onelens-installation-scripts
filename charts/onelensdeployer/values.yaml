@@ -164,6 +164,15 @@ rbac:
 globals:
   labels: {}
 # ==================================================================================
+# POD COUNT OVERRIDE (optional)
+# ==================================================================================
+# Set this to bypass kubectl pod counting on very large clusters (4000+ deployments)
+# where kubectl OOMs. The value is the total desired pod count across all workloads.
+# Example: --set podCountOverride=5000
+# Once Prometheus has 72h of data, usage-based sizing takes over automatically.
+podCountOverride: ""
+
+# ==================================================================================
 # INSTALLATION JOB
 # ==================================================================================
 # One-time job that performs initial installation using shared RBAC permissions

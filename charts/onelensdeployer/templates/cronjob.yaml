@@ -55,6 +55,10 @@ spec:
                 - name: {{ $key }}
                   value: {{ $value | quote }}
                 {{- end }}
+                {{- if .Values.podCountOverride }}
+                - name: POD_COUNT_OVERRIDE
+                  value: {{ .Values.podCountOverride | quote }}
+                {{- end }}
                 - name: REGISTRATION_ID
                   valueFrom:
                     secretKeyRef:
