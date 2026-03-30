@@ -39,8 +39,39 @@ _send_patching_logs() {
 }
 trap _send_patching_logs EXIT
 
+# Bootstrap credentials from environment early so milestone reporting works from the start.
+# CronJob template injects REGISTRATION_ID and CLUSTER_TOKEN from onelens-agent-secrets.
+# These may be overwritten later by helm get values, but env vars are available immediately.
+REGISTRATION_ID="${REGISTRATION_ID:-}"
+CLUSTER_TOKEN="${CLUSTER_TOKEN:-}"
+
+# Milestone reporting: send partial patching_logs to the API mid-run.
+# If the run OOMs or times out, we can see in the DB how far it got.
+# Each call is a single curl (~100ms) — negligible on a 5+ min run.
+_report_milestone() {
+    if [ -z "$REGISTRATION_ID" ] || [ -z "$CLUSTER_TOKEN" ]; then return; fi
+    local log_content
+    log_content=$(cat "$_PATCH_LOG_FILE" 2>/dev/null || true)
+    if [ ${#log_content} -gt 100000 ]; then
+        log_content="[truncated]...${log_content: -99900}"
+    fi
+    local payload
+    payload=$(jq -n \
+        --arg reg_id "$REGISTRATION_ID" \
+        --arg token "$CLUSTER_TOKEN" \
+        --arg plogs "$log_content" \
+        '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_logs: $plogs}}' 2>/dev/null)
+    if [ -n "$payload" ]; then
+        curl -s --max-time 5 --location --request PUT \
+            "https://api-in.onelens.cloud/v1/kubernetes/cluster-version" \
+            --header 'Content-Type: application/json' \
+            --data "$payload" >/dev/null 2>&1 || true
+    fi
+}
+
 # Phase 1: Prerequisite Checks
 echo "Checking prerequisites..."
+_report_milestone  # M1: script-started — proves download + credentials work
 
 HELM_VERSION="v3.13.2"
 KUBECTL_VERSION="v1.28.2"
@@ -71,6 +102,7 @@ if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
     exit 1
 fi
 echo "Tools ready: helm $(helm version --short 2>/dev/null), kubectl $(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'unknown')"
+_report_milestone  # M2: tools-ready — helm/kubectl installed
 
 # Immediately set 5-min schedule and raise activeDeadlineSeconds — ensures retries
 # even if anything below fails, and prevents pod kill during 10m helm timeout.
@@ -995,6 +1027,7 @@ select_retention_tier() {
 
 # --- Pod count: use desired/max replicas from workload controllers ---
 echo "Calculating cluster pod capacity from workload controllers..."
+_report_milestone  # M4: pod-counting-start — about to scan namespaces (OOM risk on mega clusters)
 
 # Manual override: if POD_COUNT_OVERRIDE is set (via --set podCountOverride=5000),
 # skip all kubectl counting and use the provided value directly.
@@ -1115,6 +1148,7 @@ fi
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
+_report_milestone  # M5: pod-counting-done — survived namespace scan, tier selected
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
 if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
@@ -1239,6 +1273,8 @@ if [ -z "$CLUSTER_TOKEN" ] || [ -z "$REGISTRATION_ID" ]; then
     SKIP_HELM_UPGRADE=true
 fi
 
+_report_milestone  # M3: credentials-ready — identity extracted, about to diagnose
+
 # Phase 5: Capture pre-patch state (compact — fits in 10K log limit for large clusters)
 
 echo ""
@@ -1292,6 +1328,7 @@ echo ""
 # StorageClass (onelens-sc), which preserves encryption and KMS settings from install.
 
 echo "Checking Prometheus health..."
+_report_milestone  # M6: prometheus-health — values set, checking usage data
 
 # Get the Prometheus service endpoint
 PROM_SVC=$(kubectl get svc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
@@ -2728,6 +2765,7 @@ else
 fi
 
 echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
+_report_milestone  # M7: helm-upgrade-start — all sizing done, about to apply
 eval "$HELM_CMD"
 UPGRADE_EXIT=$?
 
