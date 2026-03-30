@@ -969,6 +969,16 @@ select_retention_tier() {
 # --- Pod count: use desired/max replicas from workload controllers ---
 echo "Calculating cluster pod capacity from workload controllers..."
 
+# Manual override: if POD_COUNT_OVERRIDE is set (via --set podCountOverride=5000),
+# skip all kubectl counting and use the provided value directly.
+# This is a safety valve for clusters where kubectl OOMs even with per-namespace counting.
+if [ -n "$POD_COUNT_OVERRIDE" ] && [ "$POD_COUNT_OVERRIDE" -gt 0 ] 2>/dev/null; then
+    echo "Using manual pod count override: $POD_COUNT_OVERRIDE (kubectl counting bypassed)"
+    DEPLOY_PODS=$POD_COUNT_OVERRIDE
+    STS_PODS=0
+    DS_PODS=0
+else
+
 # Check cluster-wide read access — if the deployer SA can't list resources across
 # namespaces (broken RoleBinding from v1.x upgrade), pod counting returns 0 silently.
 # Warn but proceed — usage-based sizing will correct after Prometheus has data.
@@ -977,45 +987,39 @@ if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
     echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
 fi
 
-# Collect cluster data using text output (--no-headers) — zero JSON buffering.
-# jsonpath truncates on large clusters (1200+ deployments returns only 304).
-# Text output with awk is reliable at any scale and uses minimal memory.
+# Pod counting via per-namespace kubectl calls.
+# kubectl get --all-namespaces loads ALL objects into memory before output,
+# which OOMs the deployer container on large clusters (4000+ deployments at
+# 50-100KB each with helm annotations and managed-fields exceeds 1Gi).
+# Per-namespace counting keeps memory bounded — each call loads only that
+# namespace's objects. HPA awareness is not used; usage-based sizing in
+# patching corrects tier selection after Prometheus has 72h of data.
 
-# HPAs: extract to temp file for join (needed by both deploy and sts counts)
-# Use explicit custom-columns to avoid field position errors with variable-width columns
-_HPA_TMP=$(mktemp 2>/dev/null || echo "/tmp/_hpa_$$")
-kubectl get hpa --all-namespaces --no-headers \
-    -o custom-columns=NS:.metadata.namespace,KIND:.spec.scaleTargetRef.kind,NAME:.spec.scaleTargetRef.name,MAX:.spec.maxReplicas \
-    2>/dev/null | awk '{print $1 "\t" $2 "\t" $3 "\t" $4}' > "$_HPA_TMP"
+_NS_RAW=$(kubectl get namespaces --no-headers 2>/dev/null | awk '{print $1}')
+_NS_COUNT=$(echo "$_NS_RAW" | wc -l | tr -d '[:space:]')
+echo "Counting workloads across $_NS_COUNT namespaces..."
 
-# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from spec.replicas)
-# Use custom-columns to avoid field position errors with variable-width NAME columns
-DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers \
-    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
-    2>/dev/null \
-    | awk -v kind="Deployment" '
-BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
-{ key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
-END { print total+0 }')
+DEPLOY_PODS=0; STS_PODS=0; DS_PODS=0
+_ns_done=0
+while read -r _ns; do
+    [ -z "$_ns" ] && continue
+    _d=$(kubectl get deployments -n "$_ns" --no-headers 2>/dev/null \
+        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
+    _s=$(kubectl get statefulsets -n "$_ns" --no-headers 2>/dev/null \
+        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
+    _ds=$(kubectl get daemonsets -n "$_ns" --no-headers 2>/dev/null \
+        | awk '{total+=$2} END{print total+0}')
+    DEPLOY_PODS=$((DEPLOY_PODS + _d))
+    STS_PODS=$((STS_PODS + _s))
+    DS_PODS=$((DS_PODS + _ds))
+    _ns_done=$((_ns_done + 1))
+    # Log progress every 10 namespaces on large clusters
+    if [ "$_NS_COUNT" -gt 20 ] && [ $((_ns_done % 10)) -eq 0 ]; then
+        echo "  Scanned $_ns_done/$_NS_COUNT namespaces (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS)..."
+    fi
+done <<< "$_NS_RAW"
 
-# StatefulSets: HPA-aware count (same logic)
-# Use custom-columns to avoid field position errors
-STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers \
-    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
-    2>/dev/null \
-    | awk -v kind="StatefulSet" '
-BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
-{ key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
-END { print total+0 }')
-
-rm -f "$_HPA_TMP"
-
-# DaemonSets: sum desiredNumberScheduled from status
-# Use custom-columns to avoid field position errors
-DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers \
-    -o custom-columns=NS:.metadata.namespace,DESIRED:.status.desiredNumberScheduled \
-    2>/dev/null \
-    | awk '{total+=$2} END{print total+0}')
+fi # end POD_COUNT_OVERRIDE check
 
 # Node count for logging
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
