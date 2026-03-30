@@ -211,13 +211,20 @@ fi
 ###############################################################################
 
 # apply_memory_multiplier "$mem_str" "$multiplier"
-# Multiply a memory string (e.g. "384Mi") by a float multiplier, rounding up.
-# Example: "384Mi" x 1.3 → "500Mi"
+# Multiply a memory string (e.g. "384Mi") by a float multiplier, rounded to clean multiples.
+# Values <100Mi round up to nearest 10. Values >=100Mi round up to nearest 100.
+# Avoids odd values (768Mi, 1536Mi) that can cause Kubernetes scheduling issues.
+# Example: "384Mi" x 1.5 → "600Mi", "64Mi" x 1.25 → "80Mi"
 apply_memory_multiplier() {
     local mem_str="$1"
     local multiplier="$2"
     local mem_val="${mem_str%Mi}"
-    local result=$(echo "$mem_val $multiplier" | awk '{printf "%d", int($1 * $2 + 0.99)}')
+    local result=$(echo "$mem_val $multiplier" | awk '{
+        raw = int($1 * $2 + 0.99)
+        if (raw < 100) { result = int((raw + 9) / 10) * 10 }
+        else           { result = int((raw + 99) / 100) * 100 }
+        printf "%d", result
+    }')
     echo "${result}Mi"
 }
 
@@ -288,18 +295,22 @@ _USAGE_FLOOR_OPENCOST_MEM=192 # tiny tier OpenCost memory (Mi)
 _USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
 _USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
 _USAGE_CAP_PROM_MEM=4800    # 2x very-large Prometheus memory (Mi)
-_USAGE_CAP_KSM_MEM=1024     # 2x very-large KSM memory (Mi)
-_USAGE_CAP_OPENCOST_MEM=1536 # 2x very-large OpenCost memory (Mi)
-_USAGE_CAP_AGENT_MEM=2560   # 2x very-large Agent memory (Mi)
+_USAGE_CAP_KSM_MEM=2048     # max KSM memory for mega clusters (4000+ pods)
+_USAGE_CAP_OPENCOST_MEM=2048 # max OpenCost memory for mega clusters (4000+ pods)
+_USAGE_CAP_AGENT_MEM=4096   # max agent memory for mega clusters (4000+ pods)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
 
 # apply_cpu_multiplier "$cpu_str" "$multiplier"
-# Multiply a CPU string by a float multiplier, returning millicores format.
-# Examples: "100m" x 1.25 → "125m", "1" x 1.25 → "1250m", "0.5" x 1.25 → "625m"
+# Multiply a CPU string by a float multiplier, rounded up to nearest 50m (cgroup-safe).
+# Examples: "100m" x 1.25 → "150m", "200m" x 1.5 → "300m"
 apply_cpu_multiplier() {
     local cpu_str="$1" multiplier="$2"
     local mc=$(_cpu_to_millicores "$cpu_str")
-    local result=$(echo "$mc $multiplier" | awk '{printf "%d", int($1 * $2 + 0.99)}')
+    local result=$(echo "$mc $multiplier" | awk '{
+        raw = int($1 * $2 + 0.99)
+        result = int((raw + 49) / 50) * 50
+        printf "%d", result
+    }')
     echo "${result}m"
 }
 
@@ -318,18 +329,28 @@ _clamp_resource() {
 calculate_usage_memory() {
     local bytes="$1" buffer="$2" floor="$3" cap="$4"
     if [ -z "$bytes" ] || [ "$bytes" = "0" ]; then echo ""; return; fi
-    local mi=$(echo "$bytes $buffer" | awk '{printf "%d", int($1 / 1048576 * $2 + 0.99)}')
+    local mi=$(echo "$bytes $buffer" | awk '{
+        raw = int($1 / 1048576 * $2 + 0.99)
+        if (raw < 100) { result = int((raw + 9) / 10) * 10 }
+        else           { result = int((raw + 99) / 100) * 100 }
+        printf "%d", result
+    }')
     mi=$(_clamp_resource "$mi" "$floor" "$cap")
     echo "${mi}Mi"
 }
 
 # calculate_usage_cpu "$max_72h_cores" "$buffer" "$floor" "$cap"
 # Convert max cores from Prometheus to millicores with buffer, clamped.
-# Returns millicores string (e.g. "125m"). Returns empty if input is empty/zero.
+# Rounded up to nearest 50m (cgroup-safe).
+# Returns millicores string (e.g. "150m"). Returns empty if input is empty/zero.
 calculate_usage_cpu() {
     local cores="$1" buffer="$2" floor="$3" cap="$4"
     if [ -z "$cores" ] || [ "$cores" = "0" ]; then echo ""; return; fi
-    local mc=$(echo "$cores $buffer" | awk '{printf "%d", int($1 * 1000 * $2 + 0.99)}')
+    local mc=$(echo "$cores $buffer" | awk '{
+        raw = int($1 * 1000 * $2 + 0.99)
+        result = int((raw + 49) / 50) * 50
+        printf "%d", result
+    }')
     mc=$(_clamp_resource "$mc" "$floor" "$cap")
     echo "${mc}m"
 }
@@ -360,11 +381,17 @@ is_safe_downsize() {
 }
 
 # calculate_oom_response_memory "$current_mem_str" "$cap"
-# Double current memory, capped at $cap Mi. Returns Mi string.
+# Double current memory, capped at $cap Mi, rounded to clean multiples. Returns Mi string.
 calculate_oom_response_memory() {
     local current="$1" cap="$2"
     local c=$(_memory_to_mi "$current")
     local doubled=$(( c * 2 ))
+    # Round to clean multiples: <100 → nearest 10, >=100 → nearest 100
+    if [ "$doubled" -lt 100 ]; then
+        doubled=$(( (doubled + 9) / 10 * 10 ))
+    else
+        doubled=$(( (doubled + 99) / 100 * 100 ))
+    fi
     doubled=$(_clamp_resource "$doubled" "$c" "$cap")
     echo "${doubled}Mi"
 }
