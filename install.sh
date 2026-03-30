@@ -334,26 +334,32 @@ if [ "$_rbac_ready" != "true" ]; then
     exit 1
 fi
 
-# Collect cluster data using text output (--no-headers) — zero JSON buffering.
+# Collect cluster data using custom-columns — zero JSON buffering.
 # jsonpath truncates on large clusters (1200+ deployments returns only 304).
-# Text output with awk is reliable at any scale and uses minimal memory.
+# custom-columns with awk is reliable at any scale and uses minimal memory.
 
 # HPAs: extract to temp file for join (needed by both deploy and sts counts)
+# Use explicit custom-columns to avoid field position errors with variable-width columns
 _HPA_TMP=$(mktemp 2>/dev/null || echo "/tmp/_hpa_$$")
-kubectl get hpa --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,ref,"/"); print $1 "\t" ref[1] "\t" ref[2] "\t" $(NF-2)}' > "$_HPA_TMP"
+kubectl get hpa --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,KIND:.spec.scaleTargetRef.kind,NAME:.spec.scaleTargetRef.name,MAX:.spec.maxReplicas \
+    2>/dev/null | awk '{print $1 "\t" $2 "\t" $3 "\t" $4}' > "$_HPA_TMP"
 
-# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from READY column)
-DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+# Deployments: HPA-aware count (use maxReplicas if HPA targets it, else desired from spec.replicas)
+# Use custom-columns to avoid field position errors with variable-width NAME columns
+DEPLOY_PODS=$(kubectl get deployments --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
+    2>/dev/null \
     | awk -v kind="Deployment" '
 BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
 { key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
 END { print total+0 }')
 
 # StatefulSets: HPA-aware count (same logic)
-STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers 2>/dev/null \
-    | awk '{split($3,a,"/"); print $1 "\t" $2 "\t" a[2]}' \
+# Use custom-columns to avoid field position errors
+STS_PODS=$(kubectl get statefulsets --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,DESIRED:.spec.replicas \
+    2>/dev/null \
     | awk -v kind="StatefulSet" '
 BEGIN { while ((getline line < "'"$_HPA_TMP"'") > 0) { split(line,f,"\t"); if(f[2]==kind) hpa[f[1] "\t" f[3]]=f[4] } }
 { key=$1 "\t" $2; if(key in hpa) total+=hpa[key]; else total+=($3+0) }
@@ -361,9 +367,12 @@ END { print total+0 }')
 
 rm -f "$_HPA_TMP"
 
-# DaemonSets: sum DESIRED column (col 3 in text output)
-DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers 2>/dev/null \
-    | awk '{total+=$3} END{print total+0}')
+# DaemonSets: sum desiredNumberScheduled from status
+# Use custom-columns to avoid field position errors
+DS_PODS=$(kubectl get daemonsets --all-namespaces --no-headers \
+    -o custom-columns=NS:.metadata.namespace,DESIRED:.status.desiredNumberScheduled \
+    2>/dev/null \
+    | awk '{total+=$2} END{print total+0}')
 
 # Pod counts calculated above via text+awk (no library functions needed)
 DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
