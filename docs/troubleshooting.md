@@ -61,7 +61,11 @@ Ensure the EBS CSI driver's service account has the `AmazonEBSCSIDriverPolicy` I
 Verify the driver is running:
 
 ```bash
-kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver
+# Check for the CSIDriver object (works regardless of namespace)
+kubectl get csidriver ebs.csi.aws.com
+
+# Check controller pods (may be in kube-system or a custom namespace)
+kubectl get pods --all-namespaces -l app=ebs-csi-controller
 ```
 
 ---
