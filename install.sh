@@ -227,24 +227,36 @@ check_ebs_driver() {
     local retries=1
     local count=0
 
-    while [ $count -le $retries ]; do
-        echo "Checking if EBS CSI driver is installed (Attempt $((count+1))/$((retries+1)))..."
+    echo "Checking if EBS CSI driver is installed..."
 
-        if kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver --ignore-not-found | grep -q "ebs-csi"; then
-            echo "EBS CSI driver is installed."
-            return 0
-        fi
+    # Check for the cluster-scoped CSIDriver object (works regardless of driver namespace)
+    if kubectl get csidriver ebs.csi.aws.com &> /dev/null; then
+        echo "EBS CSI driver is installed."
+        return 0
+    fi
+
+    # Fallback: check for driver pods across all namespaces
+    if kubectl get pods --all-namespaces -l app.kubernetes.io/name=aws-ebs-csi-driver --ignore-not-found 2>/dev/null | grep -q "ebs-csi"; then
+        echo "EBS CSI driver is installed."
+        return 0
+    fi
+
+    while [ $count -le $retries ]; do
+        echo "EBS CSI driver is not detected. Installing... (Attempt $((count+1))/$((retries+1)))"
 
         if [ $count -eq 0 ]; then
-            echo "EBS CSI driver is not installed. Installing..."
             helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
             helm install aws-ebs-csi-driver aws-ebs-csi-driver/aws-ebs-csi-driver --namespace kube-system --set controller.serviceAccount.create=true
         fi
 
-        if [ $count -lt $retries ]; then
-            echo "Retrying in 10 seconds..."
-            sleep 10
+        echo "Waiting 10 seconds for driver to initialize..."
+        sleep 10
+
+        if kubectl get csidriver ebs.csi.aws.com &> /dev/null; then
+            echo "EBS CSI driver is installed."
+            return 0
         fi
+
         count=$((count+1))
     done
 

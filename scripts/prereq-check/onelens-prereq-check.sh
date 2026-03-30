@@ -494,25 +494,25 @@ check_ebs_driver() {
     
     print_success "EBS CSI driver is installed"
     
-    # Check EBS CSI driver controller pods
+    # Check EBS CSI driver controller pods (search all namespaces — driver may not be in kube-system)
     print_step "Checking EBS CSI driver controller pod status..."
     local controller_pods_output
-    controller_pods_output=$(kubectl get pods -n kube-system -l app=ebs-csi-controller --no-headers 2>/dev/null)
-    
+    controller_pods_output=$(kubectl get pods --all-namespaces -l app=ebs-csi-controller --no-headers 2>/dev/null)
+
     if [ -z "$controller_pods_output" ]; then
         print_error "No EBS CSI driver controller pods found"
         add_failed_check "EBS CSI Driver: No controller pods found with label app=ebs-csi-controller"
         return 1
     fi
-    
-    # Check if all controller pods are ready (READY column should show X/X format where both numbers match)
+
+    # Check if all controller pods are ready (with --all-namespaces, READY is column $3 and STATUS is $4)
     local controller_not_ready
-    controller_not_ready=$(echo "$controller_pods_output" | awk '{split($2,a,"/"); if(a[1] != a[2] || $3 != "Running") print $0}')
-    
+    controller_not_ready=$(echo "$controller_pods_output" | awk '{split($3,a,"/"); if(a[1] != a[2] || $4 != "Running") print $0}')
+
     if [ -n "$controller_not_ready" ]; then
         print_warning "Some EBS CSI driver controller pods are not ready"
         echo "Controller pods status:"
-        kubectl get pods -n kube-system -l app=ebs-csi-controller
+        kubectl get pods --all-namespaces -l app=ebs-csi-controller
         echo ""
         echo "Possible issues:"
         echo "- Pods may still be starting up"
@@ -524,12 +524,12 @@ check_ebs_driver() {
         print_success "EBS CSI driver controller pods are running and ready"
         add_confirmed_detail "EBS CSI Driver: Controller pods are healthy"
     fi
-    
-    # Check EBS CSI driver node pods
+
+    # Check EBS CSI driver node pods (search all namespaces)
     print_step "Checking EBS CSI driver node pod status..."
     local node_pods_output
-    node_pods_output=$(kubectl get pods -n kube-system -l app=ebs-csi-node --no-headers 2>/dev/null)
-    
+    node_pods_output=$(kubectl get pods --all-namespaces -l app=ebs-csi-node --no-headers 2>/dev/null)
+
     if [ -z "$node_pods_output" ]; then
         print_warning "No EBS CSI driver node pods found"
         echo "This might indicate:"
@@ -538,14 +538,14 @@ check_ebs_driver() {
         echo "- Node selector issues"
         add_confirmed_detail "EBS CSI Driver: No node pods found (may affect volume mounting)"
     else
-        # Check if all node pods are ready
+        # Check if all node pods are ready (with --all-namespaces, READY is column $3 and STATUS is $4)
         local node_not_ready
-        node_not_ready=$(echo "$node_pods_output" | awk '{split($2,a,"/"); if(a[1] != a[2] || $3 != "Running") print $0}')
-        
+        node_not_ready=$(echo "$node_pods_output" | awk '{split($3,a,"/"); if(a[1] != a[2] || $4 != "Running") print $0}')
+
         if [ -n "$node_not_ready" ]; then
             print_warning "Some EBS CSI driver node pods are not ready"
             echo "Node pods status:"
-            kubectl get pods -n kube-system -l app=ebs-csi-node
+            kubectl get pods --all-namespaces -l app=ebs-csi-node
             echo ""
             echo "Possible issues:"
             echo "- Pods may still be starting up"
