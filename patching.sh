@@ -319,16 +319,16 @@ _max_memory() {
 ###############################################################################
 
 # Floor/cap constants for usage-based sizing.
-# Floor: tier-tiny minimums. Cap: 2x very-large maximums.
+# Floor: tier-tiny minimums. Cap: hard maximums for mega clusters.
 # These prevent usage-based from going absurdly low (zero usage) or high (runaway OOM doubling).
 _USAGE_FLOOR_PROM_MEM=150   # tiny tier Prometheus memory (Mi)
 _USAGE_FLOOR_KSM_MEM=64     # tiny tier KSM memory (Mi)
 _USAGE_FLOOR_OPENCOST_MEM=192 # tiny tier OpenCost memory (Mi)
 _USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
 _USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
-_USAGE_CAP_PROM_MEM=4800    # 2x very-large Prometheus memory (Mi)
-_USAGE_CAP_KSM_MEM=2048     # max KSM memory for mega clusters (4000+ pods)
-_USAGE_CAP_OPENCOST_MEM=2048 # max OpenCost memory for mega clusters (4000+ pods)
+_USAGE_CAP_PROM_MEM=8192    # max Prometheus memory for mega clusters (Mi)
+_USAGE_CAP_KSM_MEM=4800     # max KSM memory for mega clusters (Mi)
+_USAGE_CAP_OPENCOST_MEM=4800 # max OpenCost memory for mega clusters (Mi)
 _USAGE_CAP_AGENT_MEM=4096   # max agent memory for mega clusters (4000+ pods)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
 
@@ -412,20 +412,23 @@ is_safe_downsize() {
     [ "$p" -ge "$half" ]
 }
 
-# calculate_oom_response_memory "$current_mem_str" "$cap"
-# Double current memory, capped at $cap Mi, rounded to clean multiples. Returns Mi string.
+# calculate_oom_response_memory "$current_mem_str" "$cap" ["$multiplier_num" "$multiplier_den"]
+# Bump current memory by multiplier (default 2x), capped at $cap Mi, rounded to clean multiples.
+# Multiplier is expressed as numerator/denominator for integer math (e.g., 3 2 = 1.5x).
+# Returns Mi string.
 calculate_oom_response_memory() {
     local current="$1" cap="$2"
+    local mul_num="${3:-2}" mul_den="${4:-1}"
     local c=$(_memory_to_mi "$current")
-    local doubled=$(( c * 2 ))
+    local bumped=$(( c * mul_num / mul_den ))
     # Round to clean multiples: <100 → nearest 10, >=100 → nearest 100
-    if [ "$doubled" -lt 100 ]; then
-        doubled=$(( (doubled + 9) / 10 * 10 ))
+    if [ "$bumped" -lt 100 ]; then
+        bumped=$(( (bumped + 9) / 10 * 10 ))
     else
-        doubled=$(( (doubled + 99) / 100 * 100 ))
+        bumped=$(( (bumped + 99) / 100 * 100 ))
     fi
-    doubled=$(_clamp_resource "$doubled" "$c" "$cap")
-    echo "${doubled}Mi"
+    bumped=$(_clamp_resource "$bumped" "$c" "$cap")
+    echo "${bumped}Mi"
 }
 
 # calculate_wal_oom_memory "$current_mem_str" "$cap"
@@ -580,7 +583,7 @@ has_sufficient_data() {
 # The master decision function for Prometheus, KSM, OpenCost.
 # Prints two lines: MEM=<value> and CPU=<value>
 # Logic:
-#   - OOM now + not first run: DOUBLE memory (capped)
+#   - OOM now + not first run: bump memory (2x prom, 1.5x others), capped
 #   - OOM recent (7d hold): HOLD, upsize allowed
 #   - First run: HOLD (no downsize, no OOM reaction)
 #   - Empty Prometheus data: HOLD, upsize allowed
@@ -618,9 +621,12 @@ evaluate_container_sizing() {
         return 0
     fi
 
-    # OOM just detected: DOUBLE memory (capped)
+    # OOM just detected: bump memory (capped). Prom gets 2x, KSM/OpenCost get 1.5x.
     if [ "$has_oom_now" = "true" ]; then
-        new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap")
+        case "$container" in
+            prom*) new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 2 1) ;;
+            *)     new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 3 2) ;;
+        esac
         echo "MEM=$new_mem"
         echo "CPU=$new_cpu"
         return 0
@@ -1527,7 +1533,7 @@ if [ -n "$PROM_SVC" ]; then
                 if [ "$IS_FIRST_RUN" = "true" ]; then
                     echo "  $label: OOM detected on first run — recording for 7-day hold (no resize)"
                 else
-                    echo "  $label: OOM detected — doubling memory from $cur_mem"
+                    echo "  $label: OOM detected — bumping memory from $cur_mem"
                 fi
             fi
 
