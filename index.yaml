@@ -2,8 +2,35 @@ apiVersion: v1
 entries:
   onelens-agent:
   - apiVersion: v2
+    appVersion: 2.1.53
+    created: "2026-03-31T14:15:38.073194649Z"
+    dependencies:
+    - alias: onelens-agent
+      condition: onelens-agent.enabled
+      name: onelens-agent-base
+      repository: oci://609916866699.dkr.ecr.ap-south-1.amazonaws.com/helm-charts
+      version: 2.1.53
+    - condition: prometheus.enabled
+      name: prometheus
+      repository: https://prometheus-community.github.io/helm-charts
+      version: 27.3.0
+    - condition: prometheus-opencost-exporter.enabled
+      name: prometheus-opencost-exporter
+      repository: https://prometheus-community.github.io/helm-charts
+      version: 0.1.1
+    description: Helm chart for the OneLens Agent
+    digest: e4dce635d4ffe3c4ee5b2fac2169e99cb0a0d1c8123ea8a73e23e1df1ded3858
+    maintainers:
+    - email: support@onelens.ai
+      name: OneLens
+    name: onelens-agent
+    type: application
+    urls:
+    - https://astuto-ai.github.io/onelens-installation-scripts/onelens-agent-2.1.53.tgz
+    version: 2.1.53
+  - apiVersion: v2
     appVersion: 2.1.52
-    created: "2026-03-31T12:37:26.513709788Z"
+    created: "2026-03-31T14:15:38.063584118Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -30,7 +57,7 @@ entries:
     version: 2.1.52
   - apiVersion: v2
     appVersion: 2.1.51
-    created: "2026-03-31T12:37:26.503807785Z"
+    created: "2026-03-31T14:15:38.053669063Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -57,7 +84,7 @@ entries:
     version: 2.1.51
   - apiVersion: v2
     appVersion: 2.1.50
-    created: "2026-03-31T12:37:26.493689503Z"
+    created: "2026-03-31T14:15:38.044069333Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -84,7 +111,7 @@ entries:
     version: 2.1.50
   - apiVersion: v2
     appVersion: 2.1.49
-    created: "2026-03-31T12:37:26.474352463Z"
+    created: "2026-03-31T14:15:38.025134108Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -111,7 +138,7 @@ entries:
     version: 2.1.49
   - apiVersion: v2
     appVersion: 2.1.48
-    created: "2026-03-31T12:37:26.464561479Z"
+    created: "2026-03-31T14:15:38.015076842Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -138,7 +165,7 @@ entries:
     version: 2.1.48
   - apiVersion: v2
     appVersion: 2.1.47
-    created: "2026-03-31T12:37:26.455416793Z"
+    created: "2026-03-31T14:15:38.005341762Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -165,7 +192,7 @@ entries:
     version: 2.1.47
   - apiVersion: v2
     appVersion: 2.1.46
-    created: "2026-03-31T12:37:26.445442209Z"
+    created: "2026-03-31T14:15:37.995494909Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -192,7 +219,7 @@ entries:
     version: 2.1.46
   - apiVersion: v2
     appVersion: 2.1.45
-    created: "2026-03-31T12:37:26.435442271Z"
+    created: "2026-03-31T14:15:37.985762464Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -219,7 +246,7 @@ entries:
     version: 2.1.45
   - apiVersion: v2
     appVersion: 2.1.44
-    created: "2026-03-31T12:37:26.425670336Z"
+    created: "2026-03-31T14:15:37.976708255Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -246,7 +273,7 @@ entries:
     version: 2.1.44
   - apiVersion: v2
     appVersion: 2.1.43
-    created: "2026-03-31T12:37:26.415803534Z"
+    created: "2026-03-31T14:15:37.966755354Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -273,7 +300,7 @@ entries:
     version: 2.1.43
   - apiVersion: v2
     appVersion: 2.1.42
-    created: "2026-03-31T12:37:26.405914136Z"
+    created: "2026-03-31T14:15:37.956465061Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -300,7 +327,7 @@ entries:
     version: 2.1.42
   - apiVersion: v2
     appVersion: 2.1.41
-    created: "2026-03-31T12:37:26.395858403Z"
+    created: "2026-03-31T14:15:37.946547939Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -327,7 +354,7 @@ entries:
     version: 2.1.41
   - apiVersion: v2
     appVersion: 2.1.40
-    created: "2026-03-31T12:37:26.386702435Z"
+    created: "2026-03-31T14:15:37.936457909Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -354,7 +381,7 @@ entries:
     version: 2.1.40
   - apiVersion: v2
     appVersion: 2.1.39
-    created: "2026-03-31T12:37:26.367119581Z"
+    created: "2026-03-31T14:15:37.917092531Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -381,7 +408,7 @@ entries:
     version: 2.1.39
   - apiVersion: v2
     appVersion: 2.1.38
-    created: "2026-03-31T12:37:26.357391432Z"
+    created: "2026-03-31T14:15:37.907254733Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -408,7 +435,7 @@ entries:
     version: 2.1.38
   - apiVersion: v2
     appVersion: 2.1.37
-    created: "2026-03-31T12:37:26.347637295Z"
+    created: "2026-03-31T14:15:37.897758862Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -435,7 +462,7 @@ entries:
     version: 2.1.37
   - apiVersion: v2
     appVersion: 2.1.36
-    created: "2026-03-31T12:37:26.337834893Z"
+    created: "2026-03-31T14:15:37.887673441Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -462,7 +489,7 @@ entries:
     version: 2.1.36
   - apiVersion: v2
     appVersion: 2.1.35
-    created: "2026-03-31T12:37:26.328161214Z"
+    created: "2026-03-31T14:15:37.878661112Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -489,7 +516,7 @@ entries:
     version: 2.1.35
   - apiVersion: v2
     appVersion: 2.1.34
-    created: "2026-03-31T12:37:26.318406677Z"
+    created: "2026-03-31T14:15:37.868006076Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -516,7 +543,7 @@ entries:
     version: 2.1.34
   - apiVersion: v2
     appVersion: 2.1.33
-    created: "2026-03-31T12:37:26.30853486Z"
+    created: "2026-03-31T14:15:37.858165185Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -543,7 +570,7 @@ entries:
     version: 2.1.33
   - apiVersion: v2
     appVersion: 2.1.32
-    created: "2026-03-31T12:37:26.29953379Z"
+    created: "2026-03-31T14:15:37.849340563Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -570,7 +597,7 @@ entries:
     version: 2.1.32
   - apiVersion: v2
     appVersion: 2.1.31
-    created: "2026-03-31T12:37:26.289523105Z"
+    created: "2026-03-31T14:15:37.839334826Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -597,7 +624,7 @@ entries:
     version: 2.1.31
   - apiVersion: v2
     appVersion: 2.1.30
-    created: "2026-03-31T12:37:26.279586601Z"
+    created: "2026-03-31T14:15:37.829377779Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -624,7 +651,7 @@ entries:
     version: 2.1.30
   - apiVersion: v2
     appVersion: 2.1.29
-    created: "2026-03-31T12:37:26.260008367Z"
+    created: "2026-03-31T14:15:37.809620866Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -651,7 +678,7 @@ entries:
     version: 2.1.29
   - apiVersion: v2
     appVersion: 2.1.28
-    created: "2026-03-31T12:37:26.25040373Z"
+    created: "2026-03-31T14:15:37.800177498Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -678,7 +705,7 @@ entries:
     version: 2.1.28
   - apiVersion: v2
     appVersion: 2.1.27
-    created: "2026-03-31T12:37:26.240730765Z"
+    created: "2026-03-31T14:15:37.790516788Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -705,7 +732,7 @@ entries:
     version: 2.1.27
   - apiVersion: v2
     appVersion: 2.1.26
-    created: "2026-03-31T12:37:26.231137758Z"
+    created: "2026-03-31T14:15:37.780641999Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -732,7 +759,7 @@ entries:
     version: 2.1.26
   - apiVersion: v2
     appVersion: 2.1.25
-    created: "2026-03-31T12:37:26.221602369Z"
+    created: "2026-03-31T14:15:37.771086886Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -759,7 +786,7 @@ entries:
     version: 2.1.25
   - apiVersion: v2
     appVersion: 2.1.24
-    created: "2026-03-31T12:37:26.211567271Z"
+    created: "2026-03-31T14:15:37.762216952Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -786,7 +813,7 @@ entries:
     version: 2.1.24
   - apiVersion: v2
     appVersion: 2.1.23
-    created: "2026-03-31T12:37:26.202463781Z"
+    created: "2026-03-31T14:15:37.751909553Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -813,7 +840,7 @@ entries:
     version: 2.1.23
   - apiVersion: v2
     appVersion: 2.1.22
-    created: "2026-03-31T12:37:26.192125555Z"
+    created: "2026-03-31T14:15:37.742013085Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -840,7 +867,7 @@ entries:
     version: 2.1.22
   - apiVersion: v2
     appVersion: 2.1.21
-    created: "2026-03-31T12:37:26.182407934Z"
+    created: "2026-03-31T14:15:37.732042015Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -867,7 +894,7 @@ entries:
     version: 2.1.21
   - apiVersion: v2
     appVersion: 2.1.20
-    created: "2026-03-31T12:37:26.172847642Z"
+    created: "2026-03-31T14:15:37.722205049Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -894,7 +921,7 @@ entries:
     version: 2.1.20
   - apiVersion: v2
     appVersion: 2.1.19
-    created: "2026-03-31T12:37:26.152464687Z"
+    created: "2026-03-31T14:15:37.70295593Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -921,7 +948,7 @@ entries:
     version: 2.1.19
   - apiVersion: v2
     appVersion: 2.1.18
-    created: "2026-03-31T12:37:26.143123963Z"
+    created: "2026-03-31T14:15:37.693229491Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -948,7 +975,7 @@ entries:
     version: 2.1.18
   - apiVersion: v2
     appVersion: 2.1.17
-    created: "2026-03-31T12:37:26.133119778Z"
+    created: "2026-03-31T14:15:37.683515667Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -975,7 +1002,7 @@ entries:
     version: 2.1.17
   - apiVersion: v2
     appVersion: 2.1.16
-    created: "2026-03-31T12:37:26.123406574Z"
+    created: "2026-03-31T14:15:37.673345857Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1002,7 +1029,7 @@ entries:
     version: 2.1.16
   - apiVersion: v2
     appVersion: 2.1.15
-    created: "2026-03-31T12:37:26.113827689Z"
+    created: "2026-03-31T14:15:37.65617881Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1029,7 +1056,7 @@ entries:
     version: 2.1.15
   - apiVersion: v2
     appVersion: 2.1.14
-    created: "2026-03-31T12:37:26.10486983Z"
+    created: "2026-03-31T14:15:37.6462451Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1056,7 +1083,7 @@ entries:
     version: 2.1.14
   - apiVersion: v2
     appVersion: 2.1.13
-    created: "2026-03-31T12:37:26.094924649Z"
+    created: "2026-03-31T14:15:37.635875282Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1083,7 +1110,7 @@ entries:
     version: 2.1.13
   - apiVersion: v2
     appVersion: 2.1.12
-    created: "2026-03-31T12:37:26.085079662Z"
+    created: "2026-03-31T14:15:37.626827804Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1110,7 +1137,7 @@ entries:
     version: 2.1.12
   - apiVersion: v2
     appVersion: 2.1.11
-    created: "2026-03-31T12:37:26.075021013Z"
+    created: "2026-03-31T14:15:37.61644452Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1137,7 +1164,7 @@ entries:
     version: 2.1.11
   - apiVersion: v2
     appVersion: 2.1.10
-    created: "2026-03-31T12:37:26.065251977Z"
+    created: "2026-03-31T14:15:37.607064919Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1164,7 +1191,7 @@ entries:
     version: 2.1.10
   - apiVersion: v2
     appVersion: 2.1.9
-    created: "2026-03-31T12:37:26.552504815Z"
+    created: "2026-03-31T14:15:38.112205337Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1191,7 +1218,7 @@ entries:
     version: 2.1.9
   - apiVersion: v2
     appVersion: 2.1.8
-    created: "2026-03-31T12:37:26.542570664Z"
+    created: "2026-03-31T14:15:38.102352566Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1218,7 +1245,7 @@ entries:
     version: 2.1.8
   - apiVersion: v2
     appVersion: 2.1.7
-    created: "2026-03-31T12:37:26.532604636Z"
+    created: "2026-03-31T14:15:38.092643413Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1245,7 +1272,7 @@ entries:
     version: 2.1.7
   - apiVersion: v2
     appVersion: 2.1.6
-    created: "2026-03-31T12:37:26.523537433Z"
+    created: "2026-03-31T14:15:38.082839161Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1272,7 +1299,7 @@ entries:
     version: 2.1.6
   - apiVersion: v2
     appVersion: 2.1.5
-    created: "2026-03-31T12:37:26.483884716Z"
+    created: "2026-03-31T14:15:38.035102011Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1299,7 +1326,7 @@ entries:
     version: 2.1.5
   - apiVersion: v2
     appVersion: 2.1.4
-    created: "2026-03-31T12:37:26.376947746Z"
+    created: "2026-03-31T14:15:37.926950967Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1326,7 +1353,7 @@ entries:
     version: 2.1.4
   - apiVersion: v2
     appVersion: 2.1.3
-    created: "2026-03-31T12:37:26.26981866Z"
+    created: "2026-03-31T14:15:37.819598346Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1353,7 +1380,7 @@ entries:
     version: 2.1.3
   - apiVersion: v2
     appVersion: 2.1.2
-    created: "2026-03-31T12:37:26.162704078Z"
+    created: "2026-03-31T14:15:37.71240872Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1380,7 +1407,7 @@ entries:
     version: 2.1.2
   - apiVersion: v2
     appVersion: 2.0.1
-    created: "2026-03-31T12:37:26.054792633Z"
+    created: "2026-03-31T14:15:37.597684181Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1407,7 +1434,7 @@ entries:
     version: 2.0.1
   - apiVersion: v2
     appVersion: 1.9.0
-    created: "2026-03-31T12:37:26.04499836Z"
+    created: "2026-03-31T14:15:37.588327071Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1434,7 +1461,7 @@ entries:
     version: 1.9.0
   - apiVersion: v2
     appVersion: 1.9.0
-    created: "2026-03-31T12:37:26.034989765Z"
+    created: "2026-03-31T14:15:37.579020458Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1461,7 +1488,7 @@ entries:
     version: 1.9.0-rc
   - apiVersion: v2
     appVersion: 1.8.0
-    created: "2026-03-31T12:37:26.017294641Z"
+    created: "2026-03-31T14:15:37.569646692Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1488,7 +1515,7 @@ entries:
     version: 1.8.0
   - apiVersion: v2
     appVersion: 1.8.0
-    created: "2026-03-31T12:37:26.006875254Z"
+    created: "2026-03-31T14:15:37.560387881Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1515,7 +1542,7 @@ entries:
     version: 1.8.0-rc
   - apiVersion: v2
     appVersion: 1.7.0
-    created: "2026-03-31T12:37:25.997063369Z"
+    created: "2026-03-31T14:15:37.550742786Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1542,7 +1569,7 @@ entries:
     version: 1.7.0
   - apiVersion: v2
     appVersion: 1.7.0
-    created: "2026-03-31T12:37:25.988015341Z"
+    created: "2026-03-31T14:15:37.540860235Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1569,7 +1596,7 @@ entries:
     version: 1.7.0-rc
   - apiVersion: v2
     appVersion: 1.6.0
-    created: "2026-03-31T12:37:25.977926706Z"
+    created: "2026-03-31T14:15:37.532025989Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1596,7 +1623,7 @@ entries:
     version: 1.6.0
   - apiVersion: v2
     appVersion: 1.6.0
-    created: "2026-03-31T12:37:25.968160871Z"
+    created: "2026-03-31T14:15:37.521994661Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1623,7 +1650,7 @@ entries:
     version: 1.6.0-rc
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-03-31T12:37:25.958544405Z"
+    created: "2026-03-31T14:15:37.511910481Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1650,7 +1677,7 @@ entries:
     version: 1.5.0
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-03-31T12:37:25.948978356Z"
+    created: "2026-03-31T14:15:37.50204413Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1677,7 +1704,7 @@ entries:
     version: 1.5.0-rc
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-03-31T12:37:25.939359838Z"
+    created: "2026-03-31T14:15:37.492202138Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1704,7 +1731,7 @@ entries:
     version: 1.4.1
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-03-31T12:37:25.929793292Z"
+    created: "2026-03-31T14:15:37.482196009Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1731,7 +1758,7 @@ entries:
     version: 1.4.1-rc
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-03-31T12:37:25.920587139Z"
+    created: "2026-03-31T14:15:37.472811211Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1758,7 +1785,7 @@ entries:
     version: 1.4.0
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-03-31T12:37:25.911334471Z"
+    created: "2026-03-31T14:15:37.462655046Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1785,7 +1812,7 @@ entries:
     version: 1.4.0-rc
   - apiVersion: v2
     appVersion: 1.3.0
-    created: "2026-03-31T12:37:25.901606672Z"
+    created: "2026-03-31T14:15:37.452750487Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1812,7 +1839,7 @@ entries:
     version: 1.3.0
   - apiVersion: v2
     appVersion: 1.3.0
-    created: "2026-03-31T12:37:25.89164471Z"
+    created: "2026-03-31T14:15:37.442299344Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1839,7 +1866,7 @@ entries:
     version: 1.3.0-rc
   - apiVersion: v2
     appVersion: 1.2.0
-    created: "2026-03-31T12:37:25.881981031Z"
+    created: "2026-03-31T14:15:37.432697706Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1866,7 +1893,7 @@ entries:
     version: 1.2.0-rc
   - apiVersion: v2
     appVersion: 1.1.0
-    created: "2026-03-31T12:37:25.872411328Z"
+    created: "2026-03-31T14:15:37.423023087Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1893,7 +1920,7 @@ entries:
     version: 1.1.0
   - apiVersion: v2
     appVersion: 0.1.1-beta.4
-    created: "2026-03-31T12:37:25.86288035Z"
+    created: "2026-03-31T14:15:37.414187661Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1920,7 +1947,7 @@ entries:
     version: 0.1.1-beta.4
   - apiVersion: v2
     appVersion: 0.1.1-beta.3
-    created: "2026-03-31T12:37:25.853233382Z"
+    created: "2026-03-31T14:15:37.404298622Z"
     dependencies:
     - alias: onelens-agent
       condition: onelens-agent.enabled
@@ -1947,8 +1974,21 @@ entries:
     version: 0.1.1-beta.3
   onelensdeployer:
   - apiVersion: v2
+    appVersion: 2.1.53
+    created: "2026-03-31T14:15:38.169179316Z"
+    description: OneLens Deployer
+    digest: 7c13dd61d732fa72850dfd0c8ba176c9bab44ca4c9967033060464ec434d80d9
+    maintainers:
+    - email: support@onelens.cloud
+      name: OneLens
+    name: onelensdeployer
+    type: application
+    urls:
+    - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-2.1.53-rc.tgz
+    version: 2.1.53-rc
+  - apiVersion: v2
     appVersion: 2.1.52
-    created: "2026-03-31T12:37:26.611139796Z"
+    created: "2026-03-31T14:15:38.168439156Z"
     description: OneLens Deployer
     digest: c53a3f795c607525f5b77a170fb3e6a0e83f7f15c6188f5c57c78d2316bedc8f
     maintainers:
@@ -1961,7 +2001,7 @@ entries:
     version: 2.1.52
   - apiVersion: v2
     appVersion: 2.1.51
-    created: "2026-03-31T12:37:26.610327446Z"
+    created: "2026-03-31T14:15:38.167699857Z"
     description: OneLens Deployer
     digest: b5f2d1fb64a43dd3ca80d653fe416bc2023b28e1df048fedb235d4f2d3fdd54c
     maintainers:
@@ -1974,7 +2014,7 @@ entries:
     version: 2.1.51
   - apiVersion: v2
     appVersion: 2.1.50
-    created: "2026-03-31T12:37:26.609547104Z"
+    created: "2026-03-31T14:15:38.166978935Z"
     description: OneLens Deployer
     digest: bcc90e31e94a24c2a534599aa450ef8b832caf64d98d8dbf9224a143e6a20cc7
     maintainers:
@@ -1987,7 +2027,7 @@ entries:
     version: 2.1.50
   - apiVersion: v2
     appVersion: 2.1.49
-    created: "2026-03-31T12:37:26.607268757Z"
+    created: "2026-03-31T14:15:38.164779653Z"
     description: OneLens Deployer
     digest: 45f6f7dbfa16d5910b079ca87579c0fd97e77a778fe6b4d1f40f2cbca7325648
     maintainers:
@@ -2000,7 +2040,7 @@ entries:
     version: 2.1.49
   - apiVersion: v2
     appVersion: 2.1.48
-    created: "2026-03-31T12:37:26.606481403Z"
+    created: "2026-03-31T14:15:38.164050423Z"
     description: OneLens Deployer
     digest: e23262b72b9df730ea5e6edde97ed506a7c34633d00e5befd6fc569887873b50
     maintainers:
@@ -2013,7 +2053,7 @@ entries:
     version: 2.1.48
   - apiVersion: v2
     appVersion: 2.1.47
-    created: "2026-03-31T12:37:26.605690001Z"
+    created: "2026-03-31T14:15:38.163286624Z"
     description: OneLens Deployer
     digest: f550c6bb13391d5a540a2954389bbfa58970523ee278b562307722552fafa042
     maintainers:
@@ -2026,7 +2066,7 @@ entries:
     version: 2.1.47
   - apiVersion: v2
     appVersion: 2.1.46
-    created: "2026-03-31T12:37:26.604922073Z"
+    created: "2026-03-31T14:15:38.162480318Z"
     description: OneLens Deployer
     digest: 49aa352834707fedd6d26c0521cc5ff0a0c1864f8f5b6a9266dfbfc2df80fc40
     maintainers:
@@ -2039,7 +2079,7 @@ entries:
     version: 2.1.46
   - apiVersion: v2
     appVersion: 2.1.45
-    created: "2026-03-31T12:37:26.604129359Z"
+    created: "2026-03-31T14:15:38.16086901Z"
     description: OneLens Deployer
     digest: 6119f198f42eb78cf99901ae382e4668ea4531274f072aaa910f4d0b384653f8
     maintainers:
@@ -2052,7 +2092,7 @@ entries:
     version: 2.1.45
   - apiVersion: v2
     appVersion: 2.1.44
-    created: "2026-03-31T12:37:26.60290655Z"
+    created: "2026-03-31T14:15:38.160156323Z"
     description: OneLens Deployer
     digest: 9bec6a59e8249b6f045075eeac03e41869f0730bc036fd31fc85daa197f36baf
     maintainers:
@@ -2065,7 +2105,7 @@ entries:
     version: 2.1.44
   - apiVersion: v2
     appVersion: 2.1.43
-    created: "2026-03-31T12:37:26.60186838Z"
+    created: "2026-03-31T14:15:38.15943641Z"
     description: OneLens Deployer
     digest: db696fec58f4ba2852a616f4c406a78e568fa1bda7da821de2f4f323f05a3fee
     maintainers:
@@ -2078,7 +2118,7 @@ entries:
     version: 2.1.43
   - apiVersion: v2
     appVersion: 2.1.42
-    created: "2026-03-31T12:37:26.601103928Z"
+    created: "2026-03-31T14:15:38.158710296Z"
     description: OneLens Deployer
     digest: 449ad9ff27ff3c633f54fe61679d8ea1dbe66eefb43aa6867f740bc279c7c855
     maintainers:
@@ -2091,7 +2131,7 @@ entries:
     version: 2.1.42
   - apiVersion: v2
     appVersion: 2.1.41
-    created: "2026-03-31T12:37:26.600329758Z"
+    created: "2026-03-31T14:15:38.158007504Z"
     description: OneLens Deployer
     digest: 937036feb034468cfe1156934b836492c1d3e09ff9962b2b7b268f3a920fd4c6
     maintainers:
@@ -2104,7 +2144,7 @@ entries:
     version: 2.1.41
   - apiVersion: v2
     appVersion: 2.1.40
-    created: "2026-03-31T12:37:26.599511707Z"
+    created: "2026-03-31T14:15:38.15727336Z"
     description: OneLens Deployer
     digest: 07b384885cca8ff332a9a59d30ad883e94243ac120725dc5b3deec0a2ea7df85
     maintainers:
@@ -2117,7 +2157,7 @@ entries:
     version: 2.1.40
   - apiVersion: v2
     appVersion: 2.1.39
-    created: "2026-03-31T12:37:26.597230003Z"
+    created: "2026-03-31T14:15:38.155080117Z"
     description: OneLens Deployer
     digest: d7663edc92bf4528a5db940229f8c34c1d1eaceb8bf329f85e37374bace2c6a8
     maintainers:
@@ -2130,7 +2170,7 @@ entries:
     version: 2.1.39
   - apiVersion: v2
     appVersion: 2.1.38
-    created: "2026-03-31T12:37:26.596450243Z"
+    created: "2026-03-31T14:15:38.154332044Z"
     description: OneLens Deployer
     digest: 6d7e0e0561d1e5999f86d8863bc9e60b27c6978d165687892fa2d6f02bbbe553
     maintainers:
@@ -2143,7 +2183,7 @@ entries:
     version: 2.1.38
   - apiVersion: v2
     appVersion: 2.1.37
-    created: "2026-03-31T12:37:26.595649664Z"
+    created: "2026-03-31T14:15:38.15352713Z"
     description: OneLens Deployer
     digest: 701b0ee3e4a3fc7d6ab2809465d2d6a72c069fdad0c316b8e93f7388526b9071
     maintainers:
@@ -2156,7 +2196,7 @@ entries:
     version: 2.1.37
   - apiVersion: v2
     appVersion: 2.1.36
-    created: "2026-03-31T12:37:26.594843735Z"
+    created: "2026-03-31T14:15:38.15178605Z"
     description: OneLens Deployer
     digest: ac7fde782ea563c980997d94786490e4db83ace92fda67765dd878f66865ceda
     maintainers:
@@ -2169,7 +2209,7 @@ entries:
     version: 2.1.36
   - apiVersion: v2
     appVersion: 2.1.35
-    created: "2026-03-31T12:37:26.59328565Z"
+    created: "2026-03-31T14:15:38.150835966Z"
     description: OneLens Deployer
     digest: 4b7e400d93e52d682b5a665e2d2d5415cf067ba277a5fe2c3a62c71798f05837
     maintainers:
@@ -2182,7 +2222,7 @@ entries:
     version: 2.1.35
   - apiVersion: v2
     appVersion: 2.1.34
-    created: "2026-03-31T12:37:26.592522341Z"
+    created: "2026-03-31T14:15:38.150123314Z"
     description: OneLens Deployer
     digest: b0f2b8a118d3b1852937c6f0439bdac5614605d1f8cf70fb980239bbdd84ca9a
     maintainers:
@@ -2195,7 +2235,7 @@ entries:
     version: 2.1.34
   - apiVersion: v2
     appVersion: 2.1.33
-    created: "2026-03-31T12:37:26.591769951Z"
+    created: "2026-03-31T14:15:38.149383452Z"
     description: OneLens Deployer
     digest: 793e1687eec2d80b331eb928ea4f27744e90ce834b635969415f751991ac2d62
     maintainers:
@@ -2208,7 +2248,7 @@ entries:
     version: 2.1.33
   - apiVersion: v2
     appVersion: 2.1.32
-    created: "2026-03-31T12:37:26.591013154Z"
+    created: "2026-03-31T14:15:38.148668278Z"
     description: OneLens Deployer
     digest: 62869236471e6c81cb17b61c8f6cbdeb96baede33d64b891c3e0e4d84a13e7ea
     maintainers:
@@ -2221,7 +2261,7 @@ entries:
     version: 2.1.32
   - apiVersion: v2
     appVersion: 2.1.31
-    created: "2026-03-31T12:37:26.590243382Z"
+    created: "2026-03-31T14:15:38.14795472Z"
     description: OneLens Deployer
     digest: e618c42fa7982b0a43f18cf02d7c8f5a69c739a086684e5c3e029895d67e9ab5
     maintainers:
@@ -2234,7 +2274,7 @@ entries:
     version: 2.1.31
   - apiVersion: v2
     appVersion: 2.1.30
-    created: "2026-03-31T12:37:26.589443294Z"
+    created: "2026-03-31T14:15:38.147229371Z"
     description: OneLens Deployer
     digest: c66641681b3fcf0a2ccf2d5b358fa35afe9bc2696e4824d1239a5fba6011a432
     maintainers:
@@ -2247,7 +2287,7 @@ entries:
     version: 2.1.30
   - apiVersion: v2
     appVersion: 2.1.29
-    created: "2026-03-31T12:37:26.587161Z"
+    created: "2026-03-31T14:15:38.145058771Z"
     description: OneLens Deployer
     digest: 5e5ed8928467f54eb5a748e006a88a43ad9298c8ced604954674149e9a0080bd
     maintainers:
@@ -2260,7 +2300,7 @@ entries:
     version: 2.1.29
   - apiVersion: v2
     appVersion: 2.1.28
-    created: "2026-03-31T12:37:26.586339943Z"
+    created: "2026-03-31T14:15:38.144272977Z"
     description: OneLens Deployer
     digest: a5bed51f285524c23f0fcf9cdb629013f18900c37e72460cc49f1c14116dd3f1
     maintainers:
@@ -2273,7 +2313,7 @@ entries:
     version: 2.1.28
   - apiVersion: v2
     appVersion: 2.1.27
-    created: "2026-03-31T12:37:26.585010582Z"
+    created: "2026-03-31T14:15:38.142548513Z"
     description: OneLens Deployer
     digest: 6dd9ec40c8a42c1903d130674093264ae5415e1750b3caaeee89126a89875050
     maintainers:
@@ -2286,7 +2326,7 @@ entries:
     version: 2.1.27
   - apiVersion: v2
     appVersion: 2.1.26
-    created: "2026-03-31T12:37:26.58393939Z"
+    created: "2026-03-31T14:15:38.14181109Z"
     description: OneLens Deployer
     digest: 458ceeb688644989e8604535215df551519fc6927fc385f7b7289e1c3d09d31a
     maintainers:
@@ -2299,7 +2339,7 @@ entries:
     version: 2.1.26
   - apiVersion: v2
     appVersion: 2.1.25
-    created: "2026-03-31T12:37:26.583176702Z"
+    created: "2026-03-31T14:15:38.141019099Z"
     description: OneLens Deployer
     digest: bb92c75a96a9a3dcc5843e1902daa47909028f28243f16d4af3981496711caf6
     maintainers:
@@ -2312,7 +2352,7 @@ entries:
     version: 2.1.25
   - apiVersion: v2
     appVersion: 2.1.24
-    created: "2026-03-31T12:37:26.582416127Z"
+    created: "2026-03-31T14:15:38.14030833Z"
     description: OneLens Deployer
     digest: a27ba913e4b6b5ce365122761dbc1044b2dba8eca4709307e615774da22429a1
     maintainers:
@@ -2325,7 +2365,7 @@ entries:
     version: 2.1.24
   - apiVersion: v2
     appVersion: 2.1.23
-    created: "2026-03-31T12:37:26.581650363Z"
+    created: "2026-03-31T14:15:38.139573877Z"
     description: OneLens Deployer
     digest: 01e011cc53dc0cbf48a5af8f68aef6a575d49855b9768576352682eef75cde40
     maintainers:
@@ -2338,7 +2378,7 @@ entries:
     version: 2.1.23
   - apiVersion: v2
     appVersion: 2.1.22
-    created: "2026-03-31T12:37:26.580902452Z"
+    created: "2026-03-31T14:15:38.138846178Z"
     description: OneLens Deployer
     digest: ee3a14c8a1a5e89172db5c4f0dca1add569bb6e15552a7540cdd37404fe02752
     maintainers:
@@ -2351,7 +2391,7 @@ entries:
     version: 2.1.22
   - apiVersion: v2
     appVersion: 2.1.21
-    created: "2026-03-31T12:37:26.580126439Z"
+    created: "2026-03-31T14:15:38.138132606Z"
     description: OneLens Deployer
     digest: 2265c5e32e07dde9f9376b2a0f9e5b556ab47386aa8a784c4b908cbf797dd084
     maintainers:
@@ -2364,7 +2404,7 @@ entries:
     version: 2.1.21
   - apiVersion: v2
     appVersion: 2.1.20
-    created: "2026-03-31T12:37:26.579328856Z"
+    created: "2026-03-31T14:15:38.137378959Z"
     description: OneLens Deployer
     digest: 35c0ab7a49c773369437777fd412f13168196a11321897bf826622a80977aa00
     maintainers:
@@ -2377,7 +2417,7 @@ entries:
     version: 2.1.20
   - apiVersion: v2
     appVersion: 2.1.19
-    created: "2026-03-31T12:37:26.577030602Z"
+    created: "2026-03-31T14:15:38.134122929Z"
     description: OneLens Deployer
     digest: b67c394c34aa4886a44e6df9960d86b04278fec3e1e8ee96d60f62ef9080a604
     maintainers:
@@ -2390,7 +2430,7 @@ entries:
     version: 2.1.19
   - apiVersion: v2
     appVersion: 2.1.18
-    created: "2026-03-31T12:37:26.575499918Z"
+    created: "2026-03-31T14:15:38.133402474Z"
     description: OneLens Deployer
     digest: f50a89cc5c7cd70076531b9aaa23643de16bd0d5891336765687c028a9aa751f
     maintainers:
@@ -2403,7 +2443,7 @@ entries:
     version: 2.1.18
   - apiVersion: v2
     appVersion: 2.1.17
-    created: "2026-03-31T12:37:26.57454391Z"
+    created: "2026-03-31T14:15:38.132684032Z"
     description: OneLens Deployer
     digest: b8132fc4b9060cfb0211235d46201cc178667f29e07710359c51a4398a390f42
     maintainers:
@@ -2416,7 +2456,7 @@ entries:
     version: 2.1.17
   - apiVersion: v2
     appVersion: 2.1.16
-    created: "2026-03-31T12:37:26.573805116Z"
+    created: "2026-03-31T14:15:38.131983387Z"
     description: OneLens Deployer
     digest: d9a54685873078f0fc05b5dc2f2be4b442ba40f3a066e3537e21e62d69cf50e0
     maintainers:
@@ -2429,7 +2469,7 @@ entries:
     version: 2.1.16
   - apiVersion: v2
     appVersion: 2.1.15
-    created: "2026-03-31T12:37:26.573038581Z"
+    created: "2026-03-31T14:15:38.131259245Z"
     description: OneLens Deployer
     digest: 18aed54fcba7e1e136782f4ec46ed7e066e3ff5ad6155c4cb490be73fe35c01b
     maintainers:
@@ -2442,7 +2482,7 @@ entries:
     version: 2.1.15
   - apiVersion: v2
     appVersion: 2.1.14
-    created: "2026-03-31T12:37:26.572278888Z"
+    created: "2026-03-31T14:15:38.130544242Z"
     description: OneLens Deployer
     digest: 29ccea83930a547585d0eacce668ef0ee79f63f3edb9028a8ce1463306f2d695
     maintainers:
@@ -2455,7 +2495,7 @@ entries:
     version: 2.1.14
   - apiVersion: v2
     appVersion: 2.1.13
-    created: "2026-03-31T12:37:26.571508124Z"
+    created: "2026-03-31T14:15:38.129823906Z"
     description: OneLens Deployer
     digest: d7d0c02ea5c4513fac2a5bf74746599c06d5c8147948aa93b69615223a216e14
     maintainers:
@@ -2468,7 +2508,7 @@ entries:
     version: 2.1.13
   - apiVersion: v2
     appVersion: 2.1.12
-    created: "2026-03-31T12:37:26.57074228Z"
+    created: "2026-03-31T14:15:38.129103685Z"
     description: OneLens Deployer
     digest: 2dc92932ed54c2ed74c8b980b8f799b288ac3700774fa867074219ea1d38af37
     maintainers:
@@ -2481,7 +2521,7 @@ entries:
     version: 2.1.12
   - apiVersion: v2
     appVersion: 2.1.11
-    created: "2026-03-31T12:37:26.569985913Z"
+    created: "2026-03-31T14:15:38.128373868Z"
     description: OneLens Deployer
     digest: 2e6ef76fe66ed32eca20a5b325fdbf495822da6da9395fb654da109b72597ad6
     maintainers:
@@ -2494,7 +2534,7 @@ entries:
     version: 2.1.11
   - apiVersion: v2
     appVersion: 2.1.10
-    created: "2026-03-31T12:37:26.569157332Z"
+    created: "2026-03-31T14:15:38.12760693Z"
     description: OneLens Deployer
     digest: 7063b1087e18c451d0c6bb031d0cd062513ae50f36f82891d1a30ee20d59dd1a
     maintainers:
@@ -2507,7 +2547,7 @@ entries:
     version: 2.1.10
   - apiVersion: v2
     appVersion: 2.1.9
-    created: "2026-03-31T12:37:26.617251769Z"
+    created: "2026-03-31T14:15:38.175322285Z"
     description: OneLens Deployer
     digest: f56e99fbdf92023d99468fabd448ca73a3ccfe6a2fc598c66376bd5e3c6d8f0a
     maintainers:
@@ -2520,7 +2560,7 @@ entries:
     version: 2.1.9
   - apiVersion: v2
     appVersion: 2.1.8
-    created: "2026-03-31T12:37:26.616493499Z"
+    created: "2026-03-31T14:15:38.174582263Z"
     description: OneLens Deployer
     digest: 9bde08aa278ca601ad684ad5294c1b173280458984824caff7dbcfc9b00a104a
     maintainers:
@@ -2533,7 +2573,7 @@ entries:
     version: 2.1.8
   - apiVersion: v2
     appVersion: 2.1.8
-    created: "2026-03-31T12:37:26.615725571Z"
+    created: "2026-03-31T14:15:38.173840145Z"
     description: OneLens Deployer
     digest: 8508a0c8dcc5cd4a104beefbd3aca8497026a7bbdbdd55630f616e6759ffe6c9
     maintainers:
@@ -2546,7 +2586,7 @@ entries:
     version: 2.1.8-rc
   - apiVersion: v2
     appVersion: 2.1.7
-    created: "2026-03-31T12:37:26.614973742Z"
+    created: "2026-03-31T14:15:38.173123814Z"
     description: OneLens Deployer
     digest: ba4fd89f25d0eb3d4af59e00ee6843ff26c7d2792a8991fef9ca30597999da30
     maintainers:
@@ -2559,7 +2599,7 @@ entries:
     version: 2.1.7
   - apiVersion: v2
     appVersion: 2.1.7
-    created: "2026-03-31T12:37:26.614194874Z"
+    created: "2026-03-31T14:15:38.172360791Z"
     description: OneLens Deployer
     digest: d3eabaad7a1ac7c321806443e9308ced4838837832484d28069a376ba7b30a2f
     maintainers:
@@ -2572,7 +2612,7 @@ entries:
     version: 2.1.7-rc
   - apiVersion: v2
     appVersion: 2.1.6
-    created: "2026-03-31T12:37:26.613402981Z"
+    created: "2026-03-31T14:15:38.171545789Z"
     description: OneLens Deployer
     digest: 11f32eeacf5f311019cef862a1ca283661d55caf82a65a3388875b391acf2f2c
     maintainers:
@@ -2585,7 +2625,7 @@ entries:
     version: 2.1.6
   - apiVersion: v2
     appVersion: 2.1.6
-    created: "2026-03-31T12:37:26.61216356Z"
+    created: "2026-03-31T14:15:38.169910494Z"
     description: OneLens Deployer
     digest: e2325ed8934d503bae3d2d734084a27bcdeedda034652efe4edd3b2e89e0c297
     maintainers:
@@ -2598,7 +2638,7 @@ entries:
     version: 2.1.6-rc
   - apiVersion: v2
     appVersion: 2.1.5
-    created: "2026-03-31T12:37:26.608794124Z"
+    created: "2026-03-31T14:15:38.166233449Z"
     description: OneLens Deployer
     digest: 78939746caa45279e19734865d6e9716cf93dbe4b9e8b12eedd0f69bb30d55c3
     maintainers:
@@ -2611,7 +2651,7 @@ entries:
     version: 2.1.5
   - apiVersion: v2
     appVersion: 2.1.5
-    created: "2026-03-31T12:37:26.6080337Z"
+    created: "2026-03-31T14:15:38.165500835Z"
     description: OneLens Deployer
     digest: eea6593cb91bd5f1873c19252416a91e11e313856746c7e921eae33dd643c530
     maintainers:
@@ -2624,7 +2664,7 @@ entries:
     version: 2.1.5-rc
   - apiVersion: v2
     appVersion: 2.1.4
-    created: "2026-03-31T12:37:26.598743688Z"
+    created: "2026-03-31T14:15:38.156549491Z"
     description: OneLens Deployer
     digest: 0362ad71a011415c7b43f6d1ee0f6571ec5069a5c34d32ba0cc0e02db1ea3841
     maintainers:
@@ -2637,7 +2677,7 @@ entries:
     version: 2.1.4
   - apiVersion: v2
     appVersion: 2.1.4
-    created: "2026-03-31T12:37:26.59800229Z"
+    created: "2026-03-31T14:15:38.155809956Z"
     description: OneLens Deployer
     digest: 58ba7f66e718053b923414969a7ec35b543de3f9daeab6527f0c24967b9c4451
     maintainers:
@@ -2650,7 +2690,7 @@ entries:
     version: 2.1.4-rc
   - apiVersion: v2
     appVersion: 2.1.3
-    created: "2026-03-31T12:37:26.588670317Z"
+    created: "2026-03-31T14:15:38.146499296Z"
     description: OneLens Deployer
     digest: 8f47f600b54129e41be4b4cd00d345584effd13c5a3247622a8053ce6d759181
     maintainers:
@@ -2663,7 +2703,7 @@ entries:
     version: 2.1.3
   - apiVersion: v2
     appVersion: 2.1.3
-    created: "2026-03-31T12:37:26.587926103Z"
+    created: "2026-03-31T14:15:38.145769451Z"
     description: OneLens Deployer
     digest: a05e8749fa0a4b7ffab1297770f1dd7bd95e3dfe97984f46de892a9ec97131a6
     maintainers:
@@ -2676,7 +2716,7 @@ entries:
     version: 2.1.3-rc
   - apiVersion: v2
     appVersion: 2.1.2
-    created: "2026-03-31T12:37:26.578563432Z"
+    created: "2026-03-31T14:15:38.136645283Z"
     description: OneLens Deployer
     digest: 1d002a41befd4c61d101f156699492a7aea3bbe80138bdee277196c5c969cd9f
     maintainers:
@@ -2689,7 +2729,7 @@ entries:
     version: 2.1.2
   - apiVersion: v2
     appVersion: 2.1.2
-    created: "2026-03-31T12:37:26.577819869Z"
+    created: "2026-03-31T14:15:38.135835192Z"
     description: OneLens Deployer
     digest: 769c40c474334ed668b9518dd3d9231def7efbe402abb6f9c537e04108c302b1
     maintainers:
@@ -2702,7 +2742,7 @@ entries:
     version: 2.1.2-rc
   - apiVersion: v2
     appVersion: 2.1.1
-    created: "2026-03-31T12:37:26.568354349Z"
+    created: "2026-03-31T14:15:38.126292837Z"
     description: OneLens Deployer
     digest: d765b693f4087abdfcec390488fce73bddd50dfc20787b7a20d88d05f4474188
     maintainers:
@@ -2715,7 +2755,7 @@ entries:
     version: 2.1.1-rc
   - apiVersion: v2
     appVersion: 2.1.0
-    created: "2026-03-31T12:37:26.56749964Z"
+    created: "2026-03-31T14:15:38.125060273Z"
     description: OneLens Deployer
     digest: d8dee0963d814ad73aa13c4ea65b4dedb8cc3d30d61ed4646499a1530bad23a1
     maintainers:
@@ -2728,7 +2768,7 @@ entries:
     version: 2.1.0-rc
   - apiVersion: v2
     appVersion: 2.0.1
-    created: "2026-03-31T12:37:26.565869134Z"
+    created: "2026-03-31T14:15:38.12436171Z"
     description: OneLens Deployer
     digest: 6c3cfc4eb80339259ab9bc319dda7414be4276f8dcfc1d92d40b8f7707a7ee2d
     maintainers:
@@ -2741,7 +2781,7 @@ entries:
     version: 2.0.1
   - apiVersion: v2
     appVersion: 2.0.1
-    created: "2026-03-31T12:37:26.565145508Z"
+    created: "2026-03-31T14:15:38.123685058Z"
     description: OneLens Deployer
     digest: 99a354aaf21fcc62d9a6927357ee39830be4151b0dffa453a49dfdf997348c7a
     maintainers:
@@ -2754,7 +2794,7 @@ entries:
     version: 2.0.1-rc
   - apiVersion: v2
     appVersion: 1.9.0
-    created: "2026-03-31T12:37:26.564417043Z"
+    created: "2026-03-31T14:15:38.123007398Z"
     description: OneLens Deployer
     digest: af4cb01d9c6c713d4b54bc6a6d3b623e88cc25f66a649c9b32e8e88e95f020ed
     maintainers:
@@ -2767,7 +2807,7 @@ entries:
     version: 1.9.0
   - apiVersion: v2
     appVersion: 1.9.0
-    created: "2026-03-31T12:37:26.56368944Z"
+    created: "2026-03-31T14:15:38.122319645Z"
     description: OneLens Deployer
     digest: 76e7d45e3667af2a5b814cdd09e6f5f7bf037cf48af143e6d91f0655dda0e906
     maintainers:
@@ -2780,7 +2820,7 @@ entries:
     version: 1.9.0-rc
   - apiVersion: v2
     appVersion: 1.8.0
-    created: "2026-03-31T12:37:26.562976013Z"
+    created: "2026-03-31T14:15:38.121619441Z"
     description: OneLens Deployer
     digest: eec6caf20fbf43d5a6ba700db030aaf73203b9a88eb4913d9be1228b71a18b89
     maintainers:
@@ -2793,7 +2833,7 @@ entries:
     version: 1.8.0
   - apiVersion: v2
     appVersion: 1.8.0
-    created: "2026-03-31T12:37:26.562444094Z"
+    created: "2026-03-31T14:15:38.121138995Z"
     description: OneLens Deployer
     digest: b7d2a8f32dd30472c40dd31e54e69593d7894d7cfa6f436d811a0e5fe76b9e49
     maintainers:
@@ -2806,7 +2846,7 @@ entries:
     version: 1.8.0-rc
   - apiVersion: v2
     appVersion: 1.7.0
-    created: "2026-03-31T12:37:26.561926682Z"
+    created: "2026-03-31T14:15:38.120657653Z"
     description: OneLens Deployer
     digest: c5112c98cc8bf066803156136727870ac86277b4fb4cdde71ad24cd3179ae4ef
     maintainers:
@@ -2819,7 +2859,7 @@ entries:
     version: 1.7.0
   - apiVersion: v2
     appVersion: 1.7.0
-    created: "2026-03-31T12:37:26.561396456Z"
+    created: "2026-03-31T14:15:38.120184293Z"
     description: OneLens Deployer
     digest: 0c008a5586c60dee5aa15815cdae210e00b7beef319d6236f15c5425afa87e4b
     maintainers:
@@ -2832,7 +2872,7 @@ entries:
     version: 1.7.0-rc
   - apiVersion: v2
     appVersion: 1.6.0
-    created: "2026-03-31T12:37:26.560874986Z"
+    created: "2026-03-31T14:15:38.119689535Z"
     description: OneLens Deployer
     digest: 00792d5d98453a82d426cc928b869c2ff443f506ef2d2e4c95131ace151f3973
     maintainers:
@@ -2845,7 +2885,7 @@ entries:
     version: 1.6.0
   - apiVersion: v2
     appVersion: 1.6.0
-    created: "2026-03-31T12:37:26.560122046Z"
+    created: "2026-03-31T14:15:38.119200527Z"
     description: OneLens Deployer
     digest: f77542258d7b8945464f4bb864f567c8a676ec7a480febf214cc29717b6ae893
     maintainers:
@@ -2858,7 +2898,7 @@ entries:
     version: 1.6.0-rc
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-03-31T12:37:26.559321176Z"
+    created: "2026-03-31T14:15:38.118648221Z"
     description: OneLens Deployer
     digest: eba90f4217ba056f4828109bb212e0cfbea64edeea3e689c4b3bb0e6aacfdf1a
     maintainers:
@@ -2871,7 +2911,7 @@ entries:
     version: 1.5.0
   - apiVersion: v2
     appVersion: 1.5.0
-    created: "2026-03-31T12:37:26.558841444Z"
+    created: "2026-03-31T14:15:38.117522194Z"
     description: OneLens Deployer
     digest: 11055fa945bf0187bb632b7ebcef10f0a53b5496cbe54a149a1affdba0d3f9df
     maintainers:
@@ -2884,7 +2924,7 @@ entries:
     version: 1.5.0-rc
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-03-31T12:37:26.558331406Z"
+    created: "2026-03-31T14:15:38.11677824Z"
     description: OneLens Deployer
     digest: 4f7626ace51e18088b42cd52cc7ea5d345b5cd5f0518ae0292bdb5ff08187081
     maintainers:
@@ -2897,7 +2937,7 @@ entries:
     version: 1.4.1
   - apiVersion: v2
     appVersion: 1.4.1
-    created: "2026-03-31T12:37:26.557798945Z"
+    created: "2026-03-31T14:15:38.116343904Z"
     description: OneLens Deployer
     digest: b82e3294c6ddd05b7ed390ebf9e53f7e9b552a38bf0b5b5b65b74bbf6383d62a
     maintainers:
@@ -2910,7 +2950,7 @@ entries:
     version: 1.4.1-rc
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-03-31T12:37:26.556448289Z"
+    created: "2026-03-31T14:15:38.115903163Z"
     description: OneLens Deployer
     digest: 01b2adfa59c7315d3911239a106cc50182d62a0a30f635aeb68c3263310c7970
     maintainers:
@@ -2923,7 +2963,7 @@ entries:
     version: 1.4.0
   - apiVersion: v2
     appVersion: 1.4.0
-    created: "2026-03-31T12:37:26.555971412Z"
+    created: "2026-03-31T14:15:38.115418466Z"
     description: OneLens Deployer
     digest: c01c2b97479c577120a6da78b5b488c1134b9e90bd8b50b9e8d2a46a0793271d
     maintainers:
@@ -2936,7 +2976,7 @@ entries:
     version: 1.4.0-rc
   - apiVersion: v2
     appVersion: 1.3.0
-    created: "2026-03-31T12:37:26.555474137Z"
+    created: "2026-03-31T14:15:38.114977896Z"
     description: OneLens Deployer
     digest: dd7d199ec0a3297125d3b9f4badc783c37843cc49621a04871aaa990761da355
     maintainers:
@@ -2949,7 +2989,7 @@ entries:
     version: 1.3.0
   - apiVersion: v2
     appVersion: 1.3.0
-    created: "2026-03-31T12:37:26.554994495Z"
+    created: "2026-03-31T14:15:38.114534017Z"
     description: OneLens Deployer
     digest: e652c2e5202999fb851ae5b592c0d6c96c664fcecce1c4f5fce90629c0606013
     maintainers:
@@ -2961,7 +3001,7 @@ entries:
     - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-1.3.0-rc.tgz
     version: 1.3.0-rc
   - apiVersion: v2
-    created: "2026-03-31T12:37:26.554477614Z"
+    created: "2026-03-31T14:15:38.114090201Z"
     description: A Helm chart for deploying Kubernetes Jobs and CronJobs
     digest: f355fb5dc455f18e9b3f96658830be8787b2bb125016f78a1ccb98e2c49a3668
     keywords:
@@ -2978,7 +3018,7 @@ entries:
     - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-1.2.0-rc.tgz
     version: 1.2.0-rc
   - apiVersion: v2
-    created: "2026-03-31T12:37:26.553991961Z"
+    created: "2026-03-31T14:15:38.113622832Z"
     description: A Helm chart for deploying Kubernetes Jobs and CronJobs
     digest: e44f86f066c0f19931b32fbe59fdfd5e5261ee5f4eae3b9d5e25b711268370f0
     keywords:
@@ -2997,7 +3037,7 @@ entries:
     - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-1.1.0.tgz
     version: 1.1.0
   - apiVersion: v2
-    created: "2026-03-31T12:37:26.553478235Z"
+    created: "2026-03-31T14:15:38.113092566Z"
     description: A Helm chart for deploying Kubernetes Jobs and CronJobs
     digest: 65f1a929553fc9761ac96793935e64749711dc5b4760512d8189b5aa0ea453cd
     keywords:
@@ -3016,7 +3056,7 @@ entries:
     - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-0.2.0.tgz
     version: 0.2.0
   - apiVersion: v2
-    created: "2026-03-31T12:37:26.552970762Z"
+    created: "2026-03-31T14:15:38.112632159Z"
     description: A Helm chart for deploying Kubernetes Jobs and CronJobs
     digest: 2da05ff3f2c0c3f14e2d6447d6b5c5ef1c765194a460053b9b1f6846c2124199
     keywords:
@@ -3034,4 +3074,4 @@ entries:
     urls:
     - https://astuto-ai.github.io/onelens-installation-scripts/onelensdeployer-0.1.0.tgz
     version: 0.1.0
-generated: "2026-03-31T12:37:25.843331241Z"
+generated: "2026-03-31T14:15:37.393902875Z"
