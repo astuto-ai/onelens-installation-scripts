@@ -1437,11 +1437,39 @@ if [ -n "$PROM_SVC" ]; then
     OOM_PROM_RAW=$(_prom_query_raw 'kube_pod_container_status_last_terminated_reason{namespace="onelens-agent",reason="OOMKilled"}')
     OOM_PROM=$(parse_prom_oom_count "$OOM_PROM_RAW")
 
-    # Kubectl fallback for OOM detection
+    # Kubectl fallback for OOM detection + Pending pod warning
     OOM_KUBECTL=""
     if [ -z "$OOM_PROM" ]; then
-        OOM_KUBECTL=$(kubectl get pods -n onelens-agent -o json 2>/dev/null \
-            | jq -r '.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled") | .name' 2>/dev/null || true)
+        # Fetch pod JSON once for both OOM detection and Pending check
+        _pods_json=$(kubectl get pods -n onelens-agent -o json 2>/dev/null || true)
+
+        # Detect OOM from: (1) lastState.terminated.reason == OOMKilled, or
+        # (2) CrashLoopBackOff with restartCount >= 3 (pod keeps crashing, likely OOM —
+        #     kernel doesn't always label it OOMKilled, e.g. during WAL replay)
+        if [ -n "$_pods_json" ]; then
+            OOM_KUBECTL=$(echo "$_pods_json" | jq -r '
+                .items[].status.containerStatuses[]? |
+                select(
+                    .lastState.terminated.reason == "OOMKilled" or
+                    (.state.waiting.reason == "CrashLoopBackOff" and .restartCount >= 3)
+                ) | .name
+            ' 2>/dev/null || true)
+            if [ -n "$OOM_KUBECTL" ]; then
+                echo "OOM detected via kubectl fallback (Prometheus unavailable for KSM metric):"
+                echo "$OOM_KUBECTL" | while read -r _oname; do echo "  $_oname"; done
+            fi
+
+            # Warn on pods Pending for >30 minutes (possible node resource exhaustion — don't bump)
+            _pending_warn=$(echo "$_pods_json" | jq -r '
+                .items[] | select(.status.phase == "Pending") |
+                select(now - (.metadata.creationTimestamp | fromdateiso8601) > 1800) |
+                .metadata.name
+            ' 2>/dev/null || true)
+            if [ -n "$_pending_warn" ]; then
+                echo "WARNING: pods Pending for >30 minutes (possible node resource exhaustion):"
+                echo "$_pending_warn" | while read -r _pname; do echo "  $_pname"; done
+            fi
+        fi
     fi
 
     # Read ConfigMap state
