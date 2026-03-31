@@ -94,6 +94,18 @@ assert_eq "$(_eval_mem "prom" "2400Mi" "150m" "200000000" "0.08" "true" "false" 
 assert_eq "$(_eval_cpu "prom" "384Mi" "150m" "200000000" "0.08" "true" "false" "false" "false" 1.35 1.25 150 4800 50 1200)" \
     "150m" "OOM now: CPU unchanged"
 
+# KSM OOM: 1.5x (not 2x). 384Mi * 1.5 = 576Mi → rounded to 600Mi
+assert_eq "$(_eval_mem "kube-state-metrics" "384Mi" "150m" "200000000" "0.08" "true" "false" "false" "false" 1.35 1.25 64 4800 50 1200)" \
+    "600Mi" "OOM now KSM: 1.5x (384Mi → 600Mi)"
+
+# OpenCost OOM: 1.5x. 768Mi * 1.5 = 1152Mi → rounded to 1200Mi
+assert_eq "$(_eval_mem "opencost" "768Mi" "150m" "200000000" "0.08" "true" "false" "false" "false" 1.35 1.25 192 4800 50 1200)" \
+    "1200Mi" "OOM now OpenCost: 1.5x (768Mi → 1200Mi)"
+
+# KSM OOM at cap: 3600Mi * 1.5 = 5400Mi → capped at 4800Mi
+assert_eq "$(_eval_mem "kube-state-metrics" "3600Mi" "150m" "200000000" "0.08" "true" "false" "false" "false" 1.35 1.25 64 4800 50 1200)" \
+    "4800Mi" "OOM now KSM: 1.5x capped (3600Mi → 4800Mi)"
+
 # OOM recent (hold period): no downsize, upsize allowed
 assert_eq "$(_eval_mem "prom" "768Mi" "150m" "200000000" "0.08" "false" "true" "false" "false" 1.35 1.25 150 4800 50 1200)" \
     "768Mi" "OOM recent: hold (300Mi < 768Mi, no downsize)"

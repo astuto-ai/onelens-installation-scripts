@@ -738,7 +738,7 @@ if [ -n "$PROM_SVC" ]; then
                 if [ "$IS_FIRST_RUN" = "true" ]; then
                     echo "  $label: OOM detected on first run — recording for 7-day hold (no resize)"
                 else
-                    echo "  $label: OOM detected — doubling memory from $cur_mem"
+                    echo "  $label: OOM detected — bumping memory from $cur_mem"
                 fi
             fi
 

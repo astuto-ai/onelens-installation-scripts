@@ -145,6 +145,22 @@ assert_eq "$(calculate_oom_response_memory "3000Mi" 4800)" "4800Mi" \
 assert_eq "$(calculate_oom_response_memory "150Mi" 4800)" "300Mi" \
     "calculate_oom_response_memory: 150Mi → 300Mi"
 
+# 1.5x multiplier (KSM/OpenCost OOM). 384Mi * 1.5 = 576Mi → rounded to 600Mi
+assert_eq "$(calculate_oom_response_memory "384Mi" 4800 3 2)" "600Mi" \
+    "calculate_oom_response_memory 1.5x: 384Mi → 600Mi"
+
+# 1.5x at cap: 3600Mi * 1.5 = 5400Mi → capped at 4800Mi
+assert_eq "$(calculate_oom_response_memory "3600Mi" 4800 3 2)" "4800Mi" \
+    "calculate_oom_response_memory 1.5x: 3600Mi → 4800Mi (capped)"
+
+# 1.5x small value: 64Mi * 1.5 = 96Mi → rounded to 100Mi
+assert_eq "$(calculate_oom_response_memory "64Mi" 4800 3 2)" "100Mi" \
+    "calculate_oom_response_memory 1.5x: 64Mi → 100Mi"
+
+# Default (no multiplier args) still gives 2x
+assert_eq "$(calculate_oom_response_memory "400Mi" 4800)" "800Mi" \
+    "calculate_oom_response_memory default: 400Mi → 800Mi (2x)"
+
 ###############################################################################
 test_summary
 exit $?
