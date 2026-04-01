@@ -141,11 +141,16 @@ assert_ge "$terminated_case" "1" "src/patching.sh has explicit Terminated case i
 # Per-namespace counting spawns 77+ kubectl processes on a 25-namespace cluster,
 # causing OOM on the 256Mi CronJob container. Field-selector is server-side.
 ###############################################################################
-field_selector_count=$(grep -c 'field-selector=status.phase=' "$SRC_FILE" || true)
-assert_ge "$field_selector_count" "2" "src/patching.sh uses field-selector pod counting (Running + Pending)"
+chunk_size=$(grep -c 'chunk-size=500' "$SRC_FILE" || true)
+assert_ge "$chunk_size" "1" "src/patching.sh uses --chunk-size=500 for memory-bounded pod counting"
 
 per_ns_loop=$(grep -c 'kubectl get deployments -n' "$SRC_FILE" || true)
 assert_eq "$per_ns_loop" "0" "src/patching.sh has no per-namespace deployment counting"
+
+# patching_mode is only set for clusters older than v2.1.55 (onboarding).
+# Clusters on v2.1.55+ keep their DB-managed patching_mode value.
+patching_mode_guarded=$(grep -c '_deployed_minor.*55' "$SRC_FILE" || true)
+assert_ge "$patching_mode_guarded" "1" "src/patching.sh guards patching_mode behind version check"
 
 test_summary
 exit $?

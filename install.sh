@@ -336,19 +336,20 @@ if [ "$_rbac_ready" != "true" ]; then
     exit 1
 fi
 
-# Count actual pods using server-side field-selector (API returns only matching pods).
-# 2 lightweight kubectl calls vs 77+ per-namespace workload controller queries.
-NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-DESIRED_PODS=$((NUM_RUNNING + NUM_PENDING))
-TOTAL_PODS=$(( DESIRED_PODS * 130 / 100 ))  # 30% buffer
+# Count active pods (Running, Pending, ContainerCreating) using server-side field-selector.
+# Single kubectl call with --chunk-size=500 keeps memory bounded (~500 pods of JSON at a time)
+# regardless of cluster size. Excludes completed/failed job pods.
+NUM_PODS=$(kubectl get pods --all-namespaces --no-headers --chunk-size=500 \
+    --field-selector='status.phase!=Succeeded,status.phase!=Failed' \
+    2>/dev/null | wc -l | tr -d '[:space:]')
+TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
 
 if [ "$TOTAL_PODS" -le 0 ]; then
-    echo "WARNING: No running or pending pods found. Using minimum tier."
+    echo "WARNING: No active pods found. Using minimum tier."
     TOTAL_PODS=1
 fi
 
-echo "Cluster pod count: $DESIRED_PODS (running=$NUM_RUNNING pending=$NUM_PENDING)"
+echo "Cluster pod count: $NUM_PODS active pods"
 echo "Adjusted pod count (with 30% buffer): $TOTAL_PODS"
 
 # --- Label density ---
