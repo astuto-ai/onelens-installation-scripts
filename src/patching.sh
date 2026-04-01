@@ -163,17 +163,33 @@ if [ -n "$LAST_UPDATER_POD" ]; then
     fi
 fi
 
-# Set CronJob resources: 200m CPU. Memory: 512Mi if previous run OOMKilled, else 256Mi.
+# Set CronJob resources: 200m CPU. Memory depends on OOM state.
 # Note: _cpu_to_millicores is not available yet (library embedded below), so parse manually.
 TARGET_CPU_MILLICORES=200
+CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
+CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || true)
+
+# Parse current memory to Mi for comparison
+CURRENT_MEM_MI=""
+if [ -n "$CURRENT_MEM" ]; then
+    if echo "$CURRENT_MEM" | grep -q 'Gi$'; then
+        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Gi$//' | awk '{printf "%.0f", $1 * 1024}')
+    else
+        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Mi$//')
+    fi
+fi
+
 if [ "$_UPDATER_OOM" = "true" ]; then
     TARGET_MEMORY_MI=512
     echo "Bumping CronJob memory to 512Mi (OOM recovery). Takes effect next run."
+elif [ "$CURRENT_MEM_MI" = "512" ]; then
+    # Previously bumped for OOM — keep 512Mi, don't downsize back to 256Mi.
+    # The cluster needs 512Mi for helm/kubectl page cache during upgrades.
+    TARGET_MEMORY_MI=512
+    echo "CronJob memory at 512Mi (previous OOM bump) — keeping."
 else
     TARGET_MEMORY_MI=256
 fi
-CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
-CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || true)
 
 NEED_CPU_PATCH=false
 NEED_MEM_PATCH=false
@@ -189,20 +205,14 @@ if [ -n "$CURRENT_CPU" ]; then
     fi
 fi
 
-if [ -n "$CURRENT_MEM" ]; then
-    # Convert to Mi: "256Mi" → 256, "1Gi" → 1024
-    if echo "$CURRENT_MEM" | grep -q 'Gi$'; then
-        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Gi$//' | awk '{printf "%.0f", $1 * 1024}')
-    else
-        CURRENT_MEM_MI=$(echo "$CURRENT_MEM" | sed 's/Mi$//')
-    fi
+if [ -n "$CURRENT_MEM_MI" ]; then
     if [ "$CURRENT_MEM_MI" -ne "$TARGET_MEMORY_MI" ] 2>/dev/null; then
         NEED_MEM_PATCH=true
     fi
 fi
 
 if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
-    echo "Resetting CronJob resources to defaults (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
+    echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
     kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
       \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
         \"name\":\"onelensupdater\",
@@ -215,7 +225,7 @@ if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
         echo "CronJob resources reset successfully" || \
         echo "WARNING: Failed to reset CronJob resources"
 else
-    echo "CronJob resources already at defaults (${CURRENT_CPU}, ${CURRENT_MEM})"
+    echo "CronJob resources already at target (${CURRENT_CPU}, ${CURRENT_MEM})"
 fi
 
 # Ensure deployer CronJob has backoffLimit=0 (no internal retries).
