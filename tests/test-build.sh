@@ -108,5 +108,33 @@ else
     rm -f "$OUT_FILE"
 fi
 
+###############################################################################
+# Test 11: src/patching.sh must not use --force-conflicts with kubectl patch
+# --force-conflicts is only valid for "kubectl apply --server-side", not
+# "kubectl patch". On kubectl v1.28 (which patching.sh installs) it errors
+# with "unknown flag: --force-conflicts", silently breaking CronJob patches.
+###############################################################################
+force_conflicts_count=$(grep -c '\-\-force-conflicts' "$SRC_FILE" || true)
+assert_eq "$force_conflicts_count" "0" "src/patching.sh has no --force-conflicts (invalid for kubectl patch)"
+
+###############################################################################
+# Test 12: OOM remediation skips CronJob-owned (Job-owned) pods
+# _remediate_oomkilled_pod uses "kubectl set resources deployment" which only
+# works for Deployment-owned pods. Agent pods are CronJob-created (owned by
+# Job), so the OOMKilled and CrashLoopBackOff→OOM branches must check
+# ownerReferences before calling _remediate_oomkilled_pod.
+###############################################################################
+# Count ownerReferences checks near the OOM remediation routing logic
+owner_checks=$(grep -c 'ownerReferences.*kind' "$SRC_FILE" || true)
+assert_ge "$owner_checks" "3" "src/patching.sh checks ownerReferences for Job-owned pods (OOMKilled + CrashLoopBackOff + Terminated)"
+
+###############################################################################
+# Test 13: Terminated pods have an explicit case branch (not wildcard)
+# Without this, terminated agent job pods log "Unknown failure reason" which
+# makes patching_logs look broken when it's a normal completed/failed job.
+###############################################################################
+terminated_case=$(grep -c 'Terminated)' "$SRC_FILE" || true)
+assert_ge "$terminated_case" "1" "src/patching.sh has explicit Terminated case in pod remediation"
+
 test_summary
 exit $?

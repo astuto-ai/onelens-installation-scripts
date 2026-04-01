@@ -128,7 +128,7 @@ if [ -n "$CURRENT_DEADLINE" ] && [ "$CURRENT_DEADLINE" -lt "$TARGET_DEADLINE" ] 
 fi
 if [ -n "$PATCH_JSON" ]; then
     PATCH_JSON="${PATCH_JSON}}}"
-    kubectl patch cronjob onelensupdater -n onelens-agent -p "$PATCH_JSON" --field-manager='Helm' --force-conflicts 2>/dev/null && \
+    kubectl patch cronjob onelensupdater -n onelens-agent -p "$PATCH_JSON" --field-manager='Helm' 2>/dev/null && \
         echo "CronJob patched successfully" || \
         echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
@@ -171,7 +171,7 @@ fi
 
 if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
     echo "Resetting CronJob resources to defaults (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
-    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
       \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
         \"name\":\"onelensupdater\",
         \"resources\":{
@@ -199,7 +199,7 @@ CURRENT_BACKOFF=$(kubectl get cronjob onelensupdater -n onelens-agent \
     -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}' 2>/dev/null || true)
 if [ -n "$CURRENT_BACKOFF" ] && [ "$CURRENT_BACKOFF" != "0" ] 2>/dev/null; then
     echo "Updating CronJob backoffLimit from $CURRENT_BACKOFF to 0..."
-    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p='
       {"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}
     ' 2>/dev/null && \
         echo "CronJob backoffLimit patched successfully" || \
@@ -1905,9 +1905,18 @@ _remediate_stuck_pods() {
         # Route to appropriate handler
         case "$failure_reason" in
             OOMKilled)
-                # Extract component name from pod name
-                local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
-                _remediate_oomkilled_pod "$pod_name" "$component"
+                # Check if pod is owned by a Job (CronJob-created agent pods).
+                # Agent OOM is handled separately in the Agent CronJob Health section below,
+                # which patches the CronJob spec directly. _remediate_oomkilled_pod only works
+                # for Deployment-owned pods (prometheus, KSM, opencost).
+                local owner_kind=$(kubectl get pod "$pod_name" -n onelens-agent \
+                    -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)
+                if [ "$owner_kind" = "Job" ]; then
+                    echo "  Skipping — agent CronJob pod, handled in Agent CronJob Health section"
+                else
+                    local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+                    _remediate_oomkilled_pod "$pod_name" "$component"
+                fi
                 ;;
 
             ConnectionRefused|Timeout|EOF|Failed)
@@ -1928,8 +1937,15 @@ _remediate_stuck_pods() {
                 pod_logs=$(kubectl logs "$pod_name" -n onelens-agent --tail=20 2>/dev/null || echo "")
 
                 if echo "$pod_logs" | grep -iq "OOMKilled\|out of memory"; then
-                    local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
-                    _remediate_oomkilled_pod "$pod_name" "$component"
+                    # Skip CronJob-owned pods (agent OOM handled in Agent CronJob Health section)
+                    local owner_kind=$(kubectl get pod "$pod_name" -n onelens-agent \
+                        -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)
+                    if [ "$owner_kind" = "Job" ]; then
+                        echo "  Skipping — agent CronJob pod, handled in Agent CronJob Health section"
+                    else
+                        local component=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+                        _remediate_oomkilled_pod "$pod_name" "$component"
+                    fi
                 elif echo "$pod_logs" | grep -iq "connection.*refused\|timeout\|eof"; then
                     _remediate_transient_crash "$pod_name" "transient error"
                 else
@@ -1960,6 +1976,19 @@ _remediate_stuck_pods() {
                     else
                         echo "  ⚠️  Pod stuck Pending > 10min (no scheduling event found)"
                     fi
+                fi
+                ;;
+
+            Terminated)
+                # Normal for completed/failed Job pods (agent CronJob). The Agent CronJob
+                # Health section below handles these (deletes failed jobs, triggers fresh runs).
+                # For Deployment-owned pods this shouldn't happen (ReplicaSet replaces immediately).
+                local owner_kind=$(kubectl get pod "$pod_name" -n onelens-agent \
+                    -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || true)
+                if [ "$owner_kind" = "Job" ]; then
+                    echo "  Skipping — terminated agent job pod, handled in Agent CronJob Health section"
+                else
+                    echo "  ⚠️  Terminated non-job pod (ReplicaSet should have replaced it)"
                 fi
                 ;;
 
@@ -2209,7 +2238,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
     # Fix: unsuspend if suspended
     if [ "$AGENT_SUSPENDED" = "true" ]; then
         echo "WARNING: Agent CronJob is suspended. Unsuspending..."
-        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='{"spec":{"suspend":false}}' 2>/dev/null && \
+        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p='{"spec":{"suspend":false}}' 2>/dev/null && \
             echo "Agent CronJob unsuspended" || echo "WARNING: Failed to unsuspend agent CronJob"
     fi
 
@@ -2217,7 +2246,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
     # Don't patch if empty (not in spec) — avoids stealing field ownership from helm.
     if [ -n "$AGENT_BACKOFF" ] && [ "$AGENT_BACKOFF" != "0" ] 2>/dev/null; then
         echo "Patching agent CronJob backoffLimit from $AGENT_BACKOFF to 0..."
-        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p='{"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}' 2>/dev/null && \
+        kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p='{"spec":{"jobTemplate":{"spec":{"backoffLimit":0}}}}' 2>/dev/null && \
             echo "Agent CronJob backoffLimit patched" || echo "WARNING: Failed to patch agent backoffLimit"
     fi
 
@@ -2320,7 +2349,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
-                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
+                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
@@ -2344,7 +2373,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_MEM="${_USAGE_CAP_AGENT_MEM}Mi"
                         fi
                         echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
-                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' --force-conflicts -p="{
+                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
                           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                             \"name\":\"$AGENT_CONTAINER_NAME\",
                             \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
