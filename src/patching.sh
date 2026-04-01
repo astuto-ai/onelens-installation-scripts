@@ -236,99 +236,26 @@ fi
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/resource-sizing.sh"
 # END_EMBED
 
-# --- Pod count: use desired/max replicas from workload controllers ---
-echo "Calculating cluster pod capacity from workload controllers..."
-_report_milestone  # M4: pod-counting-start — about to scan namespaces (OOM risk on mega clusters)
+# --- Pod count: count running + pending pods across all namespaces ---
+echo "Calculating cluster pod count..."
+_report_milestone  # M4: pod-counting-start
 
-# Manual override: if POD_COUNT_OVERRIDE is set (via --set podCountOverride=5000),
-# skip all kubectl counting and use the provided value directly.
-# This is a safety valve for clusters where kubectl OOMs even with per-namespace counting.
-_EARLY_EXIT=false
-if [ -n "$POD_COUNT_OVERRIDE" ] && [ "$POD_COUNT_OVERRIDE" -gt 0 ] 2>/dev/null; then
-    echo "Using manual pod count override: $POD_COUNT_OVERRIDE (kubectl counting bypassed)"
-    DEPLOY_PODS=$POD_COUNT_OVERRIDE
-    STS_PODS=0
-    DS_PODS=0
-else
+# Count actual pods using server-side field-selector (API returns only matching pods).
+# 2 lightweight kubectl calls vs 77+ per-namespace workload controller queries.
+NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+DESIRED_PODS=$((NUM_RUNNING + NUM_PENDING))
+TOTAL_PODS=$(( DESIRED_PODS * 130 / 100 ))  # 30% buffer
 
-# Check cluster-wide read access — if the deployer SA can't list resources across
-# namespaces (broken RoleBinding from v1.x upgrade), pod counting returns 0 silently.
-# Warn but proceed — usage-based sizing will correct after Prometheus has data.
-if ! kubectl get nodes --no-headers >/dev/null 2>&1; then
-    echo "WARNING: Cannot list nodes cluster-wide. Pod counting may be inaccurate (possible RBAC issue)."
-    echo "Tier-based sizing may be wrong. Usage-based sizing will correct after 72h if Prometheus is up."
-fi
-
-# Pod counting via per-namespace kubectl calls with early exit for large clusters.
-# kubectl get --all-namespaces loads ALL objects into memory before output,
-# which OOMs the deployer container on large clusters (4000+ deployments).
-# Per-namespace counting keeps memory bounded — each call loads only that
-# namespace's objects. If running total exceeds 1500 pods, stop counting
-# and use extra-large tier — OOM recovery + usage-based sizing will adjust.
-
-_NS_RAW=$(kubectl get namespaces --no-headers 2>/dev/null | awk '{print $1}')
-_NS_COUNT=$(echo "$_NS_RAW" | wc -l | tr -d '[:space:]')
-echo "Counting workloads across $_NS_COUNT namespaces..."
-
-DEPLOY_PODS=0; STS_PODS=0; DS_PODS=0
-_ns_done=0
-while read -r _ns; do
-    [ -z "$_ns" ] && continue
-    _d=$(kubectl get deployments -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
-    _s=$(kubectl get statefulsets -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
-    _ds=$(kubectl get daemonsets -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{total+=$2} END{print total+0}')
-    DEPLOY_PODS=$((DEPLOY_PODS + _d))
-    STS_PODS=$((STS_PODS + _s))
-    DS_PODS=$((DS_PODS + _ds))
-    _ns_done=$((_ns_done + 1))
-
-    # Early exit: large cluster detected, use extra-large tier
-    _current_total=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    if [ "$_current_total" -gt 1500 ]; then
-        echo "Large cluster detected ($_current_total pods after $_ns_done/$_NS_COUNT namespaces) — using extra-large tier"
-        _EARLY_EXIT=true
-        break
-    fi
-
-    # Log progress every 10 namespaces on large clusters
-    if [ "$_NS_COUNT" -gt 20 ] && [ $((_ns_done % 10)) -eq 0 ]; then
-        echo "  Scanned $_ns_done/$_NS_COUNT namespaces (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS)..."
-    fi
-done <<< "$_NS_RAW"
-
-fi # end POD_COUNT_OVERRIDE check
-
-# Node count for logging
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
-# Pod counts calculated above via text+awk (no library functions needed)
-if [ "$_EARLY_EXIT" = "true" ]; then
-    # Large cluster: use extra-large tier. OOM recovery + usage-based sizing will adjust.
-    # DESIRED_PODS is partial (only counted until threshold). TOTAL_PODS is the tier target.
-    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    TOTAL_PODS=1200
-    echo "Cluster pod capacity: $DESIRED_PODS+ desired (partial count, stopped early)"
-    echo "Using extra-large tier (TOTAL_PODS=$TOTAL_PODS) — will self-correct via usage-based sizing"
-else
-    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
-fi
-
-# Fallback: if desired pods calculation returned 0 or failed, use running pod count
 if [ "$TOTAL_PODS" -le 0 ]; then
-    echo "WARNING: Could not calculate desired pods from workload controllers. Falling back to running pod count."
-    NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-    NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-    TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
+    echo "WARNING: No running or pending pods found. Using minimum tier."
+    TOTAL_PODS=1
 fi
 
-if [ "$_EARLY_EXIT" != "true" ]; then
-    echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
-    echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
-fi
+echo "Cluster pod count: $DESIRED_PODS (running=$NUM_RUNNING pending=$NUM_PENDING)"
+echo "Adjusted pod count (with 30% buffer): $TOTAL_PODS"
 
 # --- Label density ---
 # Hardcoded to 6 (multiplier 1.0x) — no runtime measurement needed.
@@ -507,7 +434,7 @@ if [ -n "$NOT_HEALTHY" ]; then
 fi
 
 # Cluster sizing inputs (the numbers that drive resource allocation)
-echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
+echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (running=$NUM_RUNNING pending=$NUM_PENDING) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
 
 # Current resources (compact: cpu/memory limits per component)
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then

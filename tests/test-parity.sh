@@ -23,15 +23,15 @@ assert_gt "$install_tier" "0" "install.sh calls select_resource_tier"
 assert_gt "$patching_tier" "0" "patching.sh calls select_resource_tier"
 
 # ---------------------------------------------------------------------------
-# Test 3: Both scripts call calculate_total_pods
+# Test 3: Both scripts use field-selector pod counting
 # ---------------------------------------------------------------------------
-# count_deploy_pods/count_sts_pods/count_ds_pods not called directly —
-# pod counts calculated via text output (--no-headers) + awk for memory efficiency
-for fn in calculate_total_pods; do
-    install_has=$(grep -c "$fn" "$ROOT/install.sh" || true)
-    patching_has=$(grep -c "$fn" "$ROOT/src/patching.sh" || true)
-    assert_gt "$install_has" "0" "install.sh calls $fn"
-    assert_gt "$patching_has" "0" "patching.sh calls $fn"
+# Pod counting uses server-side field-selector (status.phase=Running/Pending)
+# instead of per-namespace workload controller queries.
+for pattern in 'field-selector=status.phase=Running' 'field-selector=status.phase=Pending'; do
+    install_has=$(grep -c "$pattern" "$ROOT/install.sh" || true)
+    patching_has=$(grep -c "$pattern" "$ROOT/src/patching.sh" || true)
+    assert_gt "$install_has" "0" "install.sh uses $pattern"
+    assert_gt "$patching_has" "0" "patching.sh uses $pattern"
 done
 
 # ---------------------------------------------------------------------------
@@ -193,33 +193,21 @@ patching_fallback=$(grep -c 'USAGE_BASED_APPLIED' "$ROOT/src/patching.sh" || tru
 assert_gt "$patching_fallback" "0" "patching.sh has USAGE_BASED_APPLIED fallback flag"
 
 # ---------------------------------------------------------------------------
-# Test 22: Both scripts handle OpenCost transient Prometheus-dependency crash
+# Test 22: patching.sh handles pod failure detection and remediation
 # ---------------------------------------------------------------------------
-# After the pod health poll loop, both scripts must detect OpenCost failures
-# caused by Prometheus being temporarily unreachable and wait for recovery.
-install_oc_transient=$(grep -c 'OpenCost failing due to Prometheus dependency' "$ROOT/install.sh" || true)
+# install.sh registers CONNECTED immediately after helm install and delegates
+# pod health management to the patching CronJob. Only patching.sh needs the
+# full pod failure detection, OOM remediation, and OpenCost transient handling.
 patching_oc_transient=$(grep -c 'OpenCost failing due to Prometheus dependency' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_oc_transient" "0" "install.sh handles OpenCost Prometheus-dependency transient crash"
 assert_gt "$patching_oc_transient" "0" "patching.sh handles OpenCost Prometheus-dependency transient crash"
 
-# Both scripts must check Prometheus readiness before waiting for OpenCost
-install_prom_check=$(grep -c 'OpenCost cannot start: Prometheus is not ready' "$ROOT/install.sh" || true)
 patching_prom_check=$(grep -c 'OpenCost cannot start: Prometheus is not ready' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_prom_check" "0" "install.sh logs root cause when Prometheus is not ready"
 assert_gt "$patching_prom_check" "0" "patching.sh logs root cause when Prometheus is not ready"
 
-# Both scripts must check OpenCost logs for Prometheus connection errors
-install_oc_logs=$(grep -c 'Failed to create Prometheus data source' "$ROOT/install.sh" || true)
 patching_oc_logs=$(grep -c 'Failed to create Prometheus data source' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_oc_logs" "0" "install.sh checks OpenCost logs for Prometheus data source error"
 assert_gt "$patching_oc_logs" "0" "patching.sh checks OpenCost logs for Prometheus data source error"
 
-# ---------------------------------------------------------------------------
-# Test 23: Both scripts detect PV AZ mismatch in _detect_pod_failure
-# ---------------------------------------------------------------------------
-install_az=$(grep -c 'PV_AZ_MISMATCH' "$ROOT/install.sh" || true)
 patching_az=$(grep -c 'PV_AZ_MISMATCH' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_az" "0" "install.sh detects PV_AZ_MISMATCH"
 assert_gt "$patching_az" "0" "patching.sh detects PV_AZ_MISMATCH"
 
 # ---------------------------------------------------------------------------

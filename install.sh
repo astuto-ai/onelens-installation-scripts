@@ -12,22 +12,28 @@ touch "$LOG_FILE"
 exec > >(tee "$LOG_FILE") 2>&1
 
 send_logs() {
-    echo "Sending logs to API..."
-    echo "***********************************************************************************************"
+    # Send install logs to the backend on failure so they appear in the dashboard.
+    # Uses PUT /cluster-version (not POST /registration which requires initial registration fields).
+    if [ -z "$REGISTRATION_ID" ] || [ -z "$CLUSTER_TOKEN" ]; then return; fi
+    local _api_url="${API_BASE_URL:-https://api-in.onelens.cloud}"
+    echo "Sending install logs to API..."
     sleep 0.1
-    cat "$LOG_FILE"
-
-    # Escape double quotes in the log file to ensure valid JSON
-    logs=$(sed 's/"/\\"/g' "$LOG_FILE")
-
-    curl -X POST "$API_BASE_URL/v1/kubernetes/registration" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"registration_id\": \"$REGISTRATION_ID\",
-            \"cluster_token\": \"$CLUSTER_TOKEN\",
-            \"status\": \"FAILED\",
-            \"logs\": \"$logs\"
-        }"
+    local log_content
+    log_content=$(cat "$LOG_FILE" 2>/dev/null || true)
+    if [ ${#log_content} -gt 10000 ]; then
+        log_content="[truncated]...${log_content: -9900}"
+    fi
+    local payload
+    payload=$(jq -n \
+        --arg reg_id "$REGISTRATION_ID" \
+        --arg token "$CLUSTER_TOKEN" \
+        --arg logs "$log_content" \
+        '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs}}' 2>/dev/null)
+    if [ -n "$payload" ]; then
+        curl -s --max-time 10 -X PUT "$_api_url/v1/kubernetes/cluster-version" \
+            -H "Content-Type: application/json" \
+            -d "$payload" >/dev/null 2>&1 || true
+    fi
 }
 
 # Ensure we send logs on error, and preserve the original exit code
@@ -305,24 +311,11 @@ echo "Persistent storage for Prometheus is ENABLED."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/resource-sizing.sh"
 
-# --- Pod count: use desired/max replicas from workload controllers ---
-echo "Calculating cluster pod capacity from workload controllers..."
-
-# Manual override: if POD_COUNT_OVERRIDE is set (via --set podCountOverride=5000),
-# skip all kubectl counting and use the provided value directly.
-# This is a safety valve for clusters where kubectl OOMs even with per-namespace counting.
-_EARLY_EXIT=false
-if [ -n "$POD_COUNT_OVERRIDE" ] && [ "$POD_COUNT_OVERRIDE" -gt 0 ] 2>/dev/null; then
-    echo "Using manual pod count override: $POD_COUNT_OVERRIDE (kubectl counting bypassed)"
-    DEPLOY_PODS=$POD_COUNT_OVERRIDE
-    STS_PODS=0
-    DS_PODS=0
-else
+# --- Pod count: count running + pending pods across all namespaces ---
+echo "Calculating cluster pod count..."
 
 # Wait for RBAC to propagate — the ClusterRoleBinding granting cluster-wide read
 # may not be cached by the API server yet (created moments ago by helm install).
-# Without this, kubectl get deployments --all-namespaces returns 403 silently,
-# causing 0 deploy/0 sts counts and wrong tier selection.
 echo "Checking cluster-wide read access..."
 _rbac_ready=false
 for _rw in 1 2 3 4 5 6; do
@@ -336,82 +329,27 @@ done
 if [ "$_rbac_ready" != "true" ]; then
     echo "ERROR: Cluster-wide read access not available after 30s."
     echo "The deployer ServiceAccount cannot list nodes/deployments/pods across namespaces."
-    echo "This means pod counting will be wrong and resource sizing will be incorrect."
     echo "Possible causes:"
     echo "  - ClusterRoleBinding not yet propagated (retry install)"
     echo "  - ClusterRole missing required permissions (check deployer RBAC)"
-    echo "  - Kubernetes API server RBAC cache delay (wait and retry)"
     echo "Aborting install to prevent incorrect resource allocation."
     exit 1
 fi
 
-# Pod counting via per-namespace kubectl calls with early exit for large clusters.
-# kubectl get --all-namespaces loads ALL objects into memory before output,
-# which OOMs the deployer container on large clusters (4000+ deployments).
-# Per-namespace counting keeps memory bounded — each call loads only that
-# namespace's objects. If running total exceeds 1500 pods, stop counting
-# and use extra-large tier — OOM recovery + usage-based sizing will adjust.
+# Count actual pods using server-side field-selector (API returns only matching pods).
+# 2 lightweight kubectl calls vs 77+ per-namespace workload controller queries.
+NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+DESIRED_PODS=$((NUM_RUNNING + NUM_PENDING))
+TOTAL_PODS=$(( DESIRED_PODS * 130 / 100 ))  # 30% buffer
 
-_NS_RAW=$(kubectl get namespaces --no-headers 2>/dev/null | awk '{print $1}')
-_NS_COUNT=$(echo "$_NS_RAW" | wc -l | tr -d '[:space:]')
-echo "Counting workloads across $_NS_COUNT namespaces..."
-
-DEPLOY_PODS=0; STS_PODS=0; DS_PODS=0
-_ns_done=0
-while read -r _ns; do
-    [ -z "$_ns" ] && continue
-    _d=$(kubectl get deployments -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
-    _s=$(kubectl get statefulsets -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{split($2,a,"/"); s+=a[2]} END {print s+0}')
-    _ds=$(kubectl get daemonsets -n "$_ns" --no-headers 2>/dev/null \
-        | awk '{total+=$2} END{print total+0}')
-    DEPLOY_PODS=$((DEPLOY_PODS + _d))
-    STS_PODS=$((STS_PODS + _s))
-    DS_PODS=$((DS_PODS + _ds))
-    _ns_done=$((_ns_done + 1))
-
-    # Early exit: large cluster detected, use extra-large tier
-    _current_total=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    if [ "$_current_total" -gt 1500 ]; then
-        echo "Large cluster detected ($_current_total pods after $_ns_done/$_NS_COUNT namespaces) — using extra-large tier"
-        _EARLY_EXIT=true
-        break
-    fi
-
-    # Log progress every 10 namespaces on large clusters
-    if [ "$_NS_COUNT" -gt 20 ] && [ $((_ns_done % 10)) -eq 0 ]; then
-        echo "  Scanned $_ns_done/$_NS_COUNT namespaces (deploy=$DEPLOY_PODS sts=$STS_PODS ds=$DS_PODS)..."
-    fi
-done <<< "$_NS_RAW"
-
-fi # end POD_COUNT_OVERRIDE check
-
-# Pod counts calculated above via text+awk (no library functions needed)
-if [ "$_EARLY_EXIT" = "true" ]; then
-    # Large cluster: use extra-large tier. OOM recovery + usage-based sizing will adjust.
-    # DESIRED_PODS is partial (only counted until threshold). TOTAL_PODS is the tier target.
-    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    TOTAL_PODS=1200
-    echo "Cluster pod capacity: $DESIRED_PODS+ desired (partial count, stopped early)"
-    echo "Using extra-large tier (TOTAL_PODS=$TOTAL_PODS) — will self-correct via usage-based sizing"
-else
-    DESIRED_PODS=$((DEPLOY_PODS + STS_PODS + DS_PODS))
-    TOTAL_PODS=$(calculate_total_pods "$DEPLOY_PODS" "$STS_PODS" "$DS_PODS")
-fi
-
-# Fallback: if desired pods calculation returned 0 or failed, use running pod count
 if [ "$TOTAL_PODS" -le 0 ]; then
-    echo "WARNING: Could not calculate desired pods from workload controllers. Falling back to running pod count."
-    NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers | wc -l | tr -d '[:space:]')
-    NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers | wc -l | tr -d '[:space:]')
-    TOTAL_PODS=$((NUM_RUNNING + NUM_PENDING))
+    echo "WARNING: No running or pending pods found. Using minimum tier."
+    TOTAL_PODS=1
 fi
 
-if [ "$_EARLY_EXIT" != "true" ]; then
-    echo "Cluster pod capacity: $DESIRED_PODS desired (Deployments: $DEPLOY_PODS, StatefulSets: $STS_PODS, DaemonSets: $DS_PODS)"
-    echo "Adjusted pod count (with 25% buffer): $TOTAL_PODS"
-fi
+echo "Cluster pod count: $DESIRED_PODS (running=$NUM_RUNNING pending=$NUM_PENDING)"
+echo "Adjusted pod count (with 30% buffer): $TOTAL_PODS"
 
 # --- Label density ---
 # Hardcoded to 6 (multiplier 1.0x) — no runtime measurement needed.
@@ -753,252 +691,54 @@ if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
   done
 fi
 
-# Final execution
-CMD+=" --wait --timeout=10m"
+# Final execution — no --wait. Resources are submitted to the API server and helm
+# returns immediately. PV provisioning and pod startup happen asynchronously.
+# The patching CronJob (created by helm) handles ongoing pod health and remediation.
 
-# _detect_pod_failure — check if any onelens pod is failing after install.
-# Scans all non-Completed pods. Returns 0 (true) if a failing pod is found.
-# Sets: _FAIL_POD, _FAIL_COMPONENT, _FAIL_REASON ("oom" or "other"), _FAIL_DIAG
-_detect_pod_failure() {
-    _FAIL_POD=""
-    _FAIL_COMPONENT=""
-    _FAIL_REASON=""
-    _FAIL_DIAG=""
-
-    local pods_raw
-    pods_raw=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -vE 'Completed|Running' || true)
-    # Also check Running pods with high restart count that are NOT fully Ready.
-    # A Running+Ready pod with restarts has recovered from a transient issue — skip it.
-    # A Running but not Ready pod with restarts is still crash-looping.
-    pods_raw="$pods_raw
-$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | awk '$4+0 >= 2 {split($2,a,"/"); if(a[1]!=a[2]) print}' || true)"
-
-    if [ -z "$(echo "$pods_raw" | tr -d '[:space:]')" ]; then return 1; fi
-
-    # Check each known component in dependency order.
-    # Prometheus must be checked first — OpenCost depends on Prometheus.
-    # If Prometheus is not Running+Ready, skip OpenCost (it will fail regardless).
-    local _prom_ready=false
-    local _prom_pod_check
-    _prom_pod_check=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | awk '/prometheus-server/{print $2, $3; exit}' || true)
-    if echo "$_prom_pod_check" | grep -q 'Running' && echo "$_prom_pod_check" | grep -qE '^2/2|^1/1'; then
-        _prom_ready=true
-    fi
-
-    local component pod_pattern container_name
-    for component in prometheus-server kube-state-metrics prometheus-opencost-exporter prometheus-pushgateway; do
-        # Skip OpenCost check if Prometheus is not ready — OpenCost depends on Prometheus
-        if [ "$component" = "prometheus-opencost-exporter" ] && [ "$_prom_ready" != "true" ]; then
-            continue
-        fi
-
-        local pod_name pod_status restart_count term_reason pod_logs events
-
-        pod_name=$(echo "$pods_raw" | awk -v p="$component" '$1 ~ p {print $1; exit}' || true)
-        if [ -z "$pod_name" ]; then continue; fi
-
-        pod_status=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.phase}' 2>/dev/null || true)
-
-        # Get the main container name (may differ from pod pattern)
-        container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.spec.containers[0].name}' 2>/dev/null || echo "$component")
-        restart_count=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || echo "0")
-        term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
-        if [ -z "$term_reason" ]; then
-            term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-                -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
-        fi
-
-        # Skip pods that are Running with low restarts (healthy)
-        if [ "$pod_status" = "Running" ] && [ "$restart_count" -lt 2 ] 2>/dev/null; then continue; fi
-
-        events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$pod_name" --no-headers 2>/dev/null | tail -5 || true)
-        pod_logs=$(kubectl logs "$pod_name" -n onelens-agent -c "$container_name" --previous --tail=30 2>/dev/null || \
-            kubectl logs "$pod_name" -n onelens-agent -c "$container_name" --tail=30 2>/dev/null || true)
-
-        _FAIL_POD="$pod_name"
-        _FAIL_COMPONENT="$component"
-
-        # Classify failure
-        if echo "$events" | grep -qiE 'FailedScheduling.*PersistentVolume.*node affinity'; then
-            _FAIL_REASON="other"
-            _FAIL_DIAG="pod=$pod_name component=$component reason=PV_AZ_MISMATCH (PV is AZ-locked but no nodes available in that AZ. Customer must ensure node capacity in the PV's availability zone, or reinstall with multi-AZ storage: EFS for AWS, Azure Files for Azure)"
-        elif echo "$events" | grep -qiE 'FailedScheduling.*Insufficient'; then
-            _FAIL_REASON="other"
-            _FAIL_DIAG="pod=$pod_name component=$component reason=FailedScheduling (node can't fit resource request)"
-        elif [ "$term_reason" = "OOMKilled" ] || echo "$pod_logs" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
-            _FAIL_REASON="oom"
-            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=OOMKilled"
-        elif echo "$pod_logs" | grep -qiE 'wal|replay|checkpoint' 2>/dev/null && [ "$restart_count" -ge 2 ] 2>/dev/null; then
-            _FAIL_REASON="oom"
-            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=crash_during_wal_replay"
-        else
-            _FAIL_REASON="other"
-            local snippet
-            snippet=$(echo "$pod_logs" | tail -3 | tr '\n' ' ' | cut -c1-150)
-            _FAIL_DIAG="pod=$pod_name component=$component restarts=$restart_count reason=$term_reason logs=$snippet"
-        fi
-
-        return 0  # Found a failing pod
-    done
-
-    return 1  # No failing pods
-}
-
-# _bump_component_memory — bump the memory variable for a component by multiplier.
-# Sets the request and limit variables. Returns the --set flags for helm retry.
-_bump_component_memory() {
-    local component="$1"
-    local old_mem new_mem cap set_flags=""
-
-    case "$component" in
-        prometheus-server)
-            old_mem="$PROMETHEUS_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_PROM_MEM"
-            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x for WAL
-            PROMETHEUS_MEMORY_REQUEST="$new_mem"
-            PROMETHEUS_MEMORY_LIMIT="$new_mem"
-            set_flags="--set prometheus.server.resources.requests.memory=\"$new_mem\" --set prometheus.server.resources.limits.memory=\"$new_mem\""
-            ;;
-        kube-state-metrics)
-            old_mem="$KSM_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_KSM_MEM"
-            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
-            KSM_MEMORY_REQUEST="$new_mem"
-            KSM_MEMORY_LIMIT="$new_mem"
-            set_flags="--set prometheus.kube-state-metrics.resources.requests.memory=\"$new_mem\" --set prometheus.kube-state-metrics.resources.limits.memory=\"$new_mem\""
-            ;;
-        prometheus-opencost-exporter)
-            old_mem="$OPENCOST_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_OPENCOST_MEM"
-            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
-            OPENCOST_MEMORY_REQUEST="$new_mem"
-            OPENCOST_MEMORY_LIMIT="$new_mem"
-            set_flags="--set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$new_mem\" --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$new_mem\""
-            ;;
-        prometheus-pushgateway)
-            old_mem="$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
-            new_mem=$(apply_memory_multiplier "$old_mem" 1.25)
-            # Pushgateway cap is small — 256Mi is more than enough
-            local new_mi=$(_memory_to_mi "$new_mem")
-            if [ "$new_mi" -gt 256 ] 2>/dev/null; then new_mem="256Mi"; fi
-            PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="$new_mem"
-            PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="$new_mem"
-            set_flags="--set prometheus.prometheus-pushgateway.resources.requests.memory=\"$new_mem\" --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$new_mem\""
-            ;;
-    esac
-
-    echo "$old_mem $new_mem $set_flags"
-}
-
-# Run helm install with pod failure retry loop.
-# If any pod OOMs after install, bump that component's memory and retry.
-# Handles all components (Prometheus, KSM, OpenCost, Pushgateway), not just Prometheus.
-_INSTALL_RETRIES=0
-_MAX_INSTALL_RETRIES=3
-
+# Run helm install
 eval "$CMD"
 INSTALL_EXIT=$?
 
-while true; do
-    if [ $INSTALL_EXIT -eq 0 ]; then
-        # Install succeeded — poll for pods to stabilize before declaring failure.
-        # OpenCost crashes on startup (Prometheus not ready yet) and recovers in 30-60s.
-        # A genuine OOM will still be failing after 5 minutes.
-        _pods_ok=false
-        for _poll in 1 2 3 4 5; do
-            echo "Checking pod health (attempt $_poll/5)..."
-            sleep 60
-            if ! _detect_pod_failure; then
-                _pods_ok=true
-                break
-            fi
-            echo "  Pods not stable yet: $_FAIL_DIAG"
-        done
-        if [ "$_pods_ok" = "true" ]; then
-            break  # All pods healthy
+if [ $INSTALL_EXIT -ne 0 ]; then
+    echo "Helm install failed (exit $INSTALL_EXIT)."
+    kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
+    kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -5 || true
+    exit 1
+fi
+
+echo ""
+echo "Helm install succeeded. Resources submitted to cluster."
+
+# Wait for Prometheus PVC to be bound — proves the PV was provisioned by the CSI driver.
+# This is the only hard dependency: without a bound PV, Prometheus can't start and
+# patching.sh can't do usage-based sizing. All other pod issues are self-healing.
+if [ "$PVC_ENABLED" = "true" ]; then
+    echo "Waiting for Prometheus persistent volume to be provisioned..."
+    PVC_BOUND=false
+    for _pvc_wait in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        PVC_STATUS=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+            -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        if [ "$PVC_STATUS" = "Bound" ]; then
+            PVC_BOUND=true
+            PV_NAME=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+                -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+            echo "PVC bound to PV '$PV_NAME' (${_pvc_wait}0s)"
+            break
         fi
-        echo "Pods still failing after 5 min: $_FAIL_DIAG"
-
-        # OpenCost transient: crashes with FTL when Prometheus is unreachable during startup.
-        # If Prometheus is now healthy, give OpenCost one extra restart cycle to recover.
-        if [ "$_FAIL_COMPONENT" = "prometheus-opencost-exporter" ] && [ "$_FAIL_REASON" != "oom" ]; then
-            _oc_logs=$(kubectl logs "$_FAIL_POD" -n onelens-agent --tail=10 2>/dev/null || true)
-            if echo "$_oc_logs" | grep -qiE 'Failed to create Prometheus data source|connection refused.*prometheus'; then
-                _prom_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                    | awk '/prometheus-server/{print; exit}')
-                _prom_ready_col=$(echo "$_prom_line" | awk '{print $2}')
-                _prom_status_col=$(echo "$_prom_line" | awk '{print $3}')
-                if [ "$_prom_status_col" = "Running" ] && echo "$_prom_ready_col" | grep -qE '^2/2$|^1/1$'; then
-                    echo "OpenCost failing due to Prometheus dependency (transient). Prometheus is healthy — waiting for OpenCost to recover..."
-                    sleep 60
-                    if ! _detect_pod_failure; then
-                        echo "OpenCost recovered after extended wait."
-                        break
-                    fi
-                    echo "OpenCost still failing after extended wait: $_FAIL_DIAG"
-                else
-                    echo "OpenCost cannot start: Prometheus is not ready (${_prom_ready_col:-?} ${_prom_status_col:-unknown})."
-                    echo "Root cause is Prometheus, not OpenCost. OpenCost will recover once Prometheus is healthy."
-                fi
-            fi
-        fi
-    else
-        echo "Helm install failed (exit $INSTALL_EXIT)."
-        if ! _detect_pod_failure; then
-            echo "No specific pod failure detected. Pod status:"
-            kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
-            kubectl get events -n onelens-agent --sort-by='.lastTimestamp' --no-headers 2>/dev/null | tail -5 || true
-            exit 1
-        fi
-        echo "Pod failure detected: $_FAIL_DIAG"
+        echo "  PVC status: ${PVC_STATUS:-not found yet} (attempt $_pvc_wait/12)..."
+        sleep 10
+    done
+    if [ "$PVC_BOUND" != "true" ]; then
+        echo "WARNING: PVC not bound after 120s. Prometheus may fail to start."
+        echo "Possible causes:"
+        echo "  - CSI driver not installed or not running"
+        echo "  - StorageClass 'onelens-sc' not created correctly"
+        echo "  - Insufficient disk quota in the cloud account"
+        echo "The patching job will continue to monitor. Check PVC status with:"
+        echo "  kubectl get pvc -n onelens-agent"
     fi
-
-    # Only retry for OOM. Config errors, FailedScheduling, image pull won't be fixed by bumping memory.
-    if [ "$_FAIL_REASON" != "oom" ]; then
-        echo "Failure is not memory-related (reason=$_FAIL_REASON). Not retrying."
-        if [ -n "$_FAIL_POD" ]; then
-            echo "--- Pod logs ---"
-            kubectl logs "$_FAIL_POD" -n onelens-agent --previous --tail=20 2>/dev/null || \
-                kubectl logs "$_FAIL_POD" -n onelens-agent --tail=20 2>/dev/null || true
-            echo "--- Events ---"
-            kubectl get events -n onelens-agent --field-selector "involvedObject.name=$_FAIL_POD" --no-headers 2>/dev/null | tail -5 || true
-        fi
-        exit 1
-    fi
-
-    # Check retry limit
-    if [ "$_INSTALL_RETRIES" -ge "$_MAX_INSTALL_RETRIES" ]; then
-        echo "OOM: exhausted $_MAX_INSTALL_RETRIES retries. Component=$_FAIL_COMPONENT"
-        echo "--- Final pod status ---"
-        kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
-        exit 1
-    fi
-
-    # Bump the failing component's memory
-    _bump_result=$(_bump_component_memory "$_FAIL_COMPONENT")
-    _old_mem=$(echo "$_bump_result" | awk '{print $1}')
-    _new_mem=$(echo "$_bump_result" | awk '{print $2}')
-    _set_flags=$(echo "$_bump_result" | cut -d' ' -f3-)
-
-    if [ "$_new_mem" = "$_old_mem" ]; then
-        echo "$_FAIL_COMPONENT OOM: at memory cap ($_old_mem). Cannot bump further."
-        exit 1
-    fi
-
-    _INSTALL_RETRIES=$((_INSTALL_RETRIES + 1))
-    echo "OOM recovery (retry $_INSTALL_RETRIES/$_MAX_INSTALL_RETRIES): $_FAIL_COMPONENT memory $_old_mem -> $_new_mem"
-
-    RETRY_CMD="$CMD --timeout=3m $_set_flags"
-    eval "$RETRY_CMD"
-    INSTALL_EXIT=$?
-done
+fi
+echo ""
 
 # Patch onelens-agent CronJob to add deployment labels to metadata and pod template.
 # The private onelens-agent-base chart does not support label injection via values,
@@ -1010,50 +750,68 @@ if [[ -n "${DEPLOYMENT_LABELS:-}" ]] && command -v jq &>/dev/null; then
     }')
     if kubectl patch cronjob onelens-agent -n onelens-agent --type=merge -p "$patch_json" 2>/dev/null; then
         echo "Patched onelens-agent CronJob with deployment labels."
-    else
-        echo "Warning: Could not patch onelens-agent CronJob labels (resource may not exist yet)."
     fi
 fi
 
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus-opencost-exporter -n onelens-agent --timeout=800s || {
-    echo "Error: Pods failed to become ready."
-    echo "Installation Failed."
-    false
-}
-
-# Verify all pods in the namespace are running and ready
-echo "Verifying all pods in onelens-agent namespace..."
-STABLE=false
-for i in 1 2 3 4 5 6; do
-    sleep 10
-    NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -v 'Completed' \
-        | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
-    if [ -z "$NOT_READY" ]; then
-        STABLE=true
-        echo "All pods stable after $((i * 10))s"
+# Register cluster as CONNECTED with exponential backoff (up to ~2 min).
+# This is a critical signal — without CONNECTED status, the backend won't serve
+# patching scripts to the CronJob, leaving the cluster unmanaged.
+echo "Registering cluster as connected..."
+_connected=false
+_backoff=5
+for _attempt in 1 2 3 4 5 6; do
+    _http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+        -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"registration_id\": \"$REGISTRATION_ID\",
+            \"cluster_token\": \"$CLUSTER_TOKEN\",
+            \"status\": \"CONNECTED\"
+        }" 2>/dev/null || echo "000")
+    if [ "$_http_code" = "200" ] || [ "$_http_code" = "400" ]; then
+        # 200 = success, 400 = already CONNECTED (idempotent, fine)
+        _connected=true
+        echo "Cluster registered (HTTP $_http_code, attempt $_attempt)."
         break
     fi
-    echo "Check $i/6: some pods not ready yet..."
+    echo "  Registration failed (HTTP $_http_code). Retrying in ${_backoff}s (attempt $_attempt/6)..."
+    sleep $_backoff
+    _backoff=$((_backoff * 2))
 done
-if [ "$STABLE" != "true" ]; then
-    echo "WARNING: Not all pods stabilized within 60s. Current status:"
-    kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
+if [ "$_connected" != "true" ]; then
+    echo "WARNING: Could not register cluster as CONNECTED after 6 attempts (~2 min)."
+    echo "The patching CronJob exists but the backend may not serve patching scripts."
+    echo "Manual fix: re-run install.sh or contact support."
 fi
 
-# Phase 9: Finalization
-echo "Deployment complete."
+# Quick pod status check — informational only, does not block installation.
+echo ""
+echo "Checking initial pod status..."
+sleep 10
+kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
 
-curl -X PUT "$API_BASE_URL/v1/kubernetes/registration" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"registration_id\": \"$REGISTRATION_ID\",
-        \"cluster_token\": \"$CLUSTER_TOKEN\",
-        \"status\": \"CONNECTED\"
-    }"
-sleep 60
+NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep -v 'Completed' \
+    | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print}' || true)
+if [ -z "$NOT_READY" ]; then
+    echo ""
+    echo "All pods are running and ready."
+else
+    echo ""
+    echo "Some pods are still starting up. This is normal — components like OpenCost"
+    echo "depend on Prometheus and may take 1-2 minutes to stabilize."
+    echo ""
+    echo "The patching job runs every 5 minutes and will automatically:"
+    echo "  - Increase memory for any OOMKilled pods"
+    echo "  - Restart pods stuck in CrashLoopBackOff"
+    echo "  - Right-size all components based on actual cluster usage"
+    echo ""
+    echo "No manual intervention needed. Check status anytime with:"
+    echo "  kubectl get pods -n onelens-agent"
+fi
 
-echo "To verify deployment: kubectl get pods -n onelens-agent"
+# Phase 9: Finalization and cleanup
+echo ""
 
 # Cleanup bootstrap RBAC resources (used only for initial installation)
 echo "Cleaning up bootstrap RBAC resources..."
@@ -1065,4 +823,5 @@ echo "Cleaning up installation job resources..."
 kubectl delete job onelensdeployerjob -n onelens-agent || true
 kubectl delete sa onelensdeployerjob-sa -n onelens-agent || true
 
-echo "Cleanup complete. Ongoing RBAC resources retained for cronjob updates."
+echo ""
+echo "Installation complete. OneLens agent is now active on this cluster."

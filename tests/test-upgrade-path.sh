@@ -70,7 +70,7 @@ fi
 # ---------------------------------------------------------------------------
 # Test 9: Finalization is unified (no separate install vs upgrade paths)
 # ---------------------------------------------------------------------------
-deploy_complete=$(grep -c 'Deployment complete' "$ROOT/install.sh" || true)
+deploy_complete=$(grep -c 'Installation complete' "$ROOT/install.sh" || true)
 assert_gt "$deploy_complete" "0" "install.sh has unified finalization message"
 
 # PUT CONNECTED always runs (idempotent, confirms cluster is connected)
@@ -104,13 +104,15 @@ upgrade_install=$(grep -c 'helm upgrade --install' "$ROOT/install.sh" || true)
 assert_gt "$upgrade_install" "0" "install.sh uses 'helm upgrade --install' (handles both cases)"
 
 # ---------------------------------------------------------------------------
-# Test 14: Post-deploy stabilization check verifies all pods (not just opencost)
+# Test 14: install.sh registers CONNECTED and delegates pod health to patching CronJob
 # ---------------------------------------------------------------------------
-stabilize_check=$(grep -c 'Verifying all pods in onelens-agent namespace' "$ROOT/install.sh" || true)
-assert_gt "$stabilize_check" "0" "install.sh has post-deploy stabilization check for all pods"
+# install.sh does a quick informational pod check but does not block on stabilization.
+# The patching CronJob handles OOM remediation, pod restarts, and right-sizing.
+connected_early=$(grep -c 'CONNECTED' "$ROOT/install.sh" || true)
+assert_gt "$connected_early" "0" "install.sh registers CONNECTED after helm install"
 
-pod_ready_loop=$(grep -c 'some pods not ready yet' "$ROOT/install.sh" || true)
-assert_gt "$pod_ready_loop" "0" "install.sh has retry loop for pod readiness"
+patching_delegation=$(grep -c 'patching job will' "$ROOT/install.sh" || true)
+assert_gt "$patching_delegation" "0" "install.sh informs user that patching job handles pod health"
 
 # ---------------------------------------------------------------------------
 # Test 15: Secret read is guarded with || true to prevent set -e exit

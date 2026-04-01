@@ -136,5 +136,16 @@ assert_ge "$owner_checks" "3" "src/patching.sh checks ownerReferences for Job-ow
 terminated_case=$(grep -c 'Terminated)' "$SRC_FILE" || true)
 assert_ge "$terminated_case" "1" "src/patching.sh has explicit Terminated case in pod remediation"
 
+###############################################################################
+# Test 14: Pod counting uses field-selector (not per-namespace loop)
+# Per-namespace counting spawns 77+ kubectl processes on a 25-namespace cluster,
+# causing OOM on the 256Mi CronJob container. Field-selector is server-side.
+###############################################################################
+field_selector_count=$(grep -c 'field-selector=status.phase=' "$SRC_FILE" || true)
+assert_ge "$field_selector_count" "2" "src/patching.sh uses field-selector pod counting (Running + Pending)"
+
+per_ns_loop=$(grep -c 'kubectl get deployments -n' "$SRC_FILE" || true)
+assert_eq "$per_ns_loop" "0" "src/patching.sh has no per-namespace deployment counting"
+
 test_summary
 exit $?
