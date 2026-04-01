@@ -152,5 +152,20 @@ assert_eq "$per_ns_loop" "0" "src/patching.sh has no per-namespace deployment co
 patching_mode_guarded=$(grep -c '_deployed_minor.*55' "$SRC_FILE" || true)
 assert_ge "$patching_mode_guarded" "1" "src/patching.sh guards patching_mode behind version check"
 
+###############################################################################
+# Test 15: CronJob OOM self-healing — TTL patch + OOM detection
+# If the previous updater pod was OOMKilled, patching.sh bumps CronJob memory
+# to 512Mi. Requires ttlSecondsAfterFinished to be long enough for the pod to
+# survive until the next run checks it.
+###############################################################################
+ttl_patch=$(grep -c 'ttlSecondsAfterFinished.*86400' "$SRC_FILE" || true)
+assert_ge "$ttl_patch" "1" "src/patching.sh patches CronJob TTL to 86400 for OOM detection"
+
+oom_detection=$(grep -c 'OOMKilled.*_UPDATER_OOM\|_UPDATER_OOM.*true' "$SRC_FILE" || true)
+assert_ge "$oom_detection" "1" "src/patching.sh detects OOMKilled updater pods"
+
+oom_bump=$(grep -c 'TARGET_MEMORY_MI=512' "$SRC_FILE" || true)
+assert_ge "$oom_bump" "1" "src/patching.sh bumps CronJob memory to 512Mi on OOM"
+
 test_summary
 exit $?

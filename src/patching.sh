@@ -133,13 +133,45 @@ if [ -n "$PATCH_JSON" ]; then
         echo "WARNING: Failed to patch CronJob (RBAC?)"
 fi
 
-# Reset deployer CronJob resources to chart defaults (200m CPU, 256Mi memory).
-# Previously, clusters with high label density needed inflated resources for the kubectl
-# label measurement call. Since v2.1.39, label density is hardcoded (no kubectl call),
-# so inflated resources are wasteful. Reset to defaults if they differ.
+# Ensure CronJob Job TTL is long enough for OOM detection on the next run.
+# Old deployer charts set ttlSecondsAfterFinished=120 (2 min), which deletes the
+# failed pod before the next run can check its termination reason.
+# Raise to 86400 (24h). The history limits (successfulJobsHistoryLimit=1,
+# failedJobsHistoryLimit=1) still do the real cleanup — only 2 pods at any time.
+CURRENT_TTL=$(kubectl get cronjob onelensupdater -n onelens-agent \
+    -o jsonpath='{.spec.jobTemplate.spec.ttlSecondsAfterFinished}' 2>/dev/null || true)
+if [ -n "$CURRENT_TTL" ] && [ "$CURRENT_TTL" -lt 86400 ] 2>/dev/null; then
+    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p='{
+      "spec":{"jobTemplate":{"spec":{"ttlSecondsAfterFinished":86400}}}
+    }' 2>/dev/null && echo "CronJob Job TTL raised to 24h (was ${CURRENT_TTL}s)" || true
+fi
+
+# Check if the previous updater run was OOMKilled.
+# The cgroup memory limit (256Mi) counts RSS + kernel page cache. On large clusters,
+# helm/kubectl binaries (~50MB each) plus accumulated page cache exceed 256Mi during
+# helm upgrade. If OOM detected, bump CronJob memory to 512Mi (takes effect next run).
+_UPDATER_OOM=false
+LAST_UPDATER_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep 'onelensupdater' | grep -vE 'Running|ContainerCreating' \
+    | tail -1 | awk '{print $1}')
+if [ -n "$LAST_UPDATER_POD" ]; then
+    LAST_TERM_REASON=$(kubectl get pod "$LAST_UPDATER_POD" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+    if [ "$LAST_TERM_REASON" = "OOMKilled" ]; then
+        _UPDATER_OOM=true
+        echo "Previous updater pod $LAST_UPDATER_POD was OOMKilled."
+    fi
+fi
+
+# Set CronJob resources: 200m CPU. Memory: 512Mi if previous run OOMKilled, else 256Mi.
 # Note: _cpu_to_millicores is not available yet (library embedded below), so parse manually.
 TARGET_CPU_MILLICORES=200
-TARGET_MEMORY_MI=256
+if [ "$_UPDATER_OOM" = "true" ]; then
+    TARGET_MEMORY_MI=512
+    echo "Bumping CronJob memory to 512Mi (OOM recovery). Takes effect next run."
+else
+    TARGET_MEMORY_MI=256
+fi
 CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
 CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || true)
 

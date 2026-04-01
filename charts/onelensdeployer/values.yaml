@@ -219,6 +219,7 @@ cronjob:
   restartPolicy: Never
   backoffLimit: 0 # No retries — healthcheck catches failures in 5 min
   activeDeadlineSeconds: 900 # 15 min max — helm upgrade can take 10m on large clusters with PV
+  ttlSecondsAfterFinished: 86400 # 24h — keeps failed pods for OOM detection by next patching run. History limits (1 success, 1 failed) do the real cleanup.
   # Labels specific to the updater cronjob
   labels: {}
   env:

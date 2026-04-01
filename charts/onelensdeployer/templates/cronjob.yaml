@@ -22,7 +22,7 @@ spec:
       {{- if .Values.cronjob.activeDeadlineSeconds }}
       activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
       {{- end }}
-      ttlSecondsAfterFinished: 120
+      ttlSecondsAfterFinished: {{ default 86400 .Values.cronjob.ttlSecondsAfterFinished }}
       template:
         metadata:
           labels:
