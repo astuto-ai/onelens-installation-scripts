@@ -1035,21 +1035,22 @@ select_retention_tier() {
 echo "Calculating cluster pod count..."
 _report_milestone  # M4: pod-counting-start
 
-# Count actual pods using server-side field-selector (API returns only matching pods).
-# 2 lightweight kubectl calls vs 77+ per-namespace workload controller queries.
-NUM_RUNNING=$(kubectl get pods --field-selector=status.phase=Running --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-NUM_PENDING=$(kubectl get pods --field-selector=status.phase=Pending --all-namespaces --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-DESIRED_PODS=$((NUM_RUNNING + NUM_PENDING))
-TOTAL_PODS=$(( DESIRED_PODS * 130 / 100 ))  # 30% buffer
+# Count active pods (Running, Pending, ContainerCreating) using server-side field-selector.
+# Single kubectl call with --chunk-size=500 keeps memory bounded (~500 pods of JSON at a time)
+# regardless of cluster size. Excludes completed/failed job pods.
+NUM_PODS=$(kubectl get pods --all-namespaces --no-headers --chunk-size=500 \
+    --field-selector='status.phase!=Succeeded,status.phase!=Failed' \
+    2>/dev/null | wc -l | tr -d '[:space:]')
+TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
 
 NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
 
 if [ "$TOTAL_PODS" -le 0 ]; then
-    echo "WARNING: No running or pending pods found. Using minimum tier."
+    echo "WARNING: No active pods found. Using minimum tier."
     TOTAL_PODS=1
 fi
 
-echo "Cluster pod count: $DESIRED_PODS (running=$NUM_RUNNING pending=$NUM_PENDING)"
+echo "Cluster pod count: $NUM_PODS active pods"
 echo "Adjusted pod count (with 30% buffer): $TOTAL_PODS"
 
 # --- Label density ---
@@ -1229,7 +1230,7 @@ if [ -n "$NOT_HEALTHY" ]; then
 fi
 
 # Cluster sizing inputs (the numbers that drive resource allocation)
-echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (running=$NUM_RUNNING pending=$NUM_PENDING) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
+echo "Sizing: nodes=$NUM_NODES pods=$TOTAL_PODS (active=$NUM_PODS) labels=$AVG_LABELS mult=${LABEL_MULTIPLIER}x tier=$TIER gpuNodes=$GPU_NODE_COUNT gpus=$TOTAL_GPU_COUNT"
 
 # Current resources (compact: cpu/memory limits per component)
 if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
@@ -3189,32 +3190,52 @@ else
     echo "WARNING: Agent CronJob '$AGENT_CJ_NAME' not found"
 fi
 
-# Activate healthcheck mode via API — tells backend this cluster is ready for
-# self-healing. Also reports deployer_version so we can track fleet state.
-echo "Activating healthcheck mode..."
+# Report final state via API — deployer version for fleet tracking, healthcheck status.
+# For clusters already on v2.1.55+, patching_mode is managed via DB and should not be
+# overwritten (e.g., customer may set a custom mode like "2AMUTC" for tracking).
+# For older clusters (first time running v2.1.55+ patching.sh), set patching_mode to
+# "healthcheck" so entrypoint.sh uses the lightweight healthcheck-first path.
+echo "Reporting patching result..."
 FINAL_DEPLOYER_VERSION="${DEPLOYER_VERSION:-unknown}"
 current_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+_deployed_minor=$(echo "$DEPLOYED_VERSION" | sed 's|^release/||; s/^v//; s/-.*//' | awk -F. '{print $3+0}' 2>/dev/null || echo "0")
 if [ "$UPGRADE_FAILED" = "true" ]; then
-    # Upgrade failed — activate healthcheck + deployer version but don't claim healthy
-    hc_payload=$(jq -n \
-        --arg reg_id "$REGISTRATION_ID" \
-        --arg token "$CLUSTER_TOKEN" \
-        --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
-        '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv}}')
+    if [ "$_deployed_minor" -lt 55 ] 2>/dev/null || [ -z "$_deployed_minor" ]; then
+        hc_payload=$(jq -n \
+            --arg reg_id "$REGISTRATION_ID" \
+            --arg token "$CLUSTER_TOKEN" \
+            --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_enabled: true, deployer_version: $dv, patching_mode: "healthcheck"}}')
+    else
+        hc_payload=$(jq -n \
+            --arg reg_id "$REGISTRATION_ID" \
+            --arg token "$CLUSTER_TOKEN" \
+            --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_enabled: true, deployer_version: $dv}}')
+    fi
 else
-    hc_payload=$(jq -n \
-        --arg reg_id "$REGISTRATION_ID" \
-        --arg token "$CLUSTER_TOKEN" \
-        --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
-        --arg ts "$current_timestamp" \
-        '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_mode: "healthcheck", patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts}}')
+    if [ "$_deployed_minor" -lt 55 ] 2>/dev/null || [ -z "$_deployed_minor" ]; then
+        hc_payload=$(jq -n \
+            --arg reg_id "$REGISTRATION_ID" \
+            --arg token "$CLUSTER_TOKEN" \
+            --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+            --arg ts "$current_timestamp" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts, patching_mode: "healthcheck"}}')
+    else
+        hc_payload=$(jq -n \
+            --arg reg_id "$REGISTRATION_ID" \
+            --arg token "$CLUSTER_TOKEN" \
+            --arg dv "${FINAL_DEPLOYER_VERSION:-unknown}" \
+            --arg ts "$current_timestamp" \
+            '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_enabled: true, deployer_version: $dv, healthcheck_failures: 0, last_healthy_at: $ts}}')
+    fi
 fi
 curl -s --max-time 10 --location --request PUT \
     "${API_BASE_URL:-https://api-in.onelens.cloud}/v1/kubernetes/cluster-version" \
     --header 'Content-Type: application/json' \
     --data "$hc_payload" >/dev/null 2>&1 && \
-    echo "Healthcheck mode activated (deployer: ${FINAL_DEPLOYER_VERSION:-unknown})" || \
-    echo "WARNING: Failed to activate healthcheck mode (API call failed)"
+    echo "Patching result reported (deployer: ${FINAL_DEPLOYER_VERSION:-unknown})" || \
+    echo "WARNING: Failed to report patching result (API call failed)"
 
 echo ""
 if [ "$UPGRADE_FAILED" = "true" ]; then
