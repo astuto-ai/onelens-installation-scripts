@@ -1,6 +1,6 @@
 # OneLens Air-Gapped Deployment Guide
 
-Deploy OneLens on Kubernetes clusters that have restricted or no internet access. This guide walks you through mirroring container images to your private registry and deploying using Helm.
+Deploy OneLens on Kubernetes clusters that have restricted or no internet access. This guide walks you through mirroring container images to your private registry and deploying using the standard Helm command.
 
 ---
 
@@ -8,36 +8,34 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    MACHINE WITH INTERNET ACCESS                   │
+│               MACHINE WITH INTERNET ACCESS                       │
 │                                                                  │
-│  Step 1: Validate connectivity                                   │
-│  ┌──────────────────────────────┐                                │
-│  │ airgapped_accessibility      │                                │
-│  │ _check.sh                    │──→ Tests OneLens API + S3      │
-│  └──────────────────────────────┘                                │
-│                                                                  │
-│  Step 2: Mirror container images to your private registry        │
+│  One-time per version:                                           │
 │  ┌──────────────────────────────┐    ┌────────────────────────┐  │
 │  │ airgapped_migrate_images.sh  │──→ │ Public registries ──→  │  │
-│  │   --version <ver>            │    │ Your private ECR       │  │
+│  │   --version <ver>            │    │ Your private registry  │  │
+│  │   --registry <url>           │    │ (images + Helm charts) │  │
 │  └──────────────────────────────┘    └────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│               PER CLUSTER (same as standard install)             │
 │                                                                  │
-│  Step 3: Deploy OneLens agent on your cluster                    │
-│  ┌──────────────────────────────┐    ┌────────────────────────┐  │
-│  │ airgapped_deployment.sh      │──→ │ helm upgrade --install │  │
-│  │   --version <ver>            │    │ (images from your ECR) │  │
-│  └──────────────────────────────┘    └───────────┬────────────┘  │
-│                                                  │               │
-│  Step 4 (optional): Setup automatic patching     │               │
-│  ┌──────────────────────────────┐                │               │
-│  │ airgapped_patch_onboard.sh   │                │               │
-│  └──────────────────────────────┘                │               │
-└──────────────────────────────────────────────────┼───────────────┘
-                                                   │
-                ┌──────────────────────────────────┼───────────────┐
+│  helm upgrade --install onelensdeployer                          │
+│    oci://<your-registry>/charts/onelensdeployer \                │
+│    -n onelens-agent --create-namespace \                         │
+│    --set job.env.CLUSTER_NAME=<name> \                           │
+│    --set job.env.REGION=<region> \                               │
+│    --set-string job.env.ACCOUNT=<account> \                      │
+│    --set job.env.REGISTRATION_TOKEN=<token>                      │
+│                                                                  │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │
+                ┌───────────────┼──────────────────────────────────┐
                 │        YOUR KUBERNETES CLUSTER                   │
                 │        (No internet access required)             │
                 │        Only outbound: *.onelens.cloud            │
+                │                       + your private registry    │
                 │                                                  │
                 │   ┌──────────────┐  ┌──────────────────────────┐ │
                 │   │ OneLens      │  │ Prometheus + OpenCost    │ │
@@ -45,20 +43,16 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
                 │   └──────┬───────┘  └──────────┬───────────────┘ │
                 │          │                     │                 │
                 │   All images pulled from YOUR private registry   │
-                │   API calls go to api-in.onelens.cloud only      │
+                │   API calls go to *.onelens.cloud only           │
+                │                                                  │
+                │   ┌──────────────────────────────────────────┐   │
+                │   │ Updater CronJob (onelensupdater)         │   │
+                │   │ Runs every 5 minutes                     │   │
+                │   │ Detects new version in private registry  │   │
+                │   │ Upgrades automatically                   │   │
+                │   └──────────────────────────────────────────┘   │
                 └──────────────────────────────────────────────────┘
 ```
-
-### Upgrade Flow
-
-When a new OneLens version is released, re-run steps 2 and 3 with the new version:
-
-```
-airgapped_migrate_images.sh --version <new-version>   # mirror new images
-airgapped_patching.sh --version <new-version>          # upgrade the deployment
-```
-
-If you set up auto-patching (Step 4), the CronJob handles upgrades automatically.
 
 ---
 
@@ -66,34 +60,34 @@ If you set up auto-patching (Step 4), the CronJob handles upgrades automatically
 
 ### Tools (on the machine with internet access)
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| AWS CLI v2 | ECR authentication and repo management | [Install guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) |
-| Docker (with buildx) | Pull and push multi-arch images | [Install guide](https://docs.docker.com/get-docker/) |
-| kubectl | Kubernetes cluster access | [Install guide](https://kubernetes.io/docs/tasks/tools/) |
-| Helm v3 | Chart deployment | [Install guide](https://helm.sh/docs/intro/install/) |
-| jq | JSON parsing | [Install guide](https://jqlang.github.io/jq/download/) |
+| Tool | Purpose |
+|------|---------|
+| AWS CLI v2 | ECR authentication and repo management |
+| Docker (with buildx) | Pull and push multi-arch images |
+| Helm v3 | Chart deployment |
+| jq | JSON parsing |
+
+> **Note:** This guide assumes AWS ECR as the private registry. If you use a different registry (Harbor, Artifactory, GCR, etc.), adapt the registry authentication and image push commands accordingly — the Helm install command remains the same.
 
 ### Network Access
 
-The machine running these scripts needs outbound access to the following URLs:
+**Setup machine** (internet-connected):
+
+| URL | Used in | Purpose |
+|-----|---------|---------|
+| `https://api-in.onelens.cloud` | Pre-check | Validate connectivity to OneLens API |
+| `https://astuto-ai.github.io` | Migration | Download Helm charts and version config from the OneLens public GitHub repository |
+| `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images |
+| `https://quay.io` | Migration | Pull `prometheus`, `config-reloader`, `pushgateway`, `kube-rbac-proxy` images |
+| `https://registry.k8s.io` | Migration | Pull `kube-state-metrics` image |
+| `https://ghcr.io` | Migration | Pull `opencost` image |
+
+**Cluster nodes** (air-gapped — no general internet access):
 
 | URL | Purpose |
 |-----|---------|
-| `https://api-in.onelens.cloud` | OneLens API (cluster registration, status updates) |
-| `https://astuto-ai.github.io` | Helm chart repository |
-| `https://raw.githubusercontent.com` | Script and config file downloads |
-| `https://public.ecr.aws` | OneLens agent and deployer images |
-| `https://quay.io` | Prometheus, config-reloader, pushgateway images |
-| `https://registry.k8s.io` | kube-state-metrics image |
-| `https://ghcr.io` | OpenCost image |
-
-**Your Kubernetes cluster nodes** only need outbound access to:
-
-| URL | Purpose |
-|-----|---------|
-| `https://*.onelens.cloud` | Agent API communication and data upload |
-| Your private ECR endpoint | Pulling container images |
+| `https://*.onelens.cloud` | Agent API communication and data upload (includes upload gateway) |
+| Your private registry endpoint | Pulling container images |
 
 > **Note:** The OneLens agent receives upload URLs from the API at runtime. For air-gapped environments, data upload is routed through `api-in-fileupload.onelens.cloud` (an OneLens-hosted upload gateway), so no direct access to cloud storage endpoints (GCS/S3) is required. The `*.onelens.cloud` wildcard covers both the API and the upload gateway.
 
@@ -151,23 +145,14 @@ Your EKS **node IAM role** (or imagePullSecrets) needs read access to the privat
 
 > Replace `<region>` and `<account-id>` with your AWS region and account ID.
 
-### Validation
-
-Before proceeding, verify network access from your machine:
-
-```bash
-nslookup api-in.onelens.cloud
-nslookup astuto-ai.github.io
-```
-
 ---
 
-## Step 1: Validate Connectivity
+## Step 1: Validate Connectivity (Optional)
 
-Download and run the accessibility check script to verify that your environment can reach the required OneLens services.
+Run the accessibility check to verify your environment can reach the required services.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/airgapped/airgapped_accessibility_check.sh -o airgapped_accessibility_check.sh
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh -o airgapped_accessibility_check.sh
 
 bash airgapped_accessibility_check.sh \
   --registration-token <your-registration-token> \
@@ -177,75 +162,87 @@ bash airgapped_accessibility_check.sh \
 ```
 
 The script tests:
-- OneLens API registration endpoint
-- S3 pre-signed URL upload capability
-
-If both tests pass, proceed to Step 2.
+- **OneLens API** — registration endpoint reachability (`api-in.onelens.cloud`)
+- **Upload gateway** — data upload endpoint reachability (`api-in-fileupload.onelens.cloud`)
+- **Private registry** — that cluster nodes can authenticate and pull from your registry
 
 ---
 
-## Step 2: Mirror Images to Your Private Registry
+## Step 2: Mirror Images and Charts to Your Private Registry
 
-This script pulls all required container images from public registries and pushes them to your private ECR. It reads the image list dynamically from the OneLens release configuration, so no manual image tracking is needed.
+This step runs **once per OneLens version** on your internet-connected machine. It mirrors all container images and Helm charts to your private registry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/airgapped/airgapped_migrate_images.sh -o airgapped_migrate_images.sh
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh -o airgapped_migrate_images.sh
 
-bash airgapped_migrate_images.sh --version <version>
+bash airgapped_migrate_images.sh \
+  --version <version> \
+  --registry <your-registry-url>
 ```
 
-The script will:
-1. Prompt for your AWS account ID and region (auto-detected from AWS CLI if configured)
-2. Fetch the image list for the specified version
-3. Create ECR repositories if they don't exist
-4. Pull each image from its public registry
-5. Push multi-architecture images (amd64 + arm64) to your ECR
+> **Important:** Always specify `--version` explicitly. The version must match what you deploy.
 
-**Omit `--version` to use the latest published version.**
+The script will:
+1. Authenticate to your ECR (auto-detects account/region from the registry URL)
+2. Fetch the image list for the specified version from `globalvalues.yaml`
+3. Create ECR repositories if they don't exist
+4. Pull each image from its public registry and push to your ECR (multi-arch: amd64 + arm64)
+5. Pull the `onelensdeployer` and `onelens-agent` Helm charts
+6. Rewrite the deployer chart image reference to point to your registry
+7. Push both charts as OCI artifacts to your registry
 
 ### Verify
-
-After the script completes, confirm the images exist in your ECR:
 
 ```bash
 aws ecr describe-repositories --region <region> --query 'repositories[].repositoryName' --output table
 ```
 
-You should see repositories for: `onelens-agent`, `onelens-deployer`, `prometheus`, `opencost`, `prometheus-config-reloader`, `kube-state-metrics`, `pushgateway`, `kube-rbac-proxy`.
+You should see repositories for: `onelens-agent`, `onelens-deployer`, `prometheus`, `opencost`, `prometheus-config-reloader`, `kube-state-metrics`, `pushgateway`, `kube-rbac-proxy`, and the Helm charts.
 
 ---
 
-## Step 3: Deploy OneLens Agent
+## Step 3: Deploy OneLens on Each Cluster
 
-This script registers your cluster with the OneLens API and deploys the agent using Helm, with all container images pointing to your private registry.
+Run the standard OneLens install command, pointing to your private registry instead of the public one.
+
+**Standard install (for reference):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/airgapped/airgapped_deployment.sh -o airgapped_deployment.sh
-
-bash airgapped_deployment.sh --version <version>
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && helm repo update
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
 ```
 
-The script will interactively prompt for:
+**Air-gapped install:**
 
-| Prompt | Description |
-|--------|-------------|
-| Registry URL | Your ECR URL (e.g., `123456789.dkr.ecr.us-east-1.amazonaws.com`) |
-| Registration token | Provided by your OneLens account team |
-| Cluster name | A unique name for this cluster |
-| Image pull secret | Kubernetes secret name for ECR auth (or press Enter to skip) |
-| Tolerations / Node selectors | Optional — for scheduling on specific nodes |
+```bash
+helm upgrade --install onelensdeployer \
+  oci://<your-registry>/charts/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
+```
 
-**Omit `--version` to use the latest published version.**
+**The only differences:**
+1. Chart source: `oci://<your-registry>/charts/onelensdeployer` instead of `onelens/onelensdeployer`
+2. No `helm repo add` step needed — OCI references are direct
 
-### What it does
+The deployer automatically detects that it's running from a private registry and configures all OneLens components to pull images from the same registry.
 
-1. Registers the cluster with the OneLens API
-2. Counts pods in the cluster to determine the right resource tier
-3. Downloads the Helm values file for the specified version
-4. Runs `helm upgrade --install` with image overrides pointing to your ECR
-5. Deploys the OneLens deployer CronJob for automated maintenance
-6. Waits for pods to become ready
-7. Updates cluster status to `CONNECTED`
+### What happens after you run this
+
+1. Helm deploys the `onelensdeployer` chart (deployer image pulled from your private registry)
+2. The deployer Job registers the cluster with the OneLens API
+3. `install.sh` detects the private registry, pulls the `onelens-agent` chart from your registry via OCI
+4. All component images (agent, Prometheus, OpenCost, KSM, etc.) are pulled from your private registry
+5. The `onelensupdater` CronJob is created for automated health checks and upgrades
+6. Cluster status is updated to `CONNECTED`
 
 ### Verify
 
@@ -262,49 +259,31 @@ All pods should be in `Running` state:
 
 ---
 
-## Step 4: Setup Auto-Patching (Optional)
-
-This script creates Kubernetes RBAC rules and a CronJob that automatically checks for and applies updates.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/master/scripts/airgapped/airgapped_patch_onboard.sh -o airgapped_patch_onboard.sh
-
-bash airgapped_patch_onboard.sh
-```
-
-The CronJob:
-- Runs daily at 2:00 AM UTC
-- Downloads the latest `airgapped_patching.sh` from GitHub
-- Performs a Helm upgrade with current resource sizing based on cluster size
-- Uses the existing registry configuration from the deployed release
-
-> **Important:** The machine or pod running the CronJob needs internet access to download the patching script from GitHub. If your job runner nodes have internet access, this works automatically.
-
----
-
 ## Upgrading to a New Version
 
-When a new OneLens version is released:
-
-### Manual upgrade
+### Step 1: Mirror the new version (once, on your internet-connected machine)
 
 ```bash
-# 1. Mirror the new images
-bash airgapped_migrate_images.sh --version <new-version>
-
-# 2. Upgrade the deployment
-bash airgapped_patching.sh --version <new-version>
+bash airgapped_migrate_images.sh \
+  --version <new-version> \
+  --registry <your-registry-url>
 ```
 
-### Automatic upgrade (if Step 4 was completed)
+### Step 2: Clusters upgrade automatically
 
-The CronJob picks up the latest version automatically. Just ensure the new images are mirrored to your ECR first:
+The `onelensupdater` CronJob on each cluster checks your private registry every 5 minutes. When it detects a higher chart version than what's currently deployed, it upgrades automatically.
+
+**You control the timing** — clusters only upgrade after you mirror the new version. No coordination with OneLens needed.
+
+### Manual upgrade (optional)
+
+To upgrade the deployer chart itself on a specific cluster:
 
 ```bash
-bash airgapped_migrate_images.sh --version <new-version>
+helm upgrade onelensdeployer \
+  oci://<your-registry>/charts/onelensdeployer \
+  -n onelens-agent --reuse-values
 ```
-
-The next CronJob run will upgrade the agent to the latest version.
 
 ---
 
@@ -316,12 +295,25 @@ The next CronJob run will upgrade the agent to the latest version.
 ErrImagePull or ImagePullBackOff
 ```
 
-**Cause:** Cluster nodes can't pull from your private ECR.
+**Cause:** Cluster nodes can't pull from your private registry.
 
 **Fix:**
-1. Verify the image exists in your ECR: `aws ecr describe-images --repository-name <repo> --region <region>`
+1. Verify the image exists: `aws ecr describe-images --repository-name <repo> --region <region>`
 2. Check node IAM role has ECR read permissions (see Prerequisites)
 3. If using imagePullSecrets, verify the secret exists: `kubectl get secret <secret-name> -n onelens-agent`
+4. Check the image tag matches the deployed version: `kubectl describe pod <pod-name> -n onelens-agent | grep Image`
+
+### Images reset to public registries after patching
+
+```
+ErrImagePull for quay.io/... or public.ecr.aws/...
+```
+
+**Cause:** A patching run did not preserve the private registry overrides.
+
+**Fix:**
+1. Check current image sources: `helm get values onelens-agent -n onelens-agent -o json | jq`
+2. Re-run the migration and upgrade: `bash airgapped_migrate_images.sh --version <version> --registry <url>`
 
 ### Helm timeout
 
@@ -360,18 +352,17 @@ pod has unbound immediate PersistentVolumeClaims
 **Fix:**
 1. Check available StorageClasses: `kubectl get storageclass`
 2. Verify EBS CSI driver is installed: `kubectl get pods -n kube-system | grep ebs`
-3. During deployment, you can disable PVC by responding when prompted
 
 ---
 
 ## Container Images Reference
 
-The following images are mirrored by `airgapped_migrate_images.sh`. This list is fetched dynamically per version — you don't need to track it manually.
+The following images are mirrored by `airgapped_migrate_images.sh`. The list is fetched dynamically per version — you don't need to track it manually.
 
 | Image | Source Registry | Purpose |
 |-------|----------------|---------|
 | `onelens-agent` | `public.ecr.aws` | OneLens data collection agent |
-| `onelens-deployer` | `public.ecr.aws` | Automated deployer/patcher |
+| `onelens-deployer` | `public.ecr.aws` | Deployer and updater CronJob |
 | `prometheus` | `quay.io` | Metrics collection |
 | `opencost` | `ghcr.io` | Cost analysis exporter |
 | `prometheus-config-reloader` | `quay.io` | Prometheus config reload sidecar |
@@ -391,3 +382,4 @@ For issues with air-gapped deployment, contact your OneLens account team with:
 - `kubectl get pods -n onelens-agent -o wide`
 - `kubectl describe pod <failing-pod> -n onelens-agent`
 - `helm list -n onelens-agent`
+- `helm get values onelens-agent -n onelens-agent`

@@ -223,5 +223,45 @@ assert_gt "$patching_hm" "0" "patching.sh sets --history-max 5"
 patching_prune=$(grep -c 'owner=helm,name=onelens-agent' "$ROOT/src/patching.sh" || true)
 assert_gt "$patching_prune" "0" "patching.sh prunes helm release secrets before upgrade"
 
+# ---------------------------------------------------------------------------
+# Test 26: Air-gapped image override --set keys match between scripts
+# The 8 --set flags that redirect images to the private registry must be
+# identical in install.sh and src/patching.sh.
+# ---------------------------------------------------------------------------
+install_airgap_sets=$(grep 'REGISTRY_URL' "$ROOT/install.sh" | grep -oE '\-\-set [a-zA-Z][-a-zA-Z0-9._]*\.(image\.(repository|registry)|env\.REGISTRY_URL)=' | sort)
+patching_airgap_sets=$(grep 'REGISTRY_URL' "$ROOT/src/patching.sh" | grep -oE '\-\-set [a-zA-Z][-a-zA-Z0-9._]*\.(image\.(repository|registry)|env\.REGISTRY_URL)=' | sort)
+assert_ne "$install_airgap_sets" "" "install.sh has air-gapped image override --set flags"
+assert_eq "$install_airgap_sets" "$patching_airgap_sets" "air-gapped image override --set keys match between scripts"
+
+# ---------------------------------------------------------------------------
+# Test 27: Both scripts use CHART_SOURCE variable for helm command
+# ---------------------------------------------------------------------------
+install_chart_source=$(grep -c 'CHART_SOURCE=' "$ROOT/install.sh" || true)
+patching_chart_source=$(grep -c 'CHART_SOURCE=' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_chart_source" "0" "install.sh sets CHART_SOURCE variable"
+assert_gt "$patching_chart_source" "0" "patching.sh sets CHART_SOURCE variable"
+
+install_uses_cs=$(grep -c '\$CHART_SOURCE' "$ROOT/install.sh" || true)
+patching_uses_cs=$(grep -c '\$CHART_SOURCE' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_uses_cs" "0" "install.sh uses CHART_SOURCE in helm command"
+assert_gt "$patching_uses_cs" "0" "patching.sh uses CHART_SOURCE in helm command"
+
+# ---------------------------------------------------------------------------
+# Test 28: Air-gapped code is gated behind REGISTRY_URL check
+# Both scripts must only apply air-gapped overrides when REGISTRY_URL is set.
+# ---------------------------------------------------------------------------
+install_gate=$(grep -c '\[ -n "\$REGISTRY_URL" \]' "$ROOT/install.sh" || true)
+patching_gate=$(grep -c '\[ -n "\$REGISTRY_URL" \]' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_gate" "0" "install.sh gates air-gapped code behind REGISTRY_URL check"
+assert_gt "$patching_gate" "0" "patching.sh gates air-gapped code behind REGISTRY_URL check"
+
+# ---------------------------------------------------------------------------
+# Test 29: Standard helm repo add preserved for non-air-gapped path
+# ---------------------------------------------------------------------------
+install_repo_add=$(grep -c 'helm repo add onelens' "$ROOT/install.sh" || true)
+patching_repo_add=$(grep -c 'helm repo add onelens' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_repo_add" "0" "install.sh still has helm repo add for standard path"
+assert_gt "$patching_repo_add" "0" "patching.sh still has helm repo add for standard path"
+
 test_summary
 exit $?

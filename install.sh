@@ -378,7 +378,30 @@ if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     fi
 fi
 
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
+# --- Air-gapped self-detection ---
+# If the deployer pod's image is NOT from public.ecr.aws, this is an air-gapped cluster.
+# Extract the private registry URL from the image path for chart pulls and image overrides.
+REGISTRY_URL=""
+MY_IMAGE=$(kubectl get pod "$HOSTNAME" -n onelens-agent -o jsonpath='{.spec.containers[0].image}' 2>/dev/null || true)
+if [ -n "$MY_IMAGE" ] && echo "$MY_IMAGE" | grep -qv "public.ecr.aws"; then
+    REGISTRY_URL=$(echo "$MY_IMAGE" | sed 's|/onelens-deployer.*||')
+    echo "Air-gapped mode detected. Registry: $REGISTRY_URL"
+fi
+
+# --- Chart source ---
+if [ -n "$REGISTRY_URL" ]; then
+    echo "Pulling onelens-agent chart from private OCI registry..."
+    helm pull "oci://$REGISTRY_URL/charts/onelens-agent" --version "$RELEASE_VERSION" --untar 2>/dev/null || \
+        helm pull "oci://$REGISTRY_URL/charts/onelens-agent" --version "$RELEASE_VERSION"
+    if [ -d "onelens-agent" ]; then
+        CHART_SOURCE="./onelens-agent"
+    else
+        CHART_SOURCE="./onelens-agent-${RELEASE_VERSION}.tgz"
+    fi
+else
+    helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
+    CHART_SOURCE="onelens/onelens-agent"
+fi
 
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
@@ -488,7 +511,7 @@ if [ "$RELEASE_STATUS" = "failed" ]; then
     echo "Uninstall complete. Proceeding with fresh install."
 fi
 
-CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onelens/onelens-agent \
+CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG $CHART_SOURCE \
     --version \"\${RELEASE_VERSION:=2.1.58}\" \
     --history-max 5 \
     -f $FILE \
@@ -529,6 +552,24 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG onele
     --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
     --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
     --set onelens-agent.storageClass.provisioner=\"$STORAGE_CLASS_PROVISIONER\""
+
+# Air-gapped: override all image sources to private registry.
+# Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
+# Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
+# to produce the flat path $REGISTRY_URL/<name>:{tag} matching what the migration script pushes.
+if [ -n "$REGISTRY_URL" ]; then
+    CMD+=" --set onelens-agent.image.repository=$REGISTRY_URL/onelens-agent"
+    CMD+=" --set prometheus.server.image.repository=$REGISTRY_URL/prometheus"
+    CMD+=" --set prometheus.configmapReload.prometheus.image.repository=$REGISTRY_URL/prometheus-config-reloader"
+    CMD+=" --set prometheus-opencost-exporter.opencost.exporter.image.registry=$REGISTRY_URL"
+    CMD+=" --set prometheus-opencost-exporter.opencost.exporter.image.repository=opencost"
+    CMD+=" --set prometheus.kube-state-metrics.image.registry=$REGISTRY_URL"
+    CMD+=" --set prometheus.kube-state-metrics.image.repository=kube-state-metrics"
+    CMD+=" --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway"
+    CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL"
+    CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy"
+    CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
 
 # Add cloud-specific storage class parameters
 if [ "$CLOUD_PROVIDER" = "AWS" ]; then
