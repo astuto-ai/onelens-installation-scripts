@@ -160,5 +160,29 @@ assert_eq "$patching_hardcoded_chart" "0" "patching.sh helm upgrade uses CHART_S
 install_hardcoded_chart=$(grep 'helm upgrade --install onelens-agent' "$ROOT/install.sh" | grep -c 'onelens/onelens-agent' || true)
 assert_eq "$install_hardcoded_chart" "0" "install.sh helm upgrade uses CHART_SOURCE, not hardcoded repo"
 
+# ---------------------------------------------------------------------------
+# Test 22: Migration script extracts ECR_DOMAIN separately from REGISTRY
+# ---------------------------------------------------------------------------
+migrate_ecr_domain=$(grep -c 'ECR_DOMAIN=' "$MIGRATE" || true)
+assert_gt "$migrate_ecr_domain" "0" "migration script has ECR_DOMAIN variable for bare domain extraction"
+
+# ---------------------------------------------------------------------------
+# Test 23: Migration script supports ECR_PREFIX for repo namespacing
+# ---------------------------------------------------------------------------
+migrate_ecr_prefix=$(grep -c 'ECR_PREFIX' "$MIGRATE" || true)
+assert_gt "$migrate_ecr_prefix" "0" "migration script has ECR_PREFIX variable for repo namespacing"
+
+# ---------------------------------------------------------------------------
+# Test 24: Docker login uses ECR_DOMAIN (bare domain), not REGISTRY (may have prefix)
+# ---------------------------------------------------------------------------
+migrate_login=$(grep 'docker login' "$MIGRATE" | grep -c 'ECR_DOMAIN' || true)
+assert_gt "$migrate_login" "0" "migration script docker login uses ECR_DOMAIN, not REGISTRY"
+
+# ---------------------------------------------------------------------------
+# Test 25: ECR repo creation uses prefix when set
+# ---------------------------------------------------------------------------
+migrate_prefix_repo=$(grep 'ECR_PREFIX' "$MIGRATE" | grep -c 'ecr_repo\|ecr_charts' || true)
+assert_gt "$migrate_prefix_repo" "0" "migration script prefixes ECR repo names"
+
 test_summary
 exit $?

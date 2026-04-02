@@ -177,15 +177,17 @@ curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airg
 
 bash airgapped_migrate_images.sh \
   --version <version> \
-  --registry <your-registry-url>
+  --registry <your-registry-url>/<prefix>
 ```
 
 > **Important:** Always specify `--version` explicitly. The version must match what you deploy.
 
+> **Registry format:** Use a path prefix to namespace OneLens repos and avoid conflicts with existing ECR repositories (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent`). All image and chart repos will be created under the prefix. A bare domain without a prefix also works.
+
 The script will:
 1. Authenticate to your ECR (auto-detects account/region from the registry URL)
 2. Fetch the image list for the specified version from `globalvalues.yaml`
-3. Create ECR repositories if they don't exist
+3. Create ECR repositories if they don't exist (under your prefix if specified)
 4. Pull each image from its public registry and push to your ECR (multi-arch: amd64 + arm64)
 5. Pull the `onelensdeployer` and `onelens-agent` Helm charts
 6. Rewrite the deployer chart image reference to point to your registry
@@ -197,7 +199,7 @@ The script will:
 aws ecr describe-repositories --region <region> --query 'repositories[].repositoryName' --output table
 ```
 
-You should see repositories for: `onelens-agent`, `onelens-deployer`, `prometheus`, `opencost`, `prometheus-config-reloader`, `kube-state-metrics`, `pushgateway`, `kube-rbac-proxy`, and the Helm charts.
+You should see repositories for: `<prefix>/onelens-agent`, `<prefix>/onelens-deployer`, `<prefix>/prometheus`, `<prefix>/opencost`, `<prefix>/prometheus-config-reloader`, `<prefix>/kube-state-metrics`, `<prefix>/pushgateway`, `<prefix>/kube-rbac-proxy`, `<prefix>/charts/onelens-agent`, and `<prefix>/charts/onelensdeployer`.
 
 ---
 

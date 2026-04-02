@@ -24,7 +24,8 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Flags:"
             echo "  --version   OneLens version to mirror (e.g. 2.1.58)"
-            echo "  --registry  Your private ECR registry URL (e.g. 123456789.dkr.ecr.ap-south-2.amazonaws.com)"
+            echo "  --registry  Your private ECR registry URL, optionally with a path prefix"
+            echo "              e.g. 123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent"
             exit 0
             ;;
         *) echo "Unknown flag: $1"; exit 1 ;;
@@ -48,27 +49,40 @@ for tool in aws docker helm jq; do
     fi
 done
 
-# --- Extract ECR account and region from registry URL ---
-# Format: <account-id>.dkr.ecr.<region>.amazonaws.com
-ECR_ACCOUNT=$(echo "$REGISTRY" | cut -d'.' -f1)
-ECR_REGION=$(echo "$REGISTRY" | sed 's/.*\.ecr\.\(.*\)\.amazonaws\.com/\1/')
+# --- Extract ECR domain, account, and region from registry URL ---
+# Supports bare domain and prefixed paths:
+#   471112871310.dkr.ecr.ap-south-1.amazonaws.com
+#   471112871310.dkr.ecr.ap-south-1.amazonaws.com/onelensagent
+# ECR_DOMAIN = bare domain (for docker login and ECR API calls)
+# ECR_PREFIX = path after domain (for namespacing ECR repos), empty if bare domain
+ECR_DOMAIN=$(echo "$REGISTRY" | sed 's|/.*||')
+ECR_PREFIX=""
+if echo "$REGISTRY" | grep -q '/'; then
+    ECR_PREFIX=$(echo "$REGISTRY" | sed "s|^${ECR_DOMAIN}/||")
+fi
+ECR_ACCOUNT=$(echo "$ECR_DOMAIN" | cut -d'.' -f1)
+ECR_REGION=$(echo "$ECR_DOMAIN" | sed 's/.*\.ecr\.\(.*\)\.amazonaws\.com/\1/')
 
 if [ -z "$ECR_ACCOUNT" ] || [ -z "$ECR_REGION" ]; then
     echo "ERROR: Could not parse account/region from registry URL: $REGISTRY"
-    echo "Expected format: <account-id>.dkr.ecr.<region>.amazonaws.com"
+    echo "Expected format: <account-id>.dkr.ecr.<region>.amazonaws.com[/<prefix>]"
     exit 1
 fi
 
 echo "=== OneLens Air-Gapped Migration ==="
 echo "Version:  $VERSION"
 echo "Registry: $REGISTRY"
+echo "Domain:   $ECR_DOMAIN"
 echo "Account:  $ECR_ACCOUNT"
 echo "Region:   $ECR_REGION"
+if [ -n "$ECR_PREFIX" ]; then
+    echo "Prefix:   $ECR_PREFIX"
+fi
 echo ""
 
 # --- Authenticate to ECR ---
 echo "Authenticating to ECR..."
-aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin "$ECR_DOMAIN"
 echo ""
 
 # --- Add OneLens Helm repo ---
@@ -226,9 +240,10 @@ echo "$IMAGES" | while IFS=' ' read -r source target; do
     echo ""
     echo "--- $source -> $REGISTRY/$target ---"
 
-    # Create ECR repository if it doesn't exist
-    aws ecr describe-repositories --repository-names "$target_repo" --region "$ECR_REGION" >/dev/null 2>&1 || \
-        aws ecr create-repository --repository-name "$target_repo" --region "$ECR_REGION" \
+    # Create ECR repository if it doesn't exist (prefix repo name if set)
+    _ecr_repo="${ECR_PREFIX:+${ECR_PREFIX}/}${target_repo}"
+    aws ecr describe-repositories --repository-names "$_ecr_repo" --region "$ECR_REGION" >/dev/null 2>&1 || \
+        aws ecr create-repository --repository-name "$_ecr_repo" --region "$ECR_REGION" \
             --image-scanning-configuration scanOnPush=false >/dev/null 2>&1
 
     # Mirror multi-arch using docker buildx imagetools (no local pull needed)
@@ -257,9 +272,10 @@ echo ""
 echo "--- onelens-agent chart (version $VERSION) ---"
 helm pull onelens/onelens-agent --version "$VERSION" -d "$TMPDIR"
 
-# Create charts ECR repository
-aws ecr describe-repositories --repository-names "charts/onelens-agent" --region "$ECR_REGION" >/dev/null 2>&1 || \
-    aws ecr create-repository --repository-name "charts/onelens-agent" --region "$ECR_REGION" \
+# Create charts ECR repository (prefix if set)
+_ecr_charts_agent="${ECR_PREFIX:+${ECR_PREFIX}/}charts/onelens-agent"
+aws ecr describe-repositories --repository-names "$_ecr_charts_agent" --region "$ECR_REGION" >/dev/null 2>&1 || \
+    aws ecr create-repository --repository-name "$_ecr_charts_agent" --region "$ECR_REGION" \
         --image-scanning-configuration scanOnPush=false >/dev/null 2>&1
 
 helm push "$TMPDIR/onelens-agent-${VERSION}.tgz" "oci://$REGISTRY/charts/"
@@ -281,9 +297,10 @@ echo "Rewrote deployer image: public.ecr.aws/w7k6q5m9/onelens-deployer -> $REGIS
 
 helm package "$TMPDIR/onelensdeployer" -d "$TMPDIR" >/dev/null
 
-# Create charts ECR repository
-aws ecr describe-repositories --repository-names "charts/onelensdeployer" --region "$ECR_REGION" >/dev/null 2>&1 || \
-    aws ecr create-repository --repository-name "charts/onelensdeployer" --region "$ECR_REGION" \
+# Create charts ECR repository (prefix if set)
+_ecr_charts_deployer="${ECR_PREFIX:+${ECR_PREFIX}/}charts/onelensdeployer"
+aws ecr describe-repositories --repository-names "$_ecr_charts_deployer" --region "$ECR_REGION" >/dev/null 2>&1 || \
+    aws ecr create-repository --repository-name "$_ecr_charts_deployer" --region "$ECR_REGION" \
         --image-scanning-configuration scanOnPush=false >/dev/null 2>&1
 
 helm push "$TMPDIR/onelensdeployer-${VERSION}.tgz" "oci://$REGISTRY/charts/"
