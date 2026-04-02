@@ -173,6 +173,13 @@ jobs:
           echo "Charts in gh-pages:"
           ls -la gh-pages-repo/*.tgz
 
+      - name: Copy air-gapped scripts to gh-pages
+        run: |
+          mkdir -p gh-pages-repo/scripts/airgapped
+          cp scripts/airgapped/*.sh gh-pages-repo/scripts/airgapped/
+          echo "Air-gapped scripts in gh-pages:"
+          ls -la gh-pages-repo/scripts/airgapped/
+
       - name: Update Helm repository index
         run: |
           cd gh-pages-repo
