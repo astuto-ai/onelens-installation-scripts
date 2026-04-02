@@ -15,6 +15,7 @@
 - [Upgrade](#upgrade)
 - [Uninstall](#uninstall)
 - [Troubleshooting](docs/troubleshooting.md) — common issues, diagnostic commands, operations
+- [Air-Gapped Deployment](#air-gapped-deployment) — deploy on clusters with no public internet
 - [How It Works](#how-it-works)
 - [Documentation](#documentation)
 - [Support](#support)
@@ -405,6 +406,32 @@ See the [Troubleshooting Guide](docs/troubleshooting.md) for common issues, diag
 
 ---
 
+## Air-Gapped Deployment
+
+For Kubernetes clusters that cannot reach public container registries (`public.ecr.aws`, `quay.io`, `ghcr.io`, `registry.k8s.io`), OneLens supports deployment from a private OCI registry.
+
+**The install command is the same** — the only difference is the chart source:
+
+```bash
+helm upgrade --install onelensdeployer \
+  oci://<your-registry>/charts/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
+```
+
+**Setup:** Run the migration script once per version on an internet-connected machine to mirror images and charts to your private registry:
+
+```bash
+bash airgapped_migrate_images.sh --version <version> --registry <your-registry-url>
+```
+
+For full instructions, prerequisites, and troubleshooting, see the [Air-Gapped Deployment Guide](docs/airgapped-deployment-guide.md).
+
+---
+
 ## What does the installation do?
 
 You install one Helm chart (`onelensdeployer`). It runs a one-time Job that connects your cluster to your OneLens account, detects your cloud provider, and installs the full monitoring stack (`onelens-agent` chart) with right-sized resources.
@@ -434,6 +461,7 @@ After that, a CronJob runs every 5 minutes to healthcheck the stack. If anything
 - [Pre-requisite Checker](scripts/prereq-check/README.md) - Validate your environment before installation
 - [EBS Driver Installation](scripts/ebs-driver-installation/) - Install AWS EBS CSI driver with IAM roles
 - [Dedicated Node Setup](scripts/dedicated-node-installation/) - Create tainted node pools for OneLens
+- [Air-Gapped Migration](scripts/airgapped/) - Mirror images and charts to private registries
 
 ## Support
 
