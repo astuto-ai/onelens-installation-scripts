@@ -1172,6 +1172,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   CLUSTER_TOKEN=$(_get '.["onelens-agent"].secrets.CLUSTER_TOKEN')
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
+  REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
@@ -1179,6 +1180,9 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   SC_PROVISIONER=$(_get '.["onelens-agent"].storageClass.provisioner')
 
   echo "  Cluster: $CLUSTER_NAME | Cloud: $SC_PROVISIONER | PVC: $PVC_ENABLED"
+  if [ -n "$REGISTRY_URL" ]; then
+      echo "  Air-gapped mode: REGISTRY_URL=$REGISTRY_URL"
+  fi
 
   # Extract complex customer values (tolerations, nodeSelector, podLabels) into temp file
   # These are hard to pass via --set due to arrays and special characters in keys
@@ -1234,6 +1238,7 @@ else
   CLUSTER_TOKEN="${CLUSTER_TOKEN:-}"
   REGISTRATION_ID="${REGISTRATION_ID:-}"
   DEFAULT_CLUSTER_ID=""
+  REGISTRY_URL=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   CUSTOMER_VALUES_FILE=""
@@ -2039,8 +2044,33 @@ if kubectl get pvc "$PVC_NAME" -n onelens-agent &>/dev/null; then
     fi
 fi
 
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
-helm repo update >/dev/null 2>&1
+# --- Chart version (computed early — needed by both chart source and helm upgrade) ---
+# PATCHING_VERSION is exported by entrypoint.sh from the API response.
+# normalize_chart_version strips v/release/ prefix to get a clean semver for --version.
+CHART_VERSION=""
+if [ -n "${PATCHING_VERSION:-}" ]; then
+    CHART_VERSION=$(normalize_chart_version "$PATCHING_VERSION" 2>/dev/null || echo "")
+fi
+
+# --- Chart source ---
+if [ -n "$REGISTRY_URL" ]; then
+    echo "Air-gapped mode: pulling chart from $REGISTRY_URL"
+    _PULL_VERSION=""
+    if [ -n "$CHART_VERSION" ]; then
+        _PULL_VERSION="--version $CHART_VERSION"
+    fi
+    helm pull "oci://$REGISTRY_URL/charts/onelens-agent" $_PULL_VERSION --untar 2>/dev/null || \
+        helm pull "oci://$REGISTRY_URL/charts/onelens-agent" $_PULL_VERSION
+    if [ -d "onelens-agent" ]; then
+        CHART_SOURCE="./onelens-agent"
+    else
+        CHART_SOURCE="./onelens-agent-${CHART_VERSION}.tgz"
+    fi
+else
+    helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
+    helm repo update >/dev/null 2>&1
+    CHART_SOURCE="onelens/onelens-agent"
+fi
 
 if [ "$_PV_NEEDS_MANUAL_FIX" = "true" ]; then
     echo "Skipping helm upgrade — Prometheus PV requires manual recovery first."
@@ -2132,11 +2162,9 @@ else
 #   - --version pins to the target version from PATCHING_VERSION (set by entrypoint.sh)
 #     Without --version, helm would pick latest from repo — uncontrolled upgrades.
 #     If PATCHING_VERSION is not set (old entrypoint), omit --version (backward compat).
-CHART_VERSION=""
-if [ -n "$PATCHING_VERSION" ]; then
-    CHART_VERSION=$(normalize_chart_version "$PATCHING_VERSION" 2>/dev/null || echo "")
-fi
-HELM_CMD="helm upgrade onelens-agent onelens/onelens-agent \
+# Note: CHART_VERSION is computed earlier (before chart source block) so air-gapped
+# helm pull can use --version to pin the correct chart version.
+HELM_CMD="helm upgrade onelens-agent $CHART_SOURCE \
   -f /globalvalues.yaml \
   --history-max 5 \
   --wait \
@@ -2209,6 +2237,26 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.requests.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST\" \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
+
+# Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
+# Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
+# Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
+# to produce the flat path $REGISTRY_URL/<name>:{tag} matching what the migration script pushes.
+if [ -n "$REGISTRY_URL" ]; then
+    echo "Applying air-gapped image overrides for registry: $REGISTRY_URL"
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.image.repository=$REGISTRY_URL/onelens-agent \
+      --set prometheus.server.image.repository=$REGISTRY_URL/prometheus \
+      --set prometheus.configmapReload.prometheus.image.repository=$REGISTRY_URL/prometheus-config-reloader \
+      --set prometheus-opencost-exporter.opencost.exporter.image.registry=$REGISTRY_URL \
+      --set prometheus-opencost-exporter.opencost.exporter.image.repository=opencost \
+      --set prometheus.kube-state-metrics.image.registry=$REGISTRY_URL \
+      --set prometheus.kube-state-metrics.image.repository=kube-state-metrics \
+      --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway \
+      --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
+      --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
+      --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
 # Pods on dead/unreachable nodes stay Terminating forever because kubelet can't
