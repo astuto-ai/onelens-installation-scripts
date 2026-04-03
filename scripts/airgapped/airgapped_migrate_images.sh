@@ -3,6 +3,7 @@
 # airgapped_migrate_images.sh — Mirror OneLens images and charts to a private ECR registry.
 #
 # Usage:
+#   bash airgapped_migrate_images.sh --registry 123456789.dkr.ecr.ap-south-2.amazonaws.com
 #   bash airgapped_migrate_images.sh --version 2.1.58 --registry 123456789.dkr.ecr.ap-south-2.amazonaws.com
 #
 # Prerequisites: aws cli v2, docker (with buildx), helm v3, jq
@@ -18,23 +19,23 @@ while [ $# -gt 0 ]; do
         --version)  VERSION="$2";   shift 2 ;;
         --registry) REGISTRY="$2";  shift 2 ;;
         -h|--help)
-            echo "Usage: bash $0 --version <version> --registry <ecr-registry-url>"
+            echo "Usage: bash $0 --registry <ecr-registry-url> [--version <version>]"
             echo ""
             echo "Mirrors all OneLens container images and Helm charts to your private ECR registry."
             echo ""
             echo "Flags:"
-            echo "  --version   OneLens version to mirror (e.g. 2.1.58)"
-            echo "  --registry  Your private ECR registry URL, optionally with a path prefix"
+            echo "  --registry  (required) Your private ECR registry URL, optionally with a path prefix"
             echo "              e.g. 123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent"
+            echo "  --version   (optional) OneLens version to mirror. If omitted, uses the latest released version."
             exit 0
             ;;
         *) echo "Unknown flag: $1"; exit 1 ;;
     esac
 done
 
-if [ -z "$VERSION" ] || [ -z "$REGISTRY" ]; then
-    echo "ERROR: --version and --registry are required."
-    echo "Usage: bash $0 --version <version> --registry <ecr-registry-url>"
+if [ -z "$REGISTRY" ]; then
+    echo "ERROR: --registry is required."
+    echo "Usage: bash $0 --registry <ecr-registry-url> [--version <version>]"
     exit 1
 fi
 
@@ -48,6 +49,21 @@ for tool in aws docker helm jq; do
         exit 1
     fi
 done
+
+# --- Add OneLens Helm repo (needed for version auto-detect and chart pull) ---
+echo "Adding OneLens Helm repository..."
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ 2>/dev/null || true
+helm repo update >/dev/null 2>&1
+
+# --- Auto-detect version if not specified ---
+if [ -z "$VERSION" ]; then
+    VERSION=$(helm search repo onelens/onelens-agent -o json | jq -r '.[0].version')
+    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+        echo "ERROR: Could not auto-detect latest version from Helm repo."
+        exit 1
+    fi
+    echo "No --version specified. Using latest: $VERSION"
+fi
 
 # --- Extract ECR domain, account, and region from registry URL ---
 # Supports bare domain and prefixed paths:
@@ -85,141 +101,121 @@ echo "Authenticating to ECR..."
 aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin "$ECR_DOMAIN"
 echo ""
 
-# --- Add OneLens Helm repo ---
-echo "Adding OneLens Helm repository..."
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ 2>/dev/null || true
-helm repo update >/dev/null 2>&1
-
 # --- Fetch globalvalues.yaml for the target version ---
 echo "Fetching image list for version $VERSION..."
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-helm show values onelens/onelens-agent --version "$VERSION" > "$TMPDIR/values.yaml" 2>/dev/null
+# Download globalvalues.yaml from the tagged release on GitHub.
+# This is more reliable than helm show values — the chart's packaged values have different
+# YAML structure (nested sub-chart keys) that makes grep-based parsing fragile.
+_GV_URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/v${VERSION}/globalvalues.yaml"
+curl -fsSL "$_GV_URL" -o "$TMPDIR/values.yaml"
 
 if [ ! -s "$TMPDIR/values.yaml" ]; then
-    echo "ERROR: Could not fetch chart values for version $VERSION."
-    echo "Ensure the version exists: helm search repo onelens/onelens-agent --versions"
+    echo "ERROR: Could not fetch globalvalues.yaml for version $VERSION."
+    echo "URL: $_GV_URL"
     exit 1
 fi
 
-# --- Parse images from values.yaml ---
-# Each image is: source_image -> target_repo:tag
-# We build an array of "SOURCE_IMAGE TARGET_REPO" pairs.
+echo "Fetched globalvalues.yaml from v${VERSION} tag"
 
-parse_image() {
-    local repo="$1" tag="$2" target_name="$3"
-    if [ -z "$tag" ]; then
-        echo "WARNING: Empty tag for $repo — skipping (chart uses appVersion default)." >&2
-        return
-    fi
-    echo "${repo}:${tag} ${target_name}:${tag}"
-}
+# Also fetch the chart to get image tags for components with empty tags (KSM, pushgateway).
+helm pull onelens/onelens-agent --version "$VERSION" -d "$TMPDIR" --untar --untardir "$TMPDIR" 2>/dev/null || true
+
+# --- Parse images from globalvalues.yaml ---
+# Uses direct grep for known image repository strings. This is more reliable than
+# awk range patterns because globalvalues.yaml has duplicate section names and
+# complex nesting that breaks range-based extraction.
 
 IMAGES=""
+_V="$TMPDIR/values.yaml"
+
+# Helper: extract tag from the line immediately following a repository match
+_get_tag() {
+    local file="$1" repo_pattern="$2"
+    grep -A1 "repository: ${repo_pattern}" "$file" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"'
+}
 
 # onelens-agent
-_repo=$(grep -A2 '^onelens-agent:' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_tag=$(grep -A3 '^onelens-agent:' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}')
-if [ -n "$_repo" ] && [ -n "$_tag" ]; then
-    IMAGES="$IMAGES
+_repo="public.ecr.aws/w7k6q5m9/onelens-agent"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    IMAGES="${IMAGES}
 ${_repo}:${_tag} onelens-agent:${_tag}"
+    echo "  onelens-agent: ${_repo}:${_tag}"
 fi
 
-# onelens-deployer (same ECR, tag = v$VERSION)
-IMAGES="$IMAGES
+# onelens-deployer (not in globalvalues — same ECR, tag = v$VERSION)
+IMAGES="${IMAGES}
 public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION} onelens-deployer:v${VERSION}"
+echo "  onelens-deployer: public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION}"
 
 # prometheus
-_repo=$(awk '/^  server:/,/^  [a-zA-Z]/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_tag=$(awk '/^  server:/,/^  [a-zA-Z]/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
-if [ -n "$_repo" ] && [ -n "$_tag" ]; then
-    IMAGES="$IMAGES
+_repo="quay.io/prometheus/prometheus"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    IMAGES="${IMAGES}
 ${_repo}:${_tag} prometheus:${_tag}"
+    echo "  prometheus: ${_repo}:${_tag}"
 fi
 
 # prometheus-config-reloader
-_repo=$(awk '/configmapReload:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_tag=$(awk '/configmapReload:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}')
-if [ -n "$_repo" ] && [ -n "$_tag" ]; then
-    IMAGES="$IMAGES
+_repo="quay.io/prometheus-operator/prometheus-config-reloader"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    IMAGES="${IMAGES}
 ${_repo}:${_tag} prometheus-config-reloader:${_tag}"
+    echo "  prometheus-config-reloader: ${_repo}:${_tag}"
 fi
 
-# opencost
-_oc_registry=$(awk '/opencost:/,/exporter:/' "$TMPDIR/values.yaml" | grep 'registry:' | head -1 | awk '{print $2}')
-_oc_repo=$(awk '/opencost:/,/exporter:/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_oc_tag=$(awk '/opencost:/,/exporter:/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
-if [ -n "$_oc_repo" ] && [ -n "$_oc_tag" ]; then
-    _oc_source="${_oc_repo}:${_oc_tag}"
-    if [ -n "$_oc_registry" ]; then
-        _oc_source="${_oc_registry}/${_oc_repo}:${_oc_tag}"
-    fi
-    # Target name is last part of the repo path (e.g. opencost/opencost -> opencost)
-    _oc_target=$(echo "$_oc_repo" | awk -F/ '{print $NF}')
-    IMAGES="$IMAGES
-${_oc_source} ${_oc_target}:${_oc_tag}"
+# opencost (has separate registry field)
+_repo="opencost/opencost"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    _source="ghcr.io/${_repo}:${_tag}"
+    IMAGES="${IMAGES}
+${_source} opencost:${_tag}"
+    echo "  opencost: ${_source}"
 fi
 
-# kube-state-metrics
-_ksm_registry=$(awk '/kube-state-metrics:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'registry:' | head -1 | awk '{print $2}')
-_ksm_repo=$(awk '/kube-state-metrics:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_ksm_tag=$(awk '/kube-state-metrics:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
-if [ -n "$_ksm_repo" ]; then
-    # KSM tag may be empty — get from chart appVersion
-    if [ -z "$_ksm_tag" ]; then
-        _ksm_tag=$(helm show chart onelens/onelens-agent --version "$VERSION" 2>/dev/null \
-            | awk '/dependencies:/,/^[^ ]/' | awk '/name:.*kube-state-metrics/,/version:/' \
-            | grep 'version:' | awk '{print "v"$2}')
-        if [ -z "$_ksm_tag" ]; then
-            echo "WARNING: Could not determine kube-state-metrics tag. Trying chart appVersion..."
-            _ksm_tag=$(helm show chart "onelens/onelens-agent" --version "$VERSION" 2>/dev/null | grep appVersion | awk '{print $2}')
-        fi
-    fi
-    if [ -n "$_ksm_tag" ]; then
-        _ksm_name=$(echo "$_ksm_repo" | awk -F/ '{print $NF}')
-        _ksm_source="${_ksm_repo}:${_ksm_tag}"
-        if [ -n "$_ksm_registry" ]; then
-            _ksm_source="${_ksm_registry}/${_ksm_repo}:${_ksm_tag}"
-        fi
-        IMAGES="$IMAGES
-${_ksm_source} ${_ksm_name}:${_ksm_tag}"
-    else
-        echo "WARNING: Skipping kube-state-metrics — could not determine tag."
-    fi
+# kube-state-metrics (tag may be empty — get from sub-chart appVersion)
+_repo="kube-state-metrics/kube-state-metrics"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ] && [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml" ]; then
+    _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml" | awk '{print $2}')"
+fi
+if [ -n "$_tag" ]; then
+    _source="registry.k8s.io/${_repo}:${_tag}"
+    IMAGES="${IMAGES}
+${_source} kube-state-metrics:${_tag}"
+    echo "  kube-state-metrics: ${_source}"
+else
+    echo "  WARNING: Skipping kube-state-metrics — could not determine tag."
 fi
 
 # kube-rbac-proxy
-_rbac_registry=$(awk '/kube-rbac-proxy:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'registry:' | head -1 | awk '{print $2}')
-_rbac_repo=$(awk '/kube-rbac-proxy:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_rbac_tag=$(awk '/kube-rbac-proxy:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}')
-if [ -n "$_rbac_repo" ] && [ -n "$_rbac_tag" ]; then
-    _rbac_source="${_rbac_repo}:${_rbac_tag}"
-    if [ -n "$_rbac_registry" ]; then
-        _rbac_source="${_rbac_registry}/${_rbac_repo}:${_rbac_tag}"
-    fi
-    _rbac_name=$(echo "$_rbac_repo" | awk -F/ '{print $NF}')
-    IMAGES="$IMAGES
-${_rbac_source} ${_rbac_name}:${_rbac_tag}"
+_repo="brancz/kube-rbac-proxy"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    _source="quay.io/${_repo}:${_tag}"
+    IMAGES="${IMAGES}
+${_source} kube-rbac-proxy:${_tag}"
+    echo "  kube-rbac-proxy: ${_source}"
 fi
 
-# pushgateway
-_pg_repo=$(awk '/prometheus-pushgateway:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'repository:' | head -1 | awk '{print $2}')
-_pg_tag=$(awk '/prometheus-pushgateway:/,/^[^ ]/' "$TMPDIR/values.yaml" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
-if [ -n "$_pg_repo" ]; then
-    # Pushgateway tag may be empty — use hardcoded fallback from chart
-    if [ -z "$_pg_tag" ]; then
-        _pg_tag=$(helm show chart "onelens/onelens-agent" --version "$VERSION" 2>/dev/null \
-            | awk '/dependencies:/,/^[^ ]/' | awk '/name:.*pushgateway/,/version:/' \
-            | grep 'version:' | awk '{print "v"$2}')
-    fi
-    if [ -n "$_pg_tag" ]; then
-        _pg_name=$(echo "$_pg_repo" | awk -F/ '{print $NF}')
-        IMAGES="$IMAGES
-${_pg_repo}:${_pg_tag} ${_pg_name}:${_pg_tag}"
-    else
-        echo "WARNING: Skipping pushgateway — could not determine tag."
-    fi
+# pushgateway (tag may be empty — get from sub-chart appVersion)
+_repo="quay.io/prometheus/pushgateway"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ] && [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml" ]; then
+    _tag="$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml" | awk '{print $2}')"
+fi
+if [ -n "$_tag" ]; then
+    IMAGES="${IMAGES}
+${_repo}:${_tag} pushgateway:${_tag}"
+    echo "  pushgateway: ${_repo}:${_tag}"
+else
+    echo "  WARNING: Skipping pushgateway — could not determine tag."
 fi
 
 # --- Mirror images ---
