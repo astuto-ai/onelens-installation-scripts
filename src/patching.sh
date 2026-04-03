@@ -1288,8 +1288,12 @@ if [ -n "$REGISTRY_URL" ]; then
     _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
     echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
     if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_CM_VERSION" ]; then
-        echo "NOTE: Requested version $CHART_VERSION differs from ConfigMap chart version $_CHART_CM_VERSION"
-        echo "  The ConfigMap version will be used. To upgrade, re-run the migration script with the new version."
+        echo "Skipping helm upgrade — ConfigMap has chart version $_CHART_CM_VERSION but target is $CHART_VERSION"
+        echo "  The target version is not available in the cluster. To upgrade:"
+        echo "  1. Re-run the migration script with --version $CHART_VERSION (or latest)"
+        echo "  2. The next patching run will pick up the new chart automatically"
+        echo "  All other remediation (pod health, OOM recovery, resource sizing) will still run."
+        SKIP_HELM_UPGRADE=true
     fi
     CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
 else
