@@ -177,7 +177,7 @@ bash airgapped_migrate_images.sh --registry <your-registry-url>/<prefix>
 
 > **Version:** The script auto-detects the latest released version. To pin a specific version, add `--version <version>`.
 
-> **Registry format:** Use a path prefix to namespace OneLens repos and avoid conflicts with existing ECR repositories (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent`). All image and chart repos will be created under the prefix. A bare domain without a prefix also works.
+> **Registry format:** Use a path prefix to namespace OneLens repos under your registry (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensk8sagent`). All image and chart repos will be created under the prefix (e.g. `onelensk8sagent/prometheus`, `onelensk8sagent/opencost`). You can choose any prefix name — `onelensk8sagent` is recommended. A bare domain without a prefix also works but may conflict with existing repos.
 
 The script will:
 1. Authenticate to your ECR (auto-detects account/region from the registry URL)

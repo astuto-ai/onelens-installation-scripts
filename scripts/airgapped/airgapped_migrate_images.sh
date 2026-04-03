@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Flags:"
             echo "  --registry  (required) Your private ECR registry URL, optionally with a path prefix"
-            echo "              e.g. 123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent"
+            echo "              e.g. 123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensk8sagent"
             echo "  --version   (optional) OneLens version to mirror. If omitted, uses the latest released version."
             exit 0
             ;;
