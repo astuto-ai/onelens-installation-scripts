@@ -118,15 +118,15 @@ migrate_push=$(grep -c 'helm push' "$MIGRATE" || true)
 assert_ge "$migrate_push" "2" "migration script pushes at least 2 charts (agent + deployer)"
 
 # ---------------------------------------------------------------------------
-# Test 16: Accessibility check script exists and has required flags
+# Test 16: Accessibility check script exists and requires no params
 # ---------------------------------------------------------------------------
 CHECK="$ROOT/scripts/airgapped/airgapped_accessibility_check.sh"
 assert_file_exists "$CHECK" "airgapped_accessibility_check.sh exists"
 
-check_token=$(grep -c '\-\-registration-token' "$CHECK" || true)
-check_cluster=$(grep -c '\-\-cluster-name' "$CHECK" || true)
-assert_gt "$check_token" "0" "accessibility check accepts --registration-token"
-assert_gt "$check_cluster" "0" "accessibility check accepts --cluster-name"
+check_no_token=$(grep -c '\-\-registration-token' "$CHECK" || true)
+assert_eq "$check_no_token" "0" "accessibility check does not require --registration-token (zero-param)"
+check_api=$(grep -c 'api-in.onelens.cloud' "$CHECK" || true)
+assert_gt "$check_api" "0" "accessibility check tests api-in.onelens.cloud"
 
 # ---------------------------------------------------------------------------
 # Test 17: Accessibility check has valid bash syntax
@@ -143,10 +143,10 @@ assert_gt "$check_api" "0" "accessibility check tests OneLens API endpoint"
 assert_gt "$check_upload" "0" "accessibility check tests upload gateway endpoint"
 
 # ---------------------------------------------------------------------------
-# Test 19: Migration script uses dynamic image parsing (not hardcoded list)
+# Test 19: Migration script fetches globalvalues.yaml from raw GitHub
 # ---------------------------------------------------------------------------
-migrate_dynamic=$(grep -c 'helm show values' "$MIGRATE" || true)
-assert_gt "$migrate_dynamic" "0" "migration script fetches image list dynamically from chart values"
+migrate_dynamic=$(grep -c 'raw.githubusercontent.com' "$MIGRATE" || true)
+assert_gt "$migrate_dynamic" "0" "migration script fetches globalvalues.yaml from raw GitHub"
 
 # ---------------------------------------------------------------------------
 # Test 20: patching.sh helm upgrade line uses $CHART_SOURCE (not hardcoded)
@@ -183,6 +183,22 @@ assert_gt "$migrate_login" "0" "migration script docker login uses ECR_DOMAIN, n
 # ---------------------------------------------------------------------------
 migrate_prefix_repo=$(grep 'ECR_PREFIX' "$MIGRATE" | grep -c 'ecr_repo\|ecr_charts' || true)
 assert_gt "$migrate_prefix_repo" "0" "migration script prefixes ECR repo names"
+
+# ---------------------------------------------------------------------------
+# Test 26: Both scripts authenticate to ECR before helm OCI pull
+# ---------------------------------------------------------------------------
+install_ecr_login=$(grep -c 'helm registry login' "$ROOT/install.sh" || true)
+patching_ecr_login=$(grep -c 'helm registry login' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_ecr_login" "0" "install.sh authenticates to ECR via helm registry login"
+assert_gt "$patching_ecr_login" "0" "patching.sh authenticates to ECR via helm registry login"
+
+# ---------------------------------------------------------------------------
+# Test 27: Both scripts extract ECR domain before helm pull
+# ---------------------------------------------------------------------------
+install_ecr_domain=$(grep -c '_ECR_DOMAIN=' "$ROOT/install.sh" || true)
+patching_ecr_domain=$(grep -c '_ECR_DOMAIN=' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_ecr_domain" "0" "install.sh extracts ECR domain from REGISTRY_URL"
+assert_gt "$patching_ecr_domain" "0" "patching.sh extracts ECR domain from REGISTRY_URL"
 
 test_summary
 exit $?

@@ -425,8 +425,11 @@ helm upgrade --install onelensdeployer \
 **Setup:** Run the migration script once per version on an internet-connected machine to mirror images and charts to your private registry:
 
 ```bash
-bash airgapped_migrate_images.sh --version <version> --registry <your-registry-url>
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
+  --registry <your-registry-url>
 ```
+
+The script auto-detects the latest version. Add `--version <version>` to pin a specific version.
 
 For full instructions, prerequisites, and troubleshooting, see the [Air-Gapped Deployment Guide](docs/airgapped-deployment-guide.md).
 

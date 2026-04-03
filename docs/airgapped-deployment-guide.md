@@ -149,22 +149,16 @@ Your EKS **node IAM role** (or imagePullSecrets) needs read access to the privat
 
 ## Step 1: Validate Connectivity (Optional)
 
-Run the accessibility check to verify your environment can reach the required services.
+Run the accessibility check to verify your environment can reach the required services. No parameters needed.
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh -o airgapped_accessibility_check.sh
-
-bash airgapped_accessibility_check.sh \
-  --registration-token <your-registration-token> \
-  --cluster-name <your-cluster-name> \
-  --account <your-aws-account-id> \
-  --region <your-aws-region>
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh | bash
 ```
 
 The script tests:
-- **OneLens API** — registration endpoint reachability (`api-in.onelens.cloud`)
+- **OneLens API** — reachability (`api-in.onelens.cloud`)
 - **Upload gateway** — data upload endpoint reachability (`api-in-fileupload.onelens.cloud`)
-- **Private registry** — that cluster nodes can authenticate and pull from your registry
+- **DNS resolution** — that cluster nodes can resolve the required domains
 
 ---
 
@@ -173,14 +167,11 @@ The script tests:
 This step runs **once per OneLens version** on your internet-connected machine. It mirrors all container images and Helm charts to your private registry.
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh -o airgapped_migrate_images.sh
-
-bash airgapped_migrate_images.sh \
-  --version <version> \
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
   --registry <your-registry-url>/<prefix>
 ```
 
-> **Important:** Always specify `--version` explicitly. The version must match what you deploy.
+> **Version:** The script auto-detects the latest released version. To pin a specific version, add `--version <version>`.
 
 > **Registry format:** Use a path prefix to namespace OneLens repos and avoid conflicts with existing ECR repositories (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensagent`). All image and chart repos will be created under the prefix. A bare domain without a prefix also works.
 
@@ -266,10 +257,11 @@ All pods should be in `Running` state:
 ### Step 1: Mirror the new version (once, on your internet-connected machine)
 
 ```bash
-bash airgapped_migrate_images.sh \
-  --version <new-version> \
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
   --registry <your-registry-url>
 ```
+
+The script auto-detects the latest released version. To pin a specific version, add `--version <version>`.
 
 ### Step 2: Clusters upgrade automatically
 
