@@ -172,8 +172,21 @@ elif [ "$deployment_type" = "cronjob" ]; then
     echo "$API_RESPONSE_SCRIPT" | jq -e -r '.data.script_content' > "./$SCRIPT_NAME" 2>/dev/null
 
     if [ $? -ne 0 ] || [ ! -s "./$SCRIPT_NAME" ]; then
-      echo "Error: Failed to extract patching script from API response"
-      update_cluster_logs "Healthcheck failed but could not fetch patching script"
+      echo "Error: Failed to fetch patching script for version $patching_version"
+      echo "  This usually means the version tag does not exist, or the API is unreachable."
+      echo "  The cluster will continue running on $current_version."
+      # Report failure with healthcheck_failures increment so the dashboard shows what's wrong
+      NEW_FAILURES=$(( ${healthcheck_failures:-0} + 1 ))
+      FAIL_MSG="Script fetch failed for $patching_version (current: $current_version). Cluster healthy but cannot upgrade."
+      payload=$(jq -n \
+          --arg reg_id "$REGISTRATION_ID" \
+          --arg token "$CLUSTER_TOKEN" \
+          --arg logs "$FAIL_MSG" \
+          --argjson hcf "$NEW_FAILURES" \
+          '{registration_id: $reg_id, cluster_token: $token, update_data: {logs: $logs, healthcheck_failures: $hcf}}')
+      curl -s --max-time 10 --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
+          --header 'Content-Type: application/json' \
+          --data "$payload" >/dev/null 2>&1 || true
       exit 1
     fi
 
