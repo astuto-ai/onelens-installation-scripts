@@ -421,14 +421,13 @@ helm upgrade --install onelensdeployer \
   --set job.env.REGISTRATION_TOKEN=<token>
 ```
 
-**Setup:** Run the migration script once per version on an internet-connected machine to mirror images and charts to your private registry:
+**Setup:** Run the migration script once per version on a machine with internet access and `kubectl` access to the target cluster:
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
-  --registry <your-registry-url>
+bash airgapped_migrate_images.sh --registry <your-registry-url>
 ```
 
-The script auto-detects the latest version. Add `--version <version>` to pin a specific version.
+The script mirrors container images, pushes the deployer chart, and pre-loads the agent chart into the cluster as a ConfigMap. It auto-detects the latest version — add `--version <version>` to pin a specific version.
 
 For full instructions, prerequisites, and troubleshooting, see the [Air-Gapped Deployment Guide](docs/airgapped-deployment-guide.md).
 

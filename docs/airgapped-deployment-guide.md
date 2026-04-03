@@ -13,8 +13,8 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 │  One-time per version:                                           │
 │  ┌──────────────────────────────┐    ┌────────────────────────┐  │
 │  │ airgapped_migrate_images.sh  │──→ │ Public registries ──→  │  │
-│  │   --version <ver>            │    │ Your private registry  │  │
-│  │   --registry <url>           │    │ (images + Helm charts) │  │
+│  │   --registry <url>           │    │ Your private registry  │  │
+│  │   (auto-detects version)     │    │ (images + charts)      │  │
 │  └──────────────────────────────┘    └────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 
@@ -48,8 +48,8 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
                 │   ┌──────────────────────────────────────────┐   │
                 │   │ Updater CronJob (onelensupdater)         │   │
                 │   │ Runs every 5 minutes                     │   │
-                │   │ Detects new version in private registry  │   │
-                │   │ Upgrades automatically                   │   │
+                │   │ Healthchecks + auto-remediation          │   │
+                │   │ Upgrades when new chart is in ConfigMap  │   │
                 │   └──────────────────────────────────────────┘   │
                 └──────────────────────────────────────────────────┘
 ```
@@ -167,13 +167,12 @@ The script tests:
 
 ---
 
-## Step 2: Mirror Images and Charts to Your Private Registry
+## Step 2: Mirror Images and Set Up Cluster Resources
 
-This step runs **once per OneLens version** on your internet-connected machine. It mirrors all container images and Helm charts to your private registry.
+This step runs **once per OneLens version** on a machine with internet access AND `kubectl` access to the target cluster.
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
-  --registry <your-registry-url>/<prefix>
+bash airgapped_migrate_images.sh --registry <your-registry-url>/<prefix>
 ```
 
 > **Version:** The script auto-detects the latest released version. To pin a specific version, add `--version <version>`.
@@ -240,10 +239,10 @@ The deployer automatically detects that it's running from a private registry and
 
 ### What happens after you run this
 
-1. Helm deploys the `onelensdeployer` chart (deployer image pulled from your private registry)
+1. Helm deploys the `onelensdeployer` chart (deployer image pulled from your private registry by the node IAM role)
 2. The deployer Job registers the cluster with the OneLens API
-3. `install.sh` detects the private registry, pulls the `onelens-agent` chart from your registry via OCI
-4. All component images (agent, Prometheus, OpenCost, KSM, etc.) are pulled from your private registry
+3. `install.sh` detects the private registry, reads the `onelens-agent` chart from the ConfigMap (created by the migration script)
+4. All component images (agent, Prometheus, OpenCost, KSM, etc.) are pulled from your private registry by the node IAM role
 5. The `onelensupdater` CronJob is created for automated health checks and upgrades
 6. Cluster status is updated to `CONNECTED`
 
@@ -264,20 +263,19 @@ All pods should be in `Running` state:
 
 ## Upgrading to a New Version
 
-### Step 1: Mirror the new version (once, on your internet-connected machine)
+### Step 1: Re-run the migration script (once per version, on your setup machine)
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh | bash -s -- \
-  --registry <your-registry-url>
+bash airgapped_migrate_images.sh --registry <your-registry-url>
 ```
 
-The script auto-detects the latest released version. To pin a specific version, add `--version <version>`.
+This mirrors the new version's images, updates the deployer chart in your registry, and updates the ConfigMap in the cluster with the new agent chart.
 
 ### Step 2: Clusters upgrade automatically
 
-The `onelensupdater` CronJob on each cluster checks your private registry every 5 minutes. When it detects a higher chart version than what's currently deployed, it upgrades automatically.
+The `onelensupdater` CronJob runs every 5 minutes. When it detects a version mismatch, it reads the chart from the ConfigMap (updated in Step 1) and runs a helm upgrade with the new version.
 
-**You control the timing** — clusters only upgrade after you mirror the new version. No coordination with OneLens needed.
+**You control the timing** — clusters only upgrade after you re-run the migration script. No coordination with OneLens needed.
 
 ### Manual upgrade (optional)
 
@@ -303,9 +301,8 @@ ErrImagePull or ImagePullBackOff
 
 **Fix:**
 1. Verify the image exists: `aws ecr describe-images --repository-name <repo> --region <region>`
-2. Check node IAM role has ECR read permissions (see Prerequisites)
-3. If using imagePullSecrets, verify the secret exists: `kubectl get secret <secret-name> -n onelens-agent`
-4. Check the image tag matches the deployed version: `kubectl describe pod <pod-name> -n onelens-agent | grep Image`
+2. Check node IAM role has ECR read permissions (see [Prerequisites](#aws-permissions))
+3. Check the image tag matches the deployed version: `kubectl describe pod <pod-name> -n onelens-agent | grep Image`
 
 ### Images reset to public registries after patching
 
