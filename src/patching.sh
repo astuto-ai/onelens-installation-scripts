@@ -1259,6 +1259,20 @@ fi
 
 # --- Chart source ---
 if [ -n "$REGISTRY_URL" ]; then
+    # Authenticate to ECR for helm OCI pull (kubelet handles Docker image pulls, but helm needs explicit auth)
+    _ECR_DOMAIN=$(echo "$REGISTRY_URL" | sed 's|/.*||')
+    _ECR_REGION=$(echo "$_ECR_DOMAIN" | sed 's/.*\.ecr\.\(.*\)\.amazonaws\.com/\1/')
+    if [ "$_ECR_REGION" != "$_ECR_DOMAIN" ]; then
+        echo "Authenticating to ECR: $_ECR_DOMAIN (region: $_ECR_REGION)"
+        if ! aws ecr get-login-password --region "$_ECR_REGION" | helm registry login --username AWS --password-stdin "$_ECR_DOMAIN"; then
+            echo "ERROR: ECR authentication failed for $_ECR_DOMAIN (region: $_ECR_REGION)."
+            echo "Ensure the node IAM role has ecr:GetAuthorizationToken permission."
+            exit 1
+        fi
+    else
+        echo "Registry $_ECR_DOMAIN is not ECR — skipping ECR auth"
+    fi
+
     echo "Air-gapped mode: pulling chart from $REGISTRY_URL"
     _PULL_VERSION=""
     if [ -n "$CHART_VERSION" ]; then
