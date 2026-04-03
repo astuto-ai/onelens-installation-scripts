@@ -3,36 +3,11 @@
 # airgapped_accessibility_check.sh — Verify network connectivity for OneLens air-gapped deployment.
 #
 # Usage:
-#   bash airgapped_accessibility_check.sh \
-#     --registration-token <token> --cluster-name <name> --account <id> --region <region>
+#   curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh | bash
+#
+# No parameters required. Tests connectivity to OneLens API and upload gateway.
 #
 set -euo pipefail
-
-REGISTRATION_TOKEN=""
-CLUSTER_NAME=""
-ACCOUNT=""
-REGION=""
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --registration-token) REGISTRATION_TOKEN="$2"; shift 2 ;;
-        --cluster-name)       CLUSTER_NAME="$2";       shift 2 ;;
-        --account)            ACCOUNT="$2";             shift 2 ;;
-        --region)             REGION="$2";              shift 2 ;;
-        -h|--help)
-            echo "Usage: bash $0 --registration-token <token> --cluster-name <name> --account <id> --region <region>"
-            echo ""
-            echo "Tests network connectivity required for OneLens air-gapped deployment."
-            exit 0
-            ;;
-        *) echo "Unknown flag: $1"; exit 1 ;;
-    esac
-done
-
-if [ -z "$REGISTRATION_TOKEN" ] || [ -z "$CLUSTER_NAME" ] || [ -z "$ACCOUNT" ] || [ -z "$REGION" ]; then
-    echo "ERROR: All flags are required: --registration-token, --cluster-name, --account, --region"
-    exit 1
-fi
 
 API_URL="https://api-in.onelens.cloud"
 UPLOAD_URL="https://api-in-fileupload.onelens.cloud"
@@ -53,34 +28,26 @@ check() {
 echo "=== OneLens Air-Gapped Connectivity Check ==="
 echo ""
 
-# Test 1: API reachability
+# Test 1: API reachability (GET-safe endpoint, no side-effects)
 echo "1. OneLens API ($API_URL)"
-_api_http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "$API_URL/v1/kubernetes/registration" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"registration_token\": \"$REGISTRATION_TOKEN\",
-        \"cluster_name\": \"connectivity-check-$(date +%s)\",
-        \"account_id\": \"$ACCOUNT\",
-        \"region\": \"$REGION\",
-        \"agent_version\": \"0.0.0\"
-    }" 2>/dev/null || echo "000")
-
-if [ "$_api_http" = "200" ] || [ "$_api_http" = "400" ] || [ "$_api_http" = "422" ]; then
-    check "Registration endpoint reachable" "ok"
+if curl -fsSL --max-time 10 "$API_URL/v1/kubernetes/cluster-version" -o /dev/null 2>/dev/null; then
+    check "API reachable" "ok"
 else
-    check "Registration endpoint reachable" "HTTP $_api_http (expected 200/400/422)"
+    # curl -f exits non-zero on HTTP errors; retry without -f to distinguish network vs HTTP failure
+    if curl -sL --max-time 10 "$API_URL/v1/kubernetes/cluster-version" -o /dev/null 2>/dev/null; then
+        check "API reachable" "ok"
+    else
+        check "API reachable" "connection failed"
+    fi
 fi
 
 # Test 2: Upload gateway reachability
 echo ""
 echo "2. Upload Gateway ($UPLOAD_URL)"
-_upload_http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$UPLOAD_URL" 2>/dev/null || echo "000")
-
-if [ "$_upload_http" != "000" ]; then
+if curl -sL --max-time 10 "$UPLOAD_URL" -o /dev/null 2>/dev/null; then
     check "Upload gateway reachable" "ok"
 else
-    check "Upload gateway reachable" "Connection failed (DNS or network issue)"
+    check "Upload gateway reachable" "connection failed"
 fi
 
 # Test 3: DNS resolution
