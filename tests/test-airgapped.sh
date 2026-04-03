@@ -36,12 +36,12 @@ patching_registry_default=$(grep -c 'REGISTRY_URL=""' "$ROOT/src/patching.sh" ||
 assert_gt "$patching_registry_default" "0" "patching.sh defaults REGISTRY_URL to empty"
 
 # ---------------------------------------------------------------------------
-# Test 6: Both scripts pull chart via OCI when air-gapped
+# Test 6: Both scripts read chart from ConfigMap when air-gapped
 # ---------------------------------------------------------------------------
-install_oci=$(grep -c 'oci://\$REGISTRY_URL/charts/onelens-agent' "$ROOT/install.sh" || true)
-patching_oci=$(grep -c 'oci://\$REGISTRY_URL/charts/onelens-agent' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_oci" "0" "install.sh pulls chart from OCI registry when air-gapped"
-assert_gt "$patching_oci" "0" "patching.sh pulls chart from OCI registry when air-gapped"
+install_cm=$(grep -c 'onelens-agent-chart' "$ROOT/install.sh" || true)
+patching_cm=$(grep -c 'onelens-agent-chart' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_cm" "0" "install.sh reads chart from ConfigMap when air-gapped"
+assert_gt "$patching_cm" "0" "patching.sh reads chart from ConfigMap when air-gapped"
 
 # ---------------------------------------------------------------------------
 # Test 7: Both scripts persist REGISTRY_URL in helm values
@@ -115,7 +115,7 @@ assert_gt "$migrate_rewrite" "0" "migration script rewrites deployer image in ch
 # Test 15: Migration script pushes charts to OCI
 # ---------------------------------------------------------------------------
 migrate_push=$(grep -c 'helm push' "$MIGRATE" || true)
-assert_ge "$migrate_push" "2" "migration script pushes at least 2 charts (agent + deployer)"
+assert_ge "$migrate_push" "1" "migration script pushes deployer chart to OCI"
 
 # ---------------------------------------------------------------------------
 # Test 16: Accessibility check script exists and requires no params
@@ -185,20 +185,18 @@ migrate_prefix_repo=$(grep 'ECR_PREFIX' "$MIGRATE" | grep -c 'ecr_repo\|ecr_char
 assert_gt "$migrate_prefix_repo" "0" "migration script prefixes ECR repo names"
 
 # ---------------------------------------------------------------------------
-# Test 26: Both scripts authenticate to ECR before helm OCI pull
+# Test 26: Neither script uses imagePullSecrets (node IAM role handles image pulls)
 # ---------------------------------------------------------------------------
-install_ecr_login=$(grep -c 'helm registry login' "$ROOT/install.sh" || true)
-patching_ecr_login=$(grep -c 'helm registry login' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_ecr_login" "0" "install.sh authenticates to ECR via helm registry login"
-assert_gt "$patching_ecr_login" "0" "patching.sh authenticates to ECR via helm registry login"
+install_ips=$(grep -v '^#' "$ROOT/install.sh" | grep -c 'imagePullSecrets' || true)
+patching_ips=$(grep -v '^#' "$ROOT/src/patching.sh" | grep -c 'imagePullSecrets' || true)
+assert_eq "$install_ips" "0" "install.sh does not set imagePullSecrets"
+assert_eq "$patching_ips" "0" "patching.sh does not set imagePullSecrets"
 
 # ---------------------------------------------------------------------------
-# Test 27: Both scripts extract ECR domain before helm pull
+# Test 27: Migration script creates ConfigMap for chart delivery
 # ---------------------------------------------------------------------------
-install_ecr_domain=$(grep -c '_ECR_DOMAIN=' "$ROOT/install.sh" || true)
-patching_ecr_domain=$(grep -c '_ECR_DOMAIN=' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_ecr_domain" "0" "install.sh extracts ECR domain from REGISTRY_URL"
-assert_gt "$patching_ecr_domain" "0" "patching.sh extracts ECR domain from REGISTRY_URL"
+migrate_configmap=$(grep -c 'configmap onelens-agent-chart' "$MIGRATE" || true)
+assert_gt "$migrate_configmap" "0" "migration script creates ConfigMap onelens-agent-chart"
 
 test_summary
 exit $?

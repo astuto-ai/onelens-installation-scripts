@@ -362,7 +362,6 @@ Apply custom labels to OneLens resources. Useful for organizational policies tha
 
 | Parameter | Description | Default |
 |---|---|---|
-| `job.env.IMAGE_PULL_SECRET` | Image pull secret name for private registries | `""` |
 | `cronjob.schedule` | Updater CronJob schedule | `"0 2 * * *"` |
 | `cronjob.suspend` | Suspend the daily updater | `false` |
 

@@ -66,8 +66,11 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 | Docker (with buildx) | Pull and push multi-arch images |
 | Helm v3 | Chart deployment |
 | jq | JSON parsing |
+| kubectl | Access to the target Kubernetes cluster (for chart setup) |
 
 > **Note:** This guide assumes AWS ECR as the private registry. If you use a different registry (Harbor, Artifactory, GCR, etc.), adapt the registry authentication and image push commands accordingly — the Helm install command remains the same.
+>
+> **Note:** The migration script requires `kubectl` access to the target cluster to create a ConfigMap containing the agent chart. Ensure your kubeconfig is configured for the target cluster before running.
 
 ### Network Access
 
@@ -119,7 +122,7 @@ The IAM role or user running the migration script needs:
 }
 ```
 
-Your EKS **node IAM role** (or imagePullSecrets) needs read access to the private ECR repositories:
+Your EKS **node IAM role** needs read access to the private ECR repositories. This is required because all OneLens pod images (agent, Prometheus, OpenCost, kube-state-metrics, pushgateway, etc.) are pulled from your private registry. Without this, pods will fail with `ImagePullBackOff`:
 
 ```json
 {
@@ -144,6 +147,8 @@ Your EKS **node IAM role** (or imagePullSecrets) needs read access to the privat
 ```
 
 > Replace `<region>` and `<account-id>` with your AWS region and account ID.
+>
+> **EKS managed node groups** include the `AmazonEC2ContainerRegistryReadOnly` policy by default, which covers same-account ECR. For **cross-account ECR**, add a repository policy on each ECR repository granting pull access to the node role in the other account. For **Azure AKS**, use `az aks update --attach-acr`. For **GCP GKE**, grant `roles/artifactregistry.reader` to the node service account.
 
 ---
 
@@ -180,9 +185,8 @@ The script will:
 2. Fetch the image list for the specified version from `globalvalues.yaml`
 3. Create ECR repositories if they don't exist (under your prefix if specified)
 4. Pull each image from its public registry and push to your ECR (multi-arch: amd64 + arm64)
-5. Pull the `onelensdeployer` and `onelens-agent` Helm charts
-6. Rewrite the deployer chart image reference to point to your registry
-7. Push both charts as OCI artifacts to your registry
+5. Pull the `onelensdeployer` Helm chart, rewrite its image reference, and push to your registry
+6. Create a ConfigMap in the target cluster containing the `onelens-agent` chart (used by the deployer pod to install without needing registry access)
 
 ### Verify
 
@@ -190,7 +194,13 @@ The script will:
 aws ecr describe-repositories --region <region> --query 'repositories[].repositoryName' --output table
 ```
 
-You should see repositories for: `<prefix>/onelens-agent`, `<prefix>/onelens-deployer`, `<prefix>/prometheus`, `<prefix>/opencost`, `<prefix>/prometheus-config-reloader`, `<prefix>/kube-state-metrics`, `<prefix>/pushgateway`, `<prefix>/kube-rbac-proxy`, `<prefix>/charts/onelens-agent`, and `<prefix>/charts/onelensdeployer`.
+You should see repositories for: `<prefix>/onelens-agent`, `<prefix>/onelens-deployer`, `<prefix>/prometheus`, `<prefix>/opencost`, `<prefix>/prometheus-config-reloader`, `<prefix>/kube-state-metrics`, `<prefix>/pushgateway`, `<prefix>/kube-rbac-proxy`, and `<prefix>/charts/onelensdeployer`.
+
+Also verify the chart ConfigMap was created:
+
+```bash
+kubectl get configmap onelens-agent-chart -n onelens-agent
+```
 
 ---
 

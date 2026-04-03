@@ -390,28 +390,35 @@ fi
 
 # --- Chart source ---
 if [ -n "$REGISTRY_URL" ]; then
-    # Authenticate to ECR for helm OCI pull (kubelet handles Docker image pulls, but helm needs explicit auth)
-    _ECR_DOMAIN=$(echo "$REGISTRY_URL" | sed 's|/.*||')
-    _ECR_REGION=$(echo "$_ECR_DOMAIN" | sed 's/.*\.ecr\.\(.*\)\.amazonaws\.com/\1/')
-    if [ "$_ECR_REGION" != "$_ECR_DOMAIN" ]; then
-        echo "Authenticating to ECR: $_ECR_DOMAIN (region: $_ECR_REGION)"
-        if ! aws ecr get-login-password --region "$_ECR_REGION" | helm registry login --username AWS --password-stdin "$_ECR_DOMAIN"; then
-            echo "ERROR: ECR authentication failed for $_ECR_DOMAIN (region: $_ECR_REGION)."
-            echo "Ensure the node IAM role has ecr:GetAuthorizationToken permission."
-            exit 1
+    # Air-gapped: chart is pre-loaded as a ConfigMap by the migration script.
+    # No registry auth needed — the ConfigMap was created on a machine with access.
+    echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
+    _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1) || {
+        if echo "$_cm_err" | grep -qi "forbidden\|unauthorized"; then
+            echo "ERROR: Permission denied reading ConfigMap onelens-agent-chart."
+            echo "  Cause: The deployer pod's service account cannot read configmaps in namespace onelens-agent."
+            echo "  Fix:   Ensure the onelensdeployer Role grants get/list on configmaps (this is included by default)."
+            echo "         If you customized RBAC, add: resources: [\"configmaps\"] verbs: [\"get\",\"list\"]"
+            echo "  Detail: $_cm_err"
+        else
+            echo "ERROR: ConfigMap onelens-agent-chart not found in namespace onelens-agent."
+            echo "  Cause: The migration script was not run, or was run against a different cluster."
+            echo "  Fix:   Run the migration script with kubectl access to this cluster:"
+            echo "         bash airgapped_migrate_images.sh --registry <your-registry-url>"
         fi
-    else
-        echo "Registry $_ECR_DOMAIN is not ECR — skipping ECR auth"
+        exit 1
+    }
+    kubectl get configmap onelens-agent-chart -n onelens-agent \
+        -o go-template='{{index .binaryData "chart.tgz"}}' | base64 -d > /tmp/onelens-agent-chart.tgz
+    if [ ! -s /tmp/onelens-agent-chart.tgz ]; then
+        echo "ERROR: Failed to extract chart from ConfigMap onelens-agent-chart."
+        echo "  The ConfigMap exists but extraction produced an empty file."
+        echo "  Fix: Re-run the migration script to recreate the ConfigMap."
+        exit 1
     fi
-
-    echo "Pulling onelens-agent chart from private OCI registry..."
-    helm pull "oci://$REGISTRY_URL/charts/onelens-agent" --version "$RELEASE_VERSION" --untar 2>/dev/null || \
-        helm pull "oci://$REGISTRY_URL/charts/onelens-agent" --version "$RELEASE_VERSION"
-    if [ -d "onelens-agent" ]; then
-        CHART_SOURCE="./onelens-agent"
-    else
-        CHART_SOURCE="./onelens-agent-${RELEASE_VERSION}.tgz"
-    fi
+    _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
+    echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
+    CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
 else
     helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
     CHART_SOURCE="onelens/onelens-agent"
@@ -469,7 +476,6 @@ export TOLERATION_OPERATOR="${TOLERATION_OPERATOR:=}"
 export TOLERATION_EFFECT="${TOLERATION_EFFECT:=}"
 export NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:=}"
 export NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:=}"
-export IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:=}"
 
 ## EBS Driver custom tag and custom encryption (AWS-specific)
 export EBS_TAGS_ENABLED="${EBS_TAGS_ENABLED:=false}"
@@ -572,6 +578,7 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG $CHAR
 # Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
 # to produce the flat path $REGISTRY_URL/<name>:{tag} matching what the migration script pushes.
 if [ -n "$REGISTRY_URL" ]; then
+    echo "Applying air-gapped image overrides for registry: $REGISTRY_URL"
     CMD+=" --set onelens-agent.image.repository=$REGISTRY_URL/onelens-agent"
     CMD+=" --set prometheus.server.image.repository=$REGISTRY_URL/prometheus"
     CMD+=" --set prometheus.configmapReload.prometheus.image.repository=$REGISTRY_URL/prometheus-config-reloader"
@@ -667,18 +674,6 @@ if [[ -n "${DEPLOYMENT_LABELS:-}" ]]; then
   else
     echo "Warning: jq not found, skipping podLabels from DEPLOYMENT_LABELS"
   fi
-fi
-
-# Append imagePullSecrets only if set
-if [[ -n "$IMAGE_PULL_SECRET" ]]; then
-  for path in \
-    prometheus-opencost-exporter.opencost \
-    prometheus.server \
-    onelens-agent.cronJob \
-    prometheus.prometheus-pushgateway \
-    prometheus.kube-state-metrics; do
-    CMD+=" --set $path.imagePullSecrets=\"$IMAGE_PULL_SECRET\""
-  done
 fi
 
 # Append AWS-specific EBS tags only if set and running on AWS

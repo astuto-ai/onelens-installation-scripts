@@ -1259,32 +1259,39 @@ fi
 
 # --- Chart source ---
 if [ -n "$REGISTRY_URL" ]; then
-    # Authenticate to ECR for helm OCI pull (kubelet handles Docker image pulls, but helm needs explicit auth)
-    _ECR_DOMAIN=$(echo "$REGISTRY_URL" | sed 's|/.*||')
-    _ECR_REGION=$(echo "$_ECR_DOMAIN" | sed 's/.*\.ecr\.\(.*\)\.amazonaws\.com/\1/')
-    if [ "$_ECR_REGION" != "$_ECR_DOMAIN" ]; then
-        echo "Authenticating to ECR: $_ECR_DOMAIN (region: $_ECR_REGION)"
-        if ! aws ecr get-login-password --region "$_ECR_REGION" | helm registry login --username AWS --password-stdin "$_ECR_DOMAIN"; then
-            echo "ERROR: ECR authentication failed for $_ECR_DOMAIN (region: $_ECR_REGION)."
-            echo "Ensure the node IAM role has ecr:GetAuthorizationToken permission."
-            exit 1
+    # Air-gapped: chart is pre-loaded as a ConfigMap by the migration script.
+    # No registry auth needed — the ConfigMap was created on a machine with access.
+    echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
+    _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1) || {
+        if echo "$_cm_err" | grep -qi "forbidden\|unauthorized"; then
+            echo "ERROR: Permission denied reading ConfigMap onelens-agent-chart."
+            echo "  Cause: The deployer pod's service account cannot read configmaps in namespace onelens-agent."
+            echo "  Fix:   Ensure the onelensdeployer Role grants get/list on configmaps (this is included by default)."
+            echo "         If you customized RBAC, add: resources: [\"configmaps\"] verbs: [\"get\",\"list\"]"
+            echo "  Detail: $_cm_err"
+        else
+            echo "ERROR: ConfigMap onelens-agent-chart not found in namespace onelens-agent."
+            echo "  Cause: The migration script was not run, or was run against a different cluster."
+            echo "  Fix:   Run the migration script with kubectl access to this cluster:"
+            echo "         bash airgapped_migrate_images.sh --registry <your-registry-url>"
         fi
-    else
-        echo "Registry $_ECR_DOMAIN is not ECR — skipping ECR auth"
+        exit 1
+    }
+    kubectl get configmap onelens-agent-chart -n onelens-agent \
+        -o go-template='{{index .binaryData "chart.tgz"}}' | base64 -d > /tmp/onelens-agent-chart.tgz
+    if [ ! -s /tmp/onelens-agent-chart.tgz ]; then
+        echo "ERROR: Failed to extract chart from ConfigMap onelens-agent-chart."
+        echo "  The ConfigMap exists but extraction produced an empty file."
+        echo "  Fix: Re-run the migration script to recreate the ConfigMap."
+        exit 1
     fi
-
-    echo "Air-gapped mode: pulling chart from $REGISTRY_URL"
-    _PULL_VERSION=""
-    if [ -n "$CHART_VERSION" ]; then
-        _PULL_VERSION="--version $CHART_VERSION"
+    _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
+    echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
+    if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_CM_VERSION" ]; then
+        echo "NOTE: Requested version $CHART_VERSION differs from ConfigMap chart version $_CHART_CM_VERSION"
+        echo "  The ConfigMap version will be used. To upgrade, re-run the migration script with the new version."
     fi
-    helm pull "oci://$REGISTRY_URL/charts/onelens-agent" $_PULL_VERSION --untar 2>/dev/null || \
-        helm pull "oci://$REGISTRY_URL/charts/onelens-agent" $_PULL_VERSION
-    if [ -d "onelens-agent" ]; then
-        CHART_SOURCE="./onelens-agent"
-    else
-        CHART_SOURCE="./onelens-agent-${CHART_VERSION}.tgz"
-    fi
+    CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
 else
     helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
     helm repo update >/dev/null 2>&1
