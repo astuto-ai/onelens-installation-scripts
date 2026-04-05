@@ -26,7 +26,9 @@ This allows you to:
 
 ## How It Works
 
-OneLens deploys a lightweight agent on each node in your cluster that monitors network connections. It reads the Linux kernel's connection tracking table to see which pods are communicating with which destinations and how much data is being transferred. Traffic is then classified by destination type (same-zone, cross-zone, cross-region, internet) and priced according to your cloud provider's data transfer rates.
+OneLens deploys a lightweight Rust-based agent on each node in your cluster as a DaemonSet. The agent reads the Linux kernel's connection tracking table (`/proc/net/nf_conntrack`) to see which pods are communicating with which destinations and how much data is being transferred. Traffic is classified by destination type (same-zone, cross-zone, cross-region, internet) using cloud provider IP range data.
+
+OpenCost — already part of the OneLens stack — downloads your cloud provider's data transfer pricing automatically and multiplies the classified traffic bytes by the correct per-GB rates. No pricing configuration is needed.
 
 The agent is:
 
@@ -42,15 +44,15 @@ Network cost attribution requires elevated permissions compared to the standard 
 
 | Permission | Reason |
 |---|---|
-| **Privileged container** | Required to read the kernel's connection tracking table (`/proc/sys/net/netfilter/nf_conntrack`). This is a read-only data structure maintained by the Linux kernel for NAT and stateful firewall tracking. |
+| **Privileged container** | Required to read the kernel's connection tracking table (`/proc/net/nf_conntrack`). This is a read-only data structure maintained by the Linux kernel for NAT and stateful firewall tracking. |
 | **Host network access** | Required to observe network connections at the node level. Without this, the agent would only see traffic within its own pod network namespace. |
-| **Kernel parameter modification** | On EKS clusters, connection tracking byte accounting is disabled by default. The agent enables it on startup (`nf_conntrack_acct`). This is a non-destructive setting that enables byte counters on tracked connections. It takes effect immediately without a node restart and is automatically re-enabled if the node reboots. |
 
 ### What This Does NOT Do
 
 - Does **not** inspect packet contents or payload data — only connection metadata (source IP, destination IP, byte count)
 - Does **not** require any additional cluster-wide RBAC permissions beyond what OneLens already has
 - Does **not** modify network routing, firewall rules, or iptables
+- Does **not** modify kernel parameters
 - Does **not** require node restarts
 - Does **not** affect application network performance
 
@@ -58,7 +60,7 @@ Network cost attribution requires elevated permissions compared to the standard 
 
 | Environment | Compatible? | Notes |
 |---|---|---|
-| Amazon EKS | Yes | Init container enables conntrack byte accounting automatically |
+| Amazon EKS | Yes | Fully supported |
 | Google GKE | Yes | Standard and Autopilot (Autopilot may require workload policy exception) |
 | Azure AKS | Yes | Standard clusters |
 | Oracle OKE | Yes | Requires manual VCN CIDR configuration (see below) |
@@ -70,17 +72,33 @@ If your cluster enforces policies that block privileged pods, you can either:
 1. Add an exception for the `onelens-agent` namespace
 2. Leave network cost attribution disabled (all other OneLens features continue to work normally)
 
+OneLens performs an automated pre-flight check before attempting deployment. If your cluster's security policies block privileged pods, the feature is skipped gracefully and the specific admission error is logged for troubleshooting.
+
 ## Enabling Network Cost Attribution
 
 Network cost attribution is **disabled by default** and must be explicitly enabled.
 
-Contact your OneLens account team to enable network cost attribution for your cluster. The OneLens team will:
+### During Installation
+
+Set the `NETWORK_COSTS_ENABLED` environment variable when installing the deployer:
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token> \
+  --set job.env.NETWORK_COSTS_ENABLED=true
+```
+
+### On an Existing Cluster
+
+Contact your OneLens account team to enable network cost attribution. The OneLens team will:
 
 1. Verify your cluster supports privileged pods (an automated pre-flight check runs before deployment)
-2. Auto-detect your cloud provider and region for correct pricing
+2. Auto-detect your cloud provider for correct traffic classification
 3. Enable the feature via the next scheduled patching cycle
-
-No manual action is required from your side beyond approving the elevated permissions.
 
 ### For OCI / OKE Clusters
 
@@ -102,44 +120,6 @@ The network cost agent runs one pod per node with the following resource footpri
 | Memory | 64Mi | 128Mi |
 
 For a 20-node cluster, total additional resource consumption is approximately 1 CPU core and 1.3GB memory across all nodes.
-
-## Cloud Provider Pricing
-
-OneLens auto-detects your cloud region and applies the correct data transfer pricing. Below are reference rates for common regions.
-
-### AWS
-
-| Region | Internet egress | Cross-AZ | Cross-region |
-|---|---|---|---|
-| us-east-1 (Virginia) | $0.09/GB | $0.01/GB | $0.02/GB |
-| us-west-2 (Oregon) | $0.09/GB | $0.01/GB | $0.02/GB |
-| eu-west-1 (Ireland) | $0.09/GB | $0.01/GB | $0.02/GB |
-| ap-south-1 (Mumbai) | $0.1093/GB | $0.01/GB | $0.086/GB |
-| ap-southeast-1 (Singapore) | $0.12/GB | $0.01/GB | $0.09/GB |
-
-### GCP
-
-| Region | Internet egress | Cross-zone | Cross-region |
-|---|---|---|---|
-| us-central1 | $0.085/GB | $0.01/GB | $0.01/GB |
-| asia-south1 | $0.085/GB | $0.01/GB | $0.05/GB |
-
-### Azure
-
-| Region | Internet egress | Cross-AZ | Cross-region |
-|---|---|---|---|
-| East US | $0.087/GB | $0.01/GB | $0.02/GB |
-| Central India | $0.087/GB | $0.01/GB | $0.065/GB |
-
-### Oracle Cloud (OCI)
-
-| Region | Internet egress | Cross-AD | Cross-region |
-|---|---|---|---|
-| Any region | $0.0085/GB | Free | $0.0085/GB |
-
-OCI has significantly lower data transfer costs and does not charge for intra-region traffic.
-
-Note: Pricing is based on published cloud provider rates as of 2026. Actual rates may vary based on your contract, committed spend, or volume tier. OneLens applies the standard published rates by default; contact us to configure custom pricing if your agreement differs.
 
 ## Limitations
 
@@ -167,13 +147,16 @@ No. The agent reads existing kernel data structures passively. It does not sit i
 No. The agent only reads connection metadata: source IP, destination IP, protocol, and byte counts. It cannot read packet contents or application data.
 
 **What happens if a node reboots?**
-The agent's init container re-enables conntrack byte accounting on startup. There is a brief gap in network cost data while the node is down, which resolves automatically when the node comes back.
+The DaemonSet pod restarts automatically when the node comes back. There is a brief gap in network cost data while the node is down, which resolves automatically.
 
 **What if my cluster blocks privileged containers?**
-Network cost attribution will not be enabled. OneLens performs a pre-flight check before attempting deployment. If your cluster's security policies block privileged pods, the feature is skipped gracefully and all other OneLens features continue to work.
+Network cost attribution will not be enabled. OneLens performs a pre-flight check before attempting deployment. If your cluster's security policies block privileged pods, the feature is skipped gracefully and all other OneLens features continue to work. The specific admission error is logged for troubleshooting.
 
 **Does this work with Fargate / serverless nodes?**
 No. Fargate nodes do not support DaemonSets or host-level access. Network cost attribution requires traditional EC2/VM-based nodes.
 
 **Can I enable this for only some nodes?**
 Not currently. The agent runs on all nodes to provide complete network cost visibility. Partial deployment would result in incomplete data. If you need to exclude specific node pools, contact the OneLens team.
+
+**How does pricing work?**
+OpenCost — already part of the OneLens stack — downloads your cloud provider's published data transfer rates automatically. The network cost agent only classifies traffic by destination type; OpenCost handles all pricing calculations. No manual pricing configuration is needed.
