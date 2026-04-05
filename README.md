@@ -16,6 +16,7 @@
 - [Uninstall](#uninstall)
 - [Troubleshooting](docs/troubleshooting.md) — common issues, diagnostic commands, operations
 - [Air-Gapped Deployment](#air-gapped-deployment) — deploy on clusters with no public internet
+- [Network Cost Attribution](docs/network-cost-attribution.md) — attribute network transfer costs to pods and namespaces
 - [How It Works](#how-it-works)
 - [Documentation](#documentation)
 - [Support](#support)
@@ -103,6 +104,7 @@ All parameters below are passed via `--set` flags during `helm upgrade --install
 - [Volume Tags](#volume-tags) — apply custom tags to persistent volumes for cost tracking
 - [Node Scheduling](#node-scheduling) — run OneLens pods on dedicated or specific nodes
 - [Labels](#labels) — apply custom labels to all OneLens resources
+- [Network Cost Attribution](#network-cost-attribution) — attribute network costs to pods
 - [Other](#other) — image pull secrets, CronJob schedule, suspend updater
 
 ### Required Parameters
@@ -358,6 +360,26 @@ Apply custom labels to OneLens resources. Useful for organizational policies tha
   --set globals.labels."company\.com/env"=prod
 ```
 
+### Network Cost Attribution
+
+Attribute network data transfer costs to individual pods and namespaces. This deploys a lightweight DaemonSet that classifies pod traffic by destination (same-zone, cross-AZ, cross-region, internet). OpenCost uses these metrics to calculate network costs per workload.
+
+**Disabled by default.** Requires privileged pods — see the [full documentation](docs/network-cost-attribution.md) for requirements and compatibility.
+
+| Parameter | Description | Default |
+|---|---|---|
+| `job.env.NETWORK_COSTS_ENABLED` | Enable network cost attribution | `false` |
+
+```bash
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=my-cluster \
+  --set job.env.REGION=us-east-1 \
+  --set-string job.env.ACCOUNT=123456789012 \
+  --set job.env.REGISTRATION_TOKEN=your-token \
+  --set job.env.NETWORK_COSTS_ENABLED=true
+```
+
 ### Other
 
 | Parameter | Description | Default |
@@ -456,6 +478,7 @@ After that, a CronJob runs every 5 minutes to healthcheck the stack. If anything
 - [Quick Reference](docs/quick-reference.md) - Fast commands and troubleshooting
 - [Release Process](docs/release-process.md) - How to create new releases
 - [Configuration Guide](docs/configuration.md) - Detailed configuration options
+- [Network Cost Attribution](docs/network-cost-attribution.md) - Pod-level network cost visibility
 
 ## Scripts & Tools
 
