@@ -54,17 +54,17 @@ assert_gt "$install_persist" "0" "install.sh persists REGISTRY_URL in helm value
 assert_gt "$patching_persist" "0" "patching.sh re-persists REGISTRY_URL in helm values"
 
 # ---------------------------------------------------------------------------
-# Test 8: Exactly 14 image override flags per script
+# Test 8: Exactly 13 image override flags per script
 # 7 image overrides (some need both registry + repository) + 1 REGISTRY_URL persistence = 11 base
-# + 3 conditional network cost image overrides (registry, repository, initImage) = 14
+# + 2 conditional network cost image overrides (registry, repository) = 13
 # Components using {registry}/{repository}:{tag} (KSM, OpenCost, kube-rbac-proxy)
 # need both registry and repository overridden to flatten the ECR path.
 # Count all --set lines inside the air-gapped if-block (between REGISTRY_URL check and fi).
 # ---------------------------------------------------------------------------
 install_override_count=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/install.sh" | grep -c '\-\-set ' || true)
 patching_override_count=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/src/patching.sh" | grep -c '\-\-set ' || true)
-assert_eq "$install_override_count" "14" "install.sh has exactly 14 air-gapped --set flags"
-assert_eq "$patching_override_count" "14" "patching.sh has exactly 14 air-gapped --set flags"
+assert_eq "$install_override_count" "13" "install.sh has exactly 13 air-gapped --set flags"
+assert_eq "$patching_override_count" "13" "patching.sh has exactly 13 air-gapped --set flags"
 
 # ---------------------------------------------------------------------------
 # Test 9: No hardcoded REGISTRY_URL in helm command (parameterized only)
