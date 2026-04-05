@@ -423,6 +423,11 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
         nodeSelector: (.["onelens-agent"].cronJob.nodeSelector // {}),
         podLabels: (.["onelens-agent"].cronJob.podLabels // {})
       }
+    },
+    networkCosts: {
+      enabled: (.networkCosts.enabled // false),
+      cloudProvider: (.networkCosts.cloudProvider // {}),
+      destinations: (.networkCosts.destinations // {})
     }
   }' > "$CUSTOMER_VALUES_FILE" 2>/dev/null || true
 
@@ -1468,6 +1473,10 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
+# Read network cost enabled state early — used by both air-gapped and network cost blocks.
+NC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.networkCosts.enabled // "false"' 2>/dev/null || echo "false")
+NC_ENABLED="${NC_ENABLED:-false}"
+
 # Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
 # Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
 # Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
@@ -1486,7 +1495,51 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+    # Network cost images (only when network costs are enabled)
+    if [ "$NC_ENABLED" = "true" ]; then
+        HELM_CMD="$HELM_CMD \
+          --set networkCosts.image.registry=$REGISTRY_URL \
+          --set networkCosts.image.repository=kubecost-network-costs \
+          --set networkCosts.initImage.repository=$REGISTRY_URL/busybox"
+    fi
 fi
+
+# --- Network cost attribution (opt-in) ---
+# The opencost-network-costs DaemonSet classifies pod network traffic by destination
+# (same-zone, cross-AZ, cross-region, internet). OpenCost uses these metrics to
+# calculate network costs using its own cloud pricing data — no pricing config here.
+if [ "$NC_ENABLED" = "true" ]; then
+    echo "Network cost attribution: enabled"
+    # Pre-flight: dry-run a privileged pod to test admission policies (PSA, Kyverno, OPA).
+    # --dry-run=server validates against admission controllers without creating the pod.
+    NC_PREFLIGHT_ERR=$(kubectl run nc-preflight --image=busybox:1.36 --restart=Never \
+        --overrides='{"spec":{"hostNetwork":true,"containers":[{"name":"test","image":"busybox:1.36","command":["true"],"securityContext":{"privileged":true}}]}}' \
+        --dry-run=server -n onelens-agent 2>&1) && NC_PREFLIGHT_OK=true || NC_PREFLIGHT_OK=false
+    if [ "$NC_PREFLIGHT_OK" = "true" ]; then
+        echo "  Pre-flight passed: cluster allows privileged pods"
+
+        # Auto-detect cloud provider for IP range classification
+        NC_CLOUD=""
+        case "$SC_PROVISIONER" in
+            *aws*|*ebs*)                          NC_CLOUD="aws" ;;
+            *gce*|*gke*|*pd.csi.storage.gke*)     NC_CLOUD="gcp" ;;
+            *azure*|*disk.csi.azure*)              NC_CLOUD="azure" ;;
+        esac
+        if [ -n "$NC_CLOUD" ]; then
+            HELM_CMD="$HELM_CMD --set networkCosts.cloudProvider.${NC_CLOUD}=true"
+            echo "  Cloud provider: $NC_CLOUD"
+        else
+            echo "  Cloud provider: unknown (provisioner=$SC_PROVISIONER) — no IP range classification"
+        fi
+    else
+        echo "  Pre-flight FAILED: cluster blocks privileged pods — disabling network costs"
+        echo "  Reason: $NC_PREFLIGHT_ERR"
+        NC_ENABLED="false"
+    fi
+else
+    echo "Network cost attribution: disabled"
+fi
+HELM_CMD="$HELM_CMD --set networkCosts.enabled=$NC_ENABLED"
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
 # Pods on dead/unreachable nodes stay Terminating forever because kubelet can't

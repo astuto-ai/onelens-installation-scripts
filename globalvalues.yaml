@@ -308,6 +308,24 @@ prometheus:
           target_label: namespace
         - source_labels: [__meta_kubernetes_pod_name]
           target_label: pod
+    - job_name: opencost-network-costs
+      honor_labels: true
+      scrape_interval: 1m
+      scrape_timeout: 10s
+      metrics_path: /metrics
+      scheme: http
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+              - onelens-agent
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          regex: opencost-network-costs
+          action: keep
+        - source_labels: [__meta_kubernetes_pod_ip]
+          target_label: __address__
+          replacement: ${1}:3001
   serverFiles:
     alerting_rules.yml: {}
     alerts: {}
@@ -877,3 +895,25 @@ prometheus-opencost-exporter:
         serviceName: onelens-agent-prometheus-server
         namespaceName: onelens-agent
         port: 80
+networkCosts:
+  enabled: false
+  image:
+    registry: gcr.io
+    repository: kubecost1/kubecost-network-costs
+    tag: "v0.18.3"
+    pullPolicy: IfNotPresent
+  initImage:
+    repository: busybox
+    tag: "1.36"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  cloudProvider:
+    aws: false
+    gcp: false
+    azure: false
+  destinations: {}

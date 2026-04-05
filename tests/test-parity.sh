@@ -263,5 +263,37 @@ patching_repo_add=$(grep -c 'helm repo add onelens' "$ROOT/src/patching.sh" || t
 assert_gt "$install_repo_add" "0" "install.sh still has helm repo add for standard path"
 assert_gt "$patching_repo_add" "0" "patching.sh still has helm repo add for standard path"
 
+# ---------------------------------------------------------------------------
+# Test 30: Network cost attribution --set keys match between scripts
+# Both scripts must set networkCosts.enabled and networkCosts.cloudProvider.*
+# ---------------------------------------------------------------------------
+install_nc_enabled=$(grep -c 'networkCosts.enabled=' "$ROOT/install.sh" || true)
+patching_nc_enabled=$(grep -c 'networkCosts.enabled=' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_enabled" "0" "install.sh sets networkCosts.enabled"
+assert_gt "$patching_nc_enabled" "0" "patching.sh sets networkCosts.enabled"
+
+install_nc_cloud=$(grep -c 'networkCosts.cloudProvider' "$ROOT/install.sh" || true)
+patching_nc_cloud=$(grep -c 'networkCosts.cloudProvider' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_cloud" "0" "install.sh sets networkCosts.cloudProvider"
+assert_gt "$patching_nc_cloud" "0" "patching.sh sets networkCosts.cloudProvider"
+
+# Both scripts have the pre-flight dry-run check
+install_nc_preflight=$(grep -c 'nc-preflight' "$ROOT/install.sh" || true)
+patching_nc_preflight=$(grep -c 'nc-preflight' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_preflight" "0" "install.sh has network cost pre-flight check"
+assert_gt "$patching_nc_preflight" "0" "patching.sh has network cost pre-flight check"
+
+# globalvalues.yaml has networkCosts section
+gv_nc=$(grep -c '^networkCosts:' "$ROOT/globalvalues.yaml" || true)
+assert_eq "$gv_nc" "1" "globalvalues.yaml has networkCosts section"
+
+# networkCosts.enabled defaults to false
+gv_nc_disabled=$(grep -A1 '^networkCosts:' "$ROOT/globalvalues.yaml" | grep -c 'enabled: false' || true)
+assert_eq "$gv_nc_disabled" "1" "globalvalues.yaml networkCosts.enabled defaults to false"
+
+# Prometheus scrape config for network-costs exists
+gv_nc_scrape=$(grep -c 'opencost-network-costs' "$ROOT/globalvalues.yaml" || true)
+assert_gt "$gv_nc_scrape" "0" "globalvalues.yaml has opencost-network-costs scrape config"
+
 test_summary
 exit $?

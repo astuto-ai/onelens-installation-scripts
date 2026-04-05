@@ -490,6 +490,9 @@ export AZURE_DISK_ENCRYPTION_ENABLED="${AZURE_DISK_ENCRYPTION_ENABLED:=false}"
 export AZURE_DISK_ENCRYPTION_SET_ID="${AZURE_DISK_ENCRYPTION_SET_ID:=}"
 export AZURE_DISK_CACHING_MODE="${AZURE_DISK_CACHING_MODE:=ReadOnly}"
 
+## Network cost attribution (opt-in, requires privileged pods)
+export NETWORK_COSTS_ENABLED="${NETWORK_COSTS_ENABLED:=false}"
+
 FILE="globalvalues.yaml"
 
 echo "using $FILE"
@@ -590,6 +593,12 @@ if [ -n "$REGISTRY_URL" ]; then
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL"
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy"
     CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+    # Network cost images (only when network costs are enabled)
+    if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
+        CMD+=" --set networkCosts.image.registry=$REGISTRY_URL"
+        CMD+=" --set networkCosts.image.repository=kubecost-network-costs"
+        CMD+=" --set networkCosts.initImage.repository=$REGISTRY_URL/busybox"
+    fi
 fi
 
 # Add cloud-specific storage class parameters
@@ -731,6 +740,47 @@ if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
     fi
   fi
 fi
+
+# --- Network cost attribution (opt-in) ---
+# The opencost-network-costs DaemonSet classifies pod network traffic by destination
+# (same-zone, cross-AZ, cross-region, internet). OpenCost uses these metrics to
+# calculate network costs using its own cloud pricing data — no pricing config here.
+if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
+    echo "Network cost attribution: enabled"
+    # Pre-flight: dry-run a privileged pod to test admission policies (PSA, Kyverno, OPA).
+    # --dry-run=server validates against admission controllers without creating the pod.
+    # On first install the namespace may not exist yet (helm --create-namespace creates it).
+    # If the namespace doesn't exist, skip the pre-flight — helm will fail visibly if
+    # privileged pods are blocked, and patching.sh will run the pre-flight on subsequent cycles.
+    if [ "$NAMESPACE_EXISTS" = "true" ]; then
+        NC_PREFLIGHT_ERR=$(kubectl run nc-preflight --image=busybox:1.36 --restart=Never \
+            --overrides='{"spec":{"hostNetwork":true,"containers":[{"name":"test","image":"busybox:1.36","command":["true"],"securityContext":{"privileged":true}}]}}' \
+            --dry-run=server -n onelens-agent 2>&1) && NC_PREFLIGHT_OK=true || NC_PREFLIGHT_OK=false
+        if [ "$NC_PREFLIGHT_OK" = "true" ]; then
+            echo "  Pre-flight passed: cluster allows privileged pods"
+        else
+            echo "  Pre-flight FAILED: cluster blocks privileged pods — disabling network costs"
+            echo "  Reason: $NC_PREFLIGHT_ERR"
+            NETWORK_COSTS_ENABLED="false"
+        fi
+    else
+        echo "  Pre-flight skipped: namespace not yet created (first install)"
+    fi
+
+    # Auto-detect cloud provider for IP range classification
+    if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
+        NC_CLOUD=$(echo "$CLOUD_PROVIDER" | tr 'A-Z' 'a-z')
+        if [ -n "$NC_CLOUD" ] && [ "$NC_CLOUD" != "unknown" ]; then
+            CMD+=" --set networkCosts.cloudProvider.${NC_CLOUD}=true"
+            echo "  Cloud provider: $NC_CLOUD"
+        else
+            echo "  Cloud provider: unknown ($CLOUD_PROVIDER) — no IP range classification"
+        fi
+    fi
+else
+    echo "Network cost attribution: disabled"
+fi
+CMD+=" --set networkCosts.enabled=$NETWORK_COSTS_ENABLED"
 
 # Apply same labels to namespace if DEPLOYMENT_LABELS is set (e.g. from globals.labels).
 # If the namespace was created by Helm (--create-namespace), it gets these labels; if it already existed, labels are updated.
