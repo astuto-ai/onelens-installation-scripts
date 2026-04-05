@@ -422,12 +422,14 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
         tolerations: (.["onelens-agent"].cronJob.tolerations // []),
         nodeSelector: (.["onelens-agent"].cronJob.nodeSelector // {}),
         podLabels: (.["onelens-agent"].cronJob.podLabels // {})
+      },
+      networkCosts: {
+        enabled: (if .networkCosts.enabled != null then .networkCosts.enabled
+                  elif .["onelens-agent"].networkCosts.enabled != null then .["onelens-agent"].networkCosts.enabled
+                  else false end),
+        cloudProvider: ((.networkCosts.cloudProvider // .["onelens-agent"].networkCosts.cloudProvider) // {}),
+        destinations: ((.networkCosts.destinations // .["onelens-agent"].networkCosts.destinations) // {})
       }
-    },
-    networkCosts: {
-      enabled: (.networkCosts.enabled // false),
-      cloudProvider: (.networkCosts.cloudProvider // {}),
-      destinations: (.networkCosts.destinations // {})
     }
   }' > "$CUSTOMER_VALUES_FILE" 2>/dev/null || true
 
@@ -1474,7 +1476,14 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
 # Read network cost enabled state early — used by both air-gapped and network cost blocks.
-NC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.networkCosts.enabled // "false"' 2>/dev/null || echo "false")
+# Migration: v2.1.63 wrote networkCosts.* at top level; v2.1.64+ uses onelens-agent.networkCosts.*.
+# Prefer top-level if it exists (explicit user action), then scoped (chart default or future --set).
+# After one patching cycle, --set writes the correct scoped value, and top-level becomes stale.
+# Use if/then/else because jq's // operator treats boolean false as falsy.
+NC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '
+  if .networkCosts.enabled != null then .networkCosts.enabled
+  elif .["onelens-agent"].networkCosts.enabled != null then .["onelens-agent"].networkCosts.enabled
+  else "false" end' 2>/dev/null || echo "false")
 NC_ENABLED="${NC_ENABLED:-false}"
 
 # Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
@@ -1498,9 +1507,9 @@ if [ -n "$REGISTRY_URL" ]; then
     # Network cost images (only when network costs are enabled)
     if [ "$NC_ENABLED" = "true" ]; then
         HELM_CMD="$HELM_CMD \
-          --set networkCosts.image.registry=$REGISTRY_URL \
-          --set networkCosts.image.repository=kubecost-network-costs \
-          --set networkCosts.initImage.repository=$REGISTRY_URL/busybox"
+          --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
+          --set onelens-agent.networkCosts.image.repository=kubecost-network-costs \
+          --set onelens-agent.networkCosts.initImage.repository=$REGISTRY_URL/busybox"
     fi
 fi
 
@@ -1526,7 +1535,7 @@ if [ "$NC_ENABLED" = "true" ]; then
             *azure*|*disk.csi.azure*)              NC_CLOUD="azure" ;;
         esac
         if [ -n "$NC_CLOUD" ]; then
-            HELM_CMD="$HELM_CMD --set networkCosts.cloudProvider.${NC_CLOUD}=true"
+            HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.cloudProvider.${NC_CLOUD}=true"
             echo "  Cloud provider: $NC_CLOUD"
         else
             echo "  Cloud provider: unknown (provisioner=$SC_PROVISIONER) — no IP range classification"
@@ -1539,7 +1548,7 @@ if [ "$NC_ENABLED" = "true" ]; then
 else
     echo "Network cost attribution: disabled"
 fi
-HELM_CMD="$HELM_CMD --set networkCosts.enabled=$NC_ENABLED"
+HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.enabled=$NC_ENABLED"
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
 # Pods on dead/unreachable nodes stay Terminating forever because kubelet can't

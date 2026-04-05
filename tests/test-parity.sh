@@ -283,12 +283,12 @@ patching_nc_preflight=$(grep -c 'nc-preflight' "$ROOT/src/patching.sh" || true)
 assert_gt "$install_nc_preflight" "0" "install.sh has network cost pre-flight check"
 assert_gt "$patching_nc_preflight" "0" "patching.sh has network cost pre-flight check"
 
-# globalvalues.yaml has networkCosts section
-gv_nc=$(grep -c '^networkCosts:' "$ROOT/globalvalues.yaml" || true)
-assert_eq "$gv_nc" "1" "globalvalues.yaml has networkCosts section"
+# globalvalues.yaml has networkCosts section (indented under onelens-agent)
+gv_nc=$(grep -c '  networkCosts:' "$ROOT/globalvalues.yaml" || true)
+assert_gt "$gv_nc" "0" "globalvalues.yaml has networkCosts section"
 
 # networkCosts.enabled defaults to false
-gv_nc_disabled=$(grep -A1 '^networkCosts:' "$ROOT/globalvalues.yaml" | grep -c 'enabled: false' || true)
+gv_nc_disabled=$(grep -A1 '  networkCosts:' "$ROOT/globalvalues.yaml" | grep -c 'enabled: false' || true)
 assert_eq "$gv_nc_disabled" "1" "globalvalues.yaml networkCosts.enabled defaults to false"
 
 # Prometheus scrape config for network-costs exists

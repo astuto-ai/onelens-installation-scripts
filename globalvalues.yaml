@@ -63,6 +63,31 @@ onelens-agent:
     API_BASE_URL: "https://dev-api.onelens.cloud" # DON'T ADD TRAILING SLASH
     CLUSTER_TOKEN: "your-raw-token" # Don't encode
     REGISTRATION_ID: "your-raw-id" # Don't encode
+  # Network cost attribution (opt-in)
+  # Deploys a DaemonSet that classifies pod network traffic by destination.
+  # Requires privileged pods — see docs/network-cost-attribution.md
+  networkCosts:
+    enabled: false
+    image:
+      registry: gcr.io
+      repository: kubecost1/kubecost-network-costs
+      tag: "v0.18.3"
+      pullPolicy: IfNotPresent
+    initImage:
+      repository: busybox
+      tag: "1.36"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+    cloudProvider:
+      aws: false
+      gcp: false
+      azure: false
+    destinations: {}
 prometheus:
   enabled: true
   rbac:
@@ -895,25 +920,3 @@ prometheus-opencost-exporter:
         serviceName: onelens-agent-prometheus-server
         namespaceName: onelens-agent
         port: 80
-networkCosts:
-  enabled: false
-  image:
-    registry: gcr.io
-    repository: kubecost1/kubecost-network-costs
-    tag: "v0.18.3"
-    pullPolicy: IfNotPresent
-  initImage:
-    repository: busybox
-    tag: "1.36"
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
-  cloudProvider:
-    aws: false
-    gcp: false
-    azure: false
-  destinations: {}

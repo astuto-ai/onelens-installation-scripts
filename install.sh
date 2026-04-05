@@ -595,9 +595,9 @@ if [ -n "$REGISTRY_URL" ]; then
     CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
     # Network cost images (only when network costs are enabled)
     if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
-        CMD+=" --set networkCosts.image.registry=$REGISTRY_URL"
-        CMD+=" --set networkCosts.image.repository=kubecost-network-costs"
-        CMD+=" --set networkCosts.initImage.repository=$REGISTRY_URL/busybox"
+        CMD+=" --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL"
+        CMD+=" --set onelens-agent.networkCosts.image.repository=kubecost-network-costs"
+        CMD+=" --set onelens-agent.networkCosts.initImage.repository=$REGISTRY_URL/busybox"
     fi
 fi
 
@@ -771,7 +771,7 @@ if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
     if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
         NC_CLOUD=$(echo "$CLOUD_PROVIDER" | tr 'A-Z' 'a-z')
         if [ -n "$NC_CLOUD" ] && [ "$NC_CLOUD" != "unknown" ]; then
-            CMD+=" --set networkCosts.cloudProvider.${NC_CLOUD}=true"
+            CMD+=" --set onelens-agent.networkCosts.cloudProvider.${NC_CLOUD}=true"
             echo "  Cloud provider: $NC_CLOUD"
         else
             echo "  Cloud provider: unknown ($CLOUD_PROVIDER) — no IP range classification"
@@ -780,7 +780,7 @@ if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
 else
     echo "Network cost attribution: disabled"
 fi
-CMD+=" --set networkCosts.enabled=$NETWORK_COSTS_ENABLED"
+CMD+=" --set onelens-agent.networkCosts.enabled=$NETWORK_COSTS_ENABLED"
 
 # Apply same labels to namespace if DEPLOYMENT_LABELS is set (e.g. from globals.labels).
 # If the namespace was created by Helm (--create-namespace), it gets these labels; if it already existed, labels are updated.
