@@ -229,6 +229,12 @@ if [ "$_nc_enabled" = "true" ]; then
 ${_source} kubecost-network-costs:${_tag}"
         echo "  network-costs: ${_source}"
     fi
+    # busybox for init container (enables conntrack accounting)
+    _nc_init_tag=$(grep -A3 'initImage:' "$_V" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
+    _nc_init_tag="${_nc_init_tag:-1.36}"
+    IMAGES="${IMAGES}
+busybox:${_nc_init_tag} busybox:${_nc_init_tag}"
+    echo "  busybox: busybox:${_nc_init_tag} (network-costs init)"
 fi
 
 # --- Mirror images ---

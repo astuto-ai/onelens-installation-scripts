@@ -73,6 +73,9 @@ onelens-agent:
       repository: kubecost1/kubecost-network-costs
       tag: "v0.18.3"
       pullPolicy: IfNotPresent
+    initImage:
+      repository: busybox
+      tag: "1.36"
     resources:
       requests:
         cpu: 50m

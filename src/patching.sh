@@ -1508,7 +1508,8 @@ if [ -n "$REGISTRY_URL" ]; then
     if [ "$NC_ENABLED" = "true" ]; then
         HELM_CMD="$HELM_CMD \
           --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
-          --set onelens-agent.networkCosts.image.repository=kubecost-network-costs"
+          --set onelens-agent.networkCosts.image.repository=kubecost-network-costs \
+          --set onelens-agent.networkCosts.initImage.repository=$REGISTRY_URL/busybox"
     fi
 fi
 

@@ -597,6 +597,7 @@ if [ -n "$REGISTRY_URL" ]; then
     if [ "$NETWORK_COSTS_ENABLED" = "true" ]; then
         CMD+=" --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL"
         CMD+=" --set onelens-agent.networkCosts.image.repository=kubecost-network-costs"
+        CMD+=" --set onelens-agent.networkCosts.initImage.repository=$REGISTRY_URL/busybox"
     fi
 fi
 
