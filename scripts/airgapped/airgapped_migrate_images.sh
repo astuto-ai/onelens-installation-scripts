@@ -218,25 +218,6 @@ else
     echo "  WARNING: Skipping pushgateway — could not determine tag."
 fi
 
-# network-costs DaemonSet (conditional — only if networkCosts.enabled in globalvalues)
-_nc_enabled=$(grep -A1 'networkCosts:' "$_V" | grep 'enabled:' | awk '{print $2}')
-if [ "$_nc_enabled" = "true" ]; then
-    _repo="kubecost1/kubecost-network-costs"
-    _tag=$(_get_tag "$_V" "$_repo")
-    if [ -n "$_tag" ]; then
-        _source="gcr.io/${_repo}:${_tag}"
-        IMAGES="${IMAGES}
-${_source} kubecost-network-costs:${_tag}"
-        echo "  network-costs: ${_source}"
-    fi
-    # busybox for init container (enables conntrack accounting)
-    _nc_init_tag=$(grep -A3 'initImage:' "$_V" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"')
-    _nc_init_tag="${_nc_init_tag:-1.36}"
-    IMAGES="${IMAGES}
-busybox:${_nc_init_tag} busybox:${_nc_init_tag}"
-    echo "  busybox: busybox:${_nc_init_tag} (network-costs init)"
-fi
-
 # --- Mirror images ---
 echo ""
 echo "=== Mirroring images ==="
