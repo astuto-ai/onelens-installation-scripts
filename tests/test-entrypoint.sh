@@ -158,6 +158,35 @@ pv_export=$(grep -c 'export PATCHING_VERSION' "$ENTRYPOINT" || true)
 assert_eq "$pv_export" "2" "PATCHING_VERSION exported in both healthcheck and oneshot paths"
 
 ###############################################################################
+# Test 21: CronJob path checks for empty credentials before API call
+###############################################################################
+# The credential check must appear BEFORE the first curl call in the cronjob branch
+cronjob_block=$(sed -n '/deployment_type.*=.*cronjob/,/deployment_type/p' "$ENTRYPOINT" | head -30)
+cred_check=$(echo "$cronjob_block" | grep -c 'REGISTRATION_ID:-' || true)
+assert_gt "$cred_check" "0" "cronjob path checks for empty REGISTRATION_ID"
+
+cred_check_token=$(echo "$cronjob_block" | grep -c 'CLUSTER_TOKEN:-' || true)
+assert_gt "$cred_check_token" "0" "cronjob path checks for empty CLUSTER_TOKEN"
+
+###############################################################################
+# Test 22: Credential check exits 0 (not error) when secret missing
+###############################################################################
+cred_exit=$(sed -n '/Credentials not available/,+2p' "$ENTRYPOINT" | grep -c 'exit 0' || true)
+assert_gt "$cred_exit" "0" "missing credentials exits 0 (graceful, not error)"
+
+###############################################################################
+# Test 23: Credential check comes before API POST call in cronjob block
+###############################################################################
+# Line number of credential check must be less than line number of the POST curl (cronjob API call)
+cred_line=$(grep -n 'REGISTRATION_ID:-' "$ENTRYPOINT" | head -1 | cut -d: -f1)
+api_curl_line=$(grep -n 'request POST.*cluster-version' "$ENTRYPOINT" | head -1 | cut -d: -f1)
+if [ -n "$cred_line" ] && [ -n "$api_curl_line" ]; then
+    assert_gt "$api_curl_line" "$cred_line" "credential check runs before API POST call"
+else
+    assert_eq "1" "0" "could not find credential check or API POST line numbers"
+fi
+
+###############################################################################
 # Summary
 ###############################################################################
 test_summary

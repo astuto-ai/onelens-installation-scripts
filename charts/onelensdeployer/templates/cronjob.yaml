@@ -64,11 +64,13 @@ spec:
                     secretKeyRef:
                       name: onelens-agent-secrets
                       key: REGISTRATION_ID
+                      optional: true
                 - name: CLUSTER_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: onelens-agent-secrets
                       key: CLUSTER_TOKEN
+                      optional: true
                 
           restartPolicy: {{ .Values.cronjob.restartPolicy }}
 {{- end }}
