@@ -263,5 +263,46 @@ patching_repo_add=$(grep -c 'helm repo add onelens' "$ROOT/src/patching.sh" || t
 assert_gt "$install_repo_add" "0" "install.sh still has helm repo add for standard path"
 assert_gt "$patching_repo_add" "0" "patching.sh still has helm repo add for standard path"
 
+# ---------------------------------------------------------------------------
+# Test 30: Both scripts use --chunk-size for GPU node detection
+# ---------------------------------------------------------------------------
+install_gpu_chunk=$(grep 'gpu_capacities=' "$ROOT/install.sh" | grep -c 'chunk-size' || true)
+patching_gpu_chunk=$(grep 'gpu_capacities=' "$ROOT/src/patching.sh" | grep -c 'chunk-size' || true)
+assert_gt "$install_gpu_chunk" "0" "install.sh GPU detection uses --chunk-size"
+assert_gt "$patching_gpu_chunk" "0" "patching.sh GPU detection uses --chunk-size"
+
+# ---------------------------------------------------------------------------
+# Test 31: Both scripts use custom-columns for GPU detection (not jsonpath)
+# ---------------------------------------------------------------------------
+install_gpu_cols=$(grep 'gpu_capacities=' "$ROOT/install.sh" | grep -c 'custom-columns' || true)
+patching_gpu_cols=$(grep 'gpu_capacities=' "$ROOT/src/patching.sh" | grep -c 'custom-columns' || true)
+assert_gt "$install_gpu_cols" "0" "install.sh GPU detection uses custom-columns"
+assert_gt "$patching_gpu_cols" "0" "patching.sh GPU detection uses custom-columns"
+
+# ---------------------------------------------------------------------------
+# Test 32: Both scripts filter <none> in GPU awk parsing
+# ---------------------------------------------------------------------------
+install_gpu_none=$(grep -c '"<none>"' "$ROOT/install.sh" || true)
+patching_gpu_none=$(grep -c '"<none>"' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_gpu_none" "0" "install.sh GPU awk filters <none>"
+assert_gt "$patching_gpu_none" "0" "patching.sh GPU awk filters <none>"
+
+# ---------------------------------------------------------------------------
+# Test 33: Neither script uses kubectl get nodes -o jsonpath (loads all nodes)
+# ---------------------------------------------------------------------------
+# All node queries must use --chunk-size or single-node patterns to bound memory.
+install_nodes_jsonpath=$(grep 'kubectl get nodes' "$ROOT/install.sh" | grep -v '#' | grep -c '\-o jsonpath' || true)
+patching_nodes_jsonpath=$(grep 'kubectl get nodes' "$ROOT/src/patching.sh" | grep -v '#' | grep -c '\-o jsonpath' || true)
+assert_eq "$install_nodes_jsonpath" "0" "install.sh has no kubectl get nodes -o jsonpath (OOM risk)"
+assert_eq "$patching_nodes_jsonpath" "0" "patching.sh has no kubectl get nodes -o jsonpath (OOM risk)"
+
+# ---------------------------------------------------------------------------
+# Test 34: Neither script uses kubectl get nodes -o json (loads all nodes)
+# ---------------------------------------------------------------------------
+install_nodes_json=$(grep 'kubectl get nodes' "$ROOT/install.sh" | grep -v '#' | grep -c '\-o json ' || true)
+patching_nodes_json=$(grep 'kubectl get nodes' "$ROOT/src/patching.sh" | grep -v '#' | grep -c '\-o json ' || true)
+assert_eq "$install_nodes_json" "0" "install.sh has no kubectl get nodes -o json (OOM risk)"
+assert_eq "$patching_nodes_json" "0" "patching.sh has no kubectl get nodes -o json (OOM risk)"
+
 test_summary
 exit $?

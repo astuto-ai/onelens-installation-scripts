@@ -174,8 +174,10 @@ detect_cloud_provider() {
         echo "AZURE"
     else
         # Fallback detection: Check node provider ID (backup method)
-        local node_provider
-        node_provider=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || echo "")
+        # Fetch only one node to avoid loading all node objects into memory on large clusters
+        local _first_node node_provider
+        _first_node=$(kubectl get nodes --no-headers --chunk-size=1 2>/dev/null | head -1 | awk '{print $1}')
+        node_provider=$( [ -n "$_first_node" ] && kubectl get node "$_first_node" -o jsonpath='{.spec.providerID}' 2>/dev/null || echo "")
         if [[ "$node_provider" =~ ^aws:// ]]; then
             echo "AWS"
         elif [[ "$node_provider" =~ ^azure:// ]]; then
@@ -319,7 +321,7 @@ echo "Calculating cluster pod count..."
 echo "Checking cluster-wide read access..."
 _rbac_ready=false
 for _rw in 1 2 3 4 5 6; do
-    if kubectl get nodes --no-headers >/dev/null 2>&1; then
+    if kubectl auth can-i list nodes 2>/dev/null | grep -q "yes"; then
         _rbac_ready=true
         break
     fi
@@ -363,10 +365,10 @@ echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 # --- GPU node detection ---
 GPU_NODE_COUNT=0
 TOTAL_GPU_COUNT=0
-gpu_capacities=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.capacity.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null || true)
+gpu_capacities=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
 if [ -n "$gpu_capacities" ]; then
-    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1+0 > 0 {c++} END {print c+0}')
-    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '{s+=$1} END {print s+0}')
+    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
+    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" {s+=$1} END {print s+0}')
 fi
 if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"

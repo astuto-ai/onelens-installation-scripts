@@ -290,7 +290,7 @@ NUM_PODS=$(kubectl get pods --all-namespaces --no-headers --chunk-size=500 \
     2>/dev/null | wc -l | tr -d '[:space:]')
 TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
 
-NUM_NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+NUM_NODES=$(kubectl get nodes --no-headers --chunk-size=100 2>/dev/null | wc -l | tr -d '[:space:]')
 
 if [ "$TOTAL_PODS" -le 0 ]; then
     echo "WARNING: No active pods found. Using minimum tier."
@@ -311,10 +311,10 @@ echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 # --- GPU node detection ---
 GPU_NODE_COUNT=0
 TOTAL_GPU_COUNT=0
-gpu_capacities=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.capacity.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null || true)
+gpu_capacities=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
 if [ -n "$gpu_capacities" ]; then
-    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1+0 > 0 {c++} END {print c+0}')
-    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '{s+=$1} END {print s+0}')
+    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
+    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" {s+=$1} END {print s+0}')
 fi
 if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
@@ -1826,14 +1826,11 @@ _remediate_scheduling_failure() {
     echo "  Pod memory requirement: $pod_memory"
     echo "  Checking node capacity..."
 
-    # Get allocatable memory across all nodes (single fast jq call, not per-node kubectl top)
-    # kubectl top is 30-60s per node (too slow); instead check if ANY node has allocatable memory
+    # Check if any node exists for rescheduling (all schedulable nodes have capacity).
     local nodes_with_capacity
-    nodes_with_capacity=$(kubectl get nodes -o json 2>/dev/null | jq -r '
-        .items[] |
-        select(.status.allocatable.memory != null) |
-        .metadata.name
-    ' 2>/dev/null | head -1)
+    # Fetch one node name — all schedulable nodes have allocatable.memory.
+    # Uses --chunk-size=1 to avoid loading all node objects on large clusters.
+    nodes_with_capacity=$(kubectl get nodes --no-headers --chunk-size=1 2>/dev/null | head -1 | awk '{print $1}')
 
     if [ -n "$nodes_with_capacity" ]; then
         echo "  ✅ Found node with capacity: $nodes_with_capacity"

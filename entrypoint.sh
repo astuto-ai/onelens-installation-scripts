@@ -46,6 +46,13 @@ if [ "$deployment_type" = "job" ]; then
 elif [ "$deployment_type" = "cronjob" ]; then
   SCRIPT_NAME="patching.sh"
 
+  # If secret doesn't exist (install not completed), exit gracefully
+  if [ -z "${REGISTRATION_ID:-}" ] || [ -z "${CLUSTER_TOKEN:-}" ]; then
+      echo "Credentials not available — install has not completed yet."
+      echo "The deployer job must finish successfully before the updater can run."
+      exit 0
+  fi
+
   # Check cluster version and patching status from API
   API_RESPONSE=$(curl -s --location --request POST "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
     --header 'Content-Type: application/json' \
