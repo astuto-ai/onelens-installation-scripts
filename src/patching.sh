@@ -282,12 +282,21 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/resource-sizing.sh"
 echo "Calculating cluster pod count..."
 _report_milestone  # M4: pod-counting-start
 
-# Count active pods (Running, Pending, ContainerCreating) using server-side field-selector.
-# Single kubectl call with --chunk-size=500 keeps memory bounded (~500 pods of JSON at a time)
-# regardless of cluster size. Excludes completed/failed job pods.
-NUM_PODS=$(kubectl get pods --all-namespaces --no-headers --chunk-size=500 \
-    --field-selector='status.phase!=Succeeded,status.phase!=Failed' \
-    2>/dev/null | wc -l | tr -d '[:space:]')
+# Count active pods using raw API pagination — truly memory-bounded.
+# kubectl get --all-namespaces buffers ALL objects in Go heap regardless of --chunk-size.
+# Raw API with limit=100 keeps memory at ~43MB flat (kubectl acts as HTTP passthrough,
+# no Go object deserialization). Each page is counted via jq and discarded.
+NUM_PODS=0
+_continue=""
+while true; do
+    _url="/api/v1/pods?limit=100&fieldSelector=status.phase%21%3DSucceeded%2Cstatus.phase%21%3DFailed"
+    [ -n "$_continue" ] && _url="${_url}&continue=${_continue}"
+    _resp=$(kubectl get --raw "$_url" 2>/dev/null) || break
+    _page_count=$(echo "$_resp" | jq '.items | length')
+    NUM_PODS=$(( NUM_PODS + _page_count ))
+    _continue=$(echo "$_resp" | jq -r '.metadata.continue // empty')
+    [ -z "$_continue" ] && break
+done
 TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
 
 NUM_NODES=$(kubectl get nodes --no-headers --chunk-size=100 2>/dev/null | wc -l | tr -d '[:space:]')

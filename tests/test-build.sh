@@ -137,12 +137,12 @@ terminated_case=$(grep -c 'Terminated)' "$SRC_FILE" || true)
 assert_ge "$terminated_case" "1" "src/patching.sh has explicit Terminated case in pod remediation"
 
 ###############################################################################
-# Test 14: Pod counting uses field-selector (not per-namespace loop)
-# Per-namespace counting spawns 77+ kubectl processes on a 25-namespace cluster,
-# causing OOM on the 256Mi CronJob container. Field-selector is server-side.
+# Test 14: Pod counting uses raw API pagination (not per-namespace loop)
+# kubectl get --all-namespaces buffers ALL objects in Go heap regardless of
+# --chunk-size. Raw API with limit=100 keeps memory bounded at ~43MB.
 ###############################################################################
-chunk_size=$(grep -c 'chunk-size=500' "$SRC_FILE" || true)
-assert_ge "$chunk_size" "1" "src/patching.sh uses --chunk-size=500 for memory-bounded pod counting"
+raw_api=$(grep -c 'get --raw' "$SRC_FILE" || true)
+assert_ge "$raw_api" "1" "src/patching.sh uses kubectl get --raw for memory-bounded pod counting"
 
 per_ns_loop=$(grep -c 'kubectl get deployments -n' "$SRC_FILE" || true)
 assert_eq "$per_ns_loop" "0" "src/patching.sh has no per-namespace deployment counting"
