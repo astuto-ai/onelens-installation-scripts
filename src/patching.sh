@@ -292,9 +292,9 @@ while true; do
     _url="/api/v1/pods?limit=100&fieldSelector=status.phase%21%3DSucceeded%2Cstatus.phase%21%3DFailed"
     [ -n "$_continue" ] && _url="${_url}&continue=${_continue}"
     _resp=$(kubectl get --raw "$_url" 2>/dev/null) || break
-    _page_count=$(echo "$_resp" | jq '.items | length')
+    _page_count=$(echo "$_resp" | jq '.items | length') || break
     NUM_PODS=$(( NUM_PODS + _page_count ))
-    _continue=$(echo "$_resp" | jq -r '.metadata.continue // empty')
+    _continue=$(echo "$_resp" | jq -r '.metadata.continue // empty') || break
     [ -z "$_continue" ] && break
 done
 TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
