@@ -23,10 +23,10 @@ assert_gt "$install_tier" "0" "install.sh calls select_resource_tier"
 assert_gt "$patching_tier" "0" "patching.sh calls select_resource_tier"
 
 # ---------------------------------------------------------------------------
-# Test 3: Both scripts use chunked field-selector pod counting
+# Test 3: Both scripts use raw API pagination for pod counting
 # ---------------------------------------------------------------------------
-# Single kubectl call with --chunk-size=500 and exclusion filter.
-for pattern in 'chunk-size=500' 'status.phase!=Succeeded'; do
+# kubectl get --raw with limit=100 and fieldSelector URL encoding.
+for pattern in 'get --raw' 'fieldSelector=status.phase'; do
     install_has=$(grep -c "$pattern" "$ROOT/install.sh" || true)
     patching_has=$(grep -c "$pattern" "$ROOT/src/patching.sh" || true)
     assert_gt "$install_has" "0" "install.sh uses $pattern"
