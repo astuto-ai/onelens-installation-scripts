@@ -167,5 +167,37 @@ assert_ge "$oom_detection" "1" "src/patching.sh detects OOMKilled updater pods"
 oom_bump=$(grep -c 'TARGET_MEMORY_MI=512' "$SRC_FILE" || true)
 assert_ge "$oom_bump" "1" "src/patching.sh bumps CronJob memory to 512Mi on OOM"
 
+###############################################################################
+# Test 16: CronJob kubectl patches include image field
+# Kubernetes strategic merge patch on container arrays requires the image field.
+# Without it, kubectl returns "image: Required value" and the patch silently fails.
+###############################################################################
+updater_image_patch=$(grep -c 'UPDATER_IMAGE.*kubectl get cronjob onelensupdater' "$SRC_FILE" || true)
+assert_ge "$updater_image_patch" "1" "src/patching.sh reads image before updater CronJob patch"
+
+agent_cpu_image_patch=$(grep -c 'AGENT_IMAGE.*kubectl get cronjob.*AGENT_CJ_NAME' "$SRC_FILE" || true)
+assert_ge "$agent_cpu_image_patch" "1" "src/patching.sh reads image before agent CronJob CPU patch"
+
+###############################################################################
+# Test 17: Updater CronJob never downsizes resources
+# Customer-set values (e.g., 1Gi memory) must not be reset to 256Mi.
+###############################################################################
+never_downsize=$(grep -c 'CURRENT_MEM_MI.*-lt.*TARGET_MEMORY_MI' "$SRC_FILE" || true)
+assert_ge "$never_downsize" "1" "src/patching.sh only patches updater CronJob memory upward"
+
+no_hardcoded_256=$(grep -c 'TARGET_MEMORY_MI=256' "$SRC_FILE" || true)
+assert_eq "$no_hardcoded_256" "0" "src/patching.sh has no hardcoded TARGET_MEMORY_MI=256 (never downsize)"
+
+###############################################################################
+# Test 18: Agent OOM memory bump handled via helm values (not kubectl patch)
+# kubectl patches get overwritten by the next helm upgrade (~5 min).
+# Agent OOM must bump ONELENS_MEMORY_LIMIT before the helm upgrade section.
+###############################################################################
+agent_oom_prehlem=$(grep -c '_AGENT_OOM_BUMPED=true' "$SRC_FILE" || true)
+assert_ge "$agent_oom_prehlem" "1" "src/patching.sh bumps agent memory via helm values (pre-helm section)"
+
+agent_mem_kubectl=$(grep -c 'kubectl patch.*AGENT_CJ_NAME.*memory' "$SRC_FILE" || true)
+assert_eq "$agent_mem_kubectl" "0" "src/patching.sh does NOT kubectl patch agent CronJob memory (uses helm instead)"
+
 test_summary
 exit $?

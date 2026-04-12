@@ -179,51 +179,62 @@ if [ -n "$CURRENT_MEM" ]; then
     fi
 fi
 
+# Never downsize updater CronJob resources — customer may have set higher values manually.
+# Only bump upward: to 512Mi on OOM, or keep current if already higher.
 if [ "$_UPDATER_OOM" = "true" ]; then
-    TARGET_MEMORY_MI=512
-    echo "Bumping CronJob memory to 512Mi (OOM recovery). Takes effect next run."
-elif [ "$CURRENT_MEM_MI" = "512" ]; then
-    # Previously bumped for OOM — keep 512Mi, don't downsize back to 256Mi.
-    # The cluster needs 512Mi for helm/kubectl page cache during upgrades.
-    TARGET_MEMORY_MI=512
-    echo "CronJob memory at 512Mi (previous OOM bump) — keeping."
+    if [ -n "$CURRENT_MEM_MI" ] && [ "$CURRENT_MEM_MI" -ge 512 ] 2>/dev/null; then
+        TARGET_MEMORY_MI=$CURRENT_MEM_MI
+        echo "Updater OOMKilled but already at ${CURRENT_MEM}. Keeping current value."
+    else
+        TARGET_MEMORY_MI=512
+        echo "Bumping CronJob memory to 512Mi (OOM recovery). Takes effect next run."
+    fi
 else
-    TARGET_MEMORY_MI=256
+    TARGET_MEMORY_MI=${CURRENT_MEM_MI:-256}
 fi
 
-NEED_CPU_PATCH=false
-NEED_MEM_PATCH=false
-
+# Parse current CPU for comparison
+CURRENT_CPU_MILLICORES=0
 if [ -n "$CURRENT_CPU" ]; then
     if echo "$CURRENT_CPU" | grep -q 'm$'; then
         CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | sed 's/m$//')
     else
         CURRENT_CPU_MILLICORES=$(echo "$CURRENT_CPU" | awk '{printf "%.0f", $1 * 1000}')
     fi
-    if [ "$CURRENT_CPU_MILLICORES" -ne "$TARGET_CPU_MILLICORES" ] 2>/dev/null; then
-        NEED_CPU_PATCH=true
-    fi
 fi
 
-if [ -n "$CURRENT_MEM_MI" ]; then
-    if [ "$CURRENT_MEM_MI" -ne "$TARGET_MEMORY_MI" ] 2>/dev/null; then
-        NEED_MEM_PATCH=true
-    fi
+# Only patch upward — never downsize CPU or memory
+NEED_CPU_PATCH=false
+NEED_MEM_PATCH=false
+
+if [ "$CURRENT_CPU_MILLICORES" -lt "$TARGET_CPU_MILLICORES" ] 2>/dev/null; then
+    NEED_CPU_PATCH=true
+fi
+
+if [ -n "$CURRENT_MEM_MI" ] && [ "$CURRENT_MEM_MI" -lt "$TARGET_MEMORY_MI" ] 2>/dev/null; then
+    NEED_MEM_PATCH=true
 fi
 
 if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
-    echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
-    kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
-      \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
-        \"name\":\"onelensupdater\",
-        \"resources\":{
-          \"requests\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"},
-          \"limits\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"}
-        }
-      }]}}}}}
-    }" 2>/dev/null && \
-        echo "CronJob resources reset successfully" || \
-        echo "WARNING: Failed to reset CronJob resources"
+    UPDATER_IMAGE=$(kubectl get cronjob onelensupdater -n onelens-agent \
+        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+    if [ -z "$UPDATER_IMAGE" ]; then
+        echo "WARNING: Skipping CronJob resource patch — container image not found"
+    else
+        echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
+        kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
+          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+            \"name\":\"onelensupdater\",
+            \"image\":\"$UPDATER_IMAGE\",
+            \"resources\":{
+              \"requests\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"},
+              \"limits\":{\"cpu\":\"${TARGET_CPU_MILLICORES}m\",\"memory\":\"${TARGET_MEMORY_MI}Mi\"}
+            }
+          }]}}}}}
+        }" 2>&1 && \
+            echo "CronJob resources updated successfully" || \
+            echo "WARNING: Failed to update CronJob resources"
+    fi
 else
     echo "CronJob resources already at target (${CURRENT_CPU}, ${CURRENT_MEM})"
 fi
@@ -1623,6 +1634,8 @@ if [ -n "$PROM_SVC" ]; then
             _upguard_mem '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory' OPENCOST_MEMORY_REQUEST
             _upguard_cpu '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.cpu' OPENCOST_CPU_LIMIT
             _upguard_cpu '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.cpu' OPENCOST_CPU_REQUEST
+            _upguard_mem '.["onelens-agent"].resources.limits.memory' ONELENS_MEMORY_LIMIT
+            _upguard_mem '.["onelens-agent"].resources.requests.memory' ONELENS_MEMORY_REQUEST
         fi
 
         # Evaluate: Prometheus
@@ -1680,6 +1693,35 @@ if [ -n "$PROM_SVC" ]; then
         kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
     else
         echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"
+    fi
+fi
+
+# --- Agent OOM pre-helm detection ---
+# Agent CronJob OOM must be handled here (before helm upgrade), not in the
+# post-helm Agent CronJob Health section. kubectl patches to CronJobs get
+# overwritten by the next helm upgrade. Setting ONELENS_MEMORY_LIMIT here
+# ensures the helm --set carries the bumped value durably.
+_AGENT_OOM_BUMPED=false
+_agent_oom_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | grep -E '^onelens-agent-[0-9]' | grep -E 'OOMKilled|Error' | tail -1 | awk '{print $1}' || true)
+if [ -n "$_agent_oom_pod" ]; then
+    _agent_term=$(kubectl get pod "$_agent_oom_pod" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+    if [ -z "$_agent_term" ]; then
+        _agent_term=$(kubectl get pod "$_agent_oom_pod" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
+    fi
+    if [ "$_agent_term" = "OOMKilled" ]; then
+        _agent_cur_mi=$(_memory_to_mi "$ONELENS_MEMORY_LIMIT")
+        if [ "$_agent_cur_mi" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
+            echo "Agent OOMKilled but already at memory cap (${ONELENS_MEMORY_LIMIT}). Manual investigation needed."
+        else
+            _agent_new=$(calculate_wal_oom_memory "$ONELENS_MEMORY_LIMIT" "$_USAGE_CAP_AGENT_MEM")
+            echo "Agent OOMKilled — bumping agent memory via helm: ${ONELENS_MEMORY_LIMIT} -> $_agent_new"
+            ONELENS_MEMORY_LIMIT="$_agent_new"
+            ONELENS_MEMORY_REQUEST="$_agent_new"
+            _AGENT_OOM_BUMPED=true
+        fi
     fi
 fi
 
@@ -3193,38 +3235,32 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
-                        _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
-                          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
-                            \"name\":\"$AGENT_CONTAINER_NAME\",
-                            \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
-                          }]}}}}}
-                        }" 2>&1) && \
-                            echo "Agent CronJob CPU patched to ${AGENT_NEW_CPU}m" || \
-                            echo "WARNING: Failed to patch agent CronJob CPU: $_agent_cpu_patch_err"
+                        AGENT_IMAGE=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent \
+                            -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+                        if [ -z "$AGENT_IMAGE" ]; then
+                            echo "WARNING: Skipping agent CronJob CPU patch — container image not found"
+                        else
+                            _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
+                              \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
+                                \"name\":\"$AGENT_CONTAINER_NAME\",
+                                \"image\":\"$AGENT_IMAGE\",
+                                \"resources\":{\"requests\":{\"cpu\":\"${AGENT_NEW_CPU}m\"},\"limits\":{\"cpu\":\"${AGENT_NEW_CPU}m\"}}
+                              }]}}}}}
+                            }" 2>&1) && \
+                                echo "Agent CronJob CPU patched to ${AGENT_NEW_CPU}m" || \
+                                echo "WARNING: Failed to patch agent CronJob CPU: $_agent_cpu_patch_err"
+                        fi
                     fi
                 fi
 
-                # Fix: if OOMKilled, bump agent CronJob memory 1.25x via kubectl patch
+                # Agent OOM memory: handled in pre-helm section via ONELENS_MEMORY_LIMIT bump.
+                # kubectl patches to CronJobs get overwritten by the next helm upgrade (~5 min).
+                # Bumping via helm --set is durable — _guard_memory preserves it on subsequent runs.
                 if [ "$AGENT_TERM_REASON" = "OOMKilled" ] || [ "$AGENT_EXIT_CODE" = "137" ] || echo "$AGENT_FAIL_LOGS" | grep -qiE 'out of memory|cannot allocate memory|MemoryError' 2>/dev/null; then
-                    AGENT_CUR_MI=$(_memory_to_mi "${AGENT_MEM_LIMIT:-384Mi}")
-                    if [ "$AGENT_CUR_MI" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
-                        echo "Agent OOMKilled but already at memory cap (${AGENT_MEM_LIMIT}). Manual investigation needed."
+                    if [ "$_AGENT_OOM_BUMPED" = "true" ]; then
+                        echo "Agent OOM detected — memory already bumped in pre-helm section (${ONELENS_MEMORY_LIMIT})"
                     else
-                        AGENT_NEW_MEM=$(calculate_wal_oom_memory "${AGENT_MEM_LIMIT:-384Mi}" "$_USAGE_CAP_AGENT_MEM")
-                        # Cap at _USAGE_CAP_AGENT_MEM
-                        AGENT_NEW_MI=$(_memory_to_mi "$AGENT_NEW_MEM")
-                        if [ "$AGENT_NEW_MI" -gt "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
-                            AGENT_NEW_MEM="${_USAGE_CAP_AGENT_MEM}Mi"
-                        fi
-                        echo "Agent OOMKilled — patching CronJob memory ${AGENT_MEM_LIMIT:-384Mi} -> $AGENT_NEW_MEM"
-                        _agent_mem_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
-                          \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
-                            \"name\":\"$AGENT_CONTAINER_NAME\",
-                            \"resources\":{\"requests\":{\"memory\":\"$AGENT_NEW_MEM\"},\"limits\":{\"memory\":\"$AGENT_NEW_MEM\"}}
-                          }]}}}}}
-                        }" 2>&1) && \
-                            echo "Agent CronJob memory patched to $AGENT_NEW_MEM" || \
-                            echo "WARNING: Failed to patch agent CronJob memory: $_agent_mem_patch_err"
+                        echo "Agent OOM detected — will be addressed on next patching run via helm upgrade"
                     fi
                 fi
             fi
