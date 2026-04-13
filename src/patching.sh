@@ -1811,9 +1811,11 @@ _remediate_oomkilled_pod() {
     echo ""
     echo "🔧 Attempting remediation: OOMKilled pod $pod_name"
 
-    # Get current memory limit
+    # Get current memory limit — read by container name to avoid picking up a
+    # sidecar at containers[0]. A wrong read would feed into kubectl set resources
+    # below and silently mis-size the deployment.
     current_memory=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath='{.spec.containers[0].resources.limits.memory}' 2>/dev/null)
+        -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.memory}" 2>/dev/null)
 
     if [ -z "$current_memory" ]; then
         echo "⚠️  Cannot determine current memory limit for $pod_name"
@@ -2337,9 +2339,20 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
     AGENT_SUSPENDED=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "unknown")
     AGENT_LAST_SCHEDULE=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent -o jsonpath='{.status.lastScheduleTime}' 2>/dev/null || true)
     AGENT_BACKOFF=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.backoffLimit}' 2>/dev/null || true)
-    # Read actual container name from CronJob spec (don't assume it matches CronJob name)
+    # Read actual container name from CronJob spec — NEVER via containers[0].name.
+    # Sidecar injectors (Dynatrace, Istio) may insert at index 0; subsequent patches
+    # use this name as the strategic-merge merge-key, so picking the sidecar would
+    # silently target the wrong container. Try three resolution strategies in order.
     AGENT_CONTAINER_NAME=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent \
-        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].name}' 2>/dev/null || echo "$AGENT_CJ_NAME")
+        -o jsonpath="{.spec.jobTemplate.spec.template.spec.containers[?(@.name==\"$AGENT_CJ_NAME\")].name}" 2>/dev/null || true)
+    if [ -z "$AGENT_CONTAINER_NAME" ]; then
+        AGENT_CONTAINER_NAME=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent \
+            -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[*].name}' 2>/dev/null \
+            | tr ' ' '\n' | grep 'onelens-agent' | head -1 || true)
+    fi
+    if [ -z "$AGENT_CONTAINER_NAME" ]; then
+        AGENT_CONTAINER_NAME="$AGENT_CJ_NAME"
+    fi
 
     echo "CronJob: schedule=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null) suspend=$AGENT_SUSPENDED lastSchedule=$AGENT_LAST_SCHEDULE backoffLimit=${AGENT_BACKOFF:-default} container=$AGENT_CONTAINER_NAME"
 
@@ -2414,8 +2427,9 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     AGENT_EXIT_CODE=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
                         -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}' 2>/dev/null || true)
                 fi
+                # Read by container name — sidecar injection risk if we used containers[0].
                 AGENT_MEM_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                    -o jsonpath='{.spec.containers[0].resources.limits.memory}' 2>/dev/null || true)
+                    -o jsonpath="{.spec.containers[?(@.name==\"$AGENT_CONTAINER_NAME\")].resources.limits.memory}" 2>/dev/null || true)
 
                 echo "Diagnosis: pod=$AGENT_FAIL_POD reason=$AGENT_TERM_REASON exitCode=$AGENT_EXIT_CODE memLimit=$AGENT_MEM_LIMIT"
 
@@ -2441,8 +2455,11 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
 
                 # Fix: if cgroup CPU error, round CPU to next 100m via kubectl patch
                 if [ "$AGENT_EXIT_CODE" = "128" ] && echo "$AGENT_FAIL_EVENTS" | grep -qiE 'cgroup.*cpu|cpu.*cgroup|cfs_quota' 2>/dev/null; then
+                    # Read by container name — sidecar injection risk: if containers[0]
+                    # is a sidecar with lower CPU, AGENT_NEW_CPU would be calculated from
+                    # the sidecar's value and patch would downsize the agent's CPU.
                     AGENT_CPU_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                        -o jsonpath='{.spec.containers[0].resources.limits.cpu}' 2>/dev/null || true)
+                        -o jsonpath="{.spec.containers[?(@.name==\"$AGENT_CONTAINER_NAME\")].resources.limits.cpu}" 2>/dev/null || true)
                     AGENT_CPU_MC=$(_cpu_to_millicores "${AGENT_CPU_LIMIT:-400m}")
                     if [ "$AGENT_CPU_MC" -ge "$_USAGE_CAP_CPU" ] 2>/dev/null; then
                         echo "Agent cgroup CPU error but already at cap (${AGENT_CPU_LIMIT}). Manual investigation needed."

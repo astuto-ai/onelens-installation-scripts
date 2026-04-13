@@ -243,5 +243,37 @@ assert_ge "$updater_image_sanity" "1" "src/patching.sh sanity-guards updater ima
 agent_image_sanity=$(grep -c "AGENT_IMAGE\".*grep.*'onelens-agent'" "$SRC_FILE" || true)
 assert_ge "$agent_image_sanity" "1" "src/patching.sh sanity-guards agent image (refuses patch if not onelens-agent)"
 
+###############################################################################
+# Test 22: Agent pod resource reads (CPU/memory limits) use name-selector
+# Caught by post-v2.1.66 review: AGENT_CPU_LIMIT read from containers[0] could
+# cause agent CPU DOWNSIZE if a sidecar with lower CPU limit is injected at [0].
+# AGENT_CONTAINER_NAME read from containers[0] could make subsequent patches
+# target the sidecar's name as merge-key.
+###############################################################################
+agent_cpu_name_selector=$(grep -c 'containers\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].resources.limits.cpu' "$SRC_FILE" || true)
+assert_ge "$agent_cpu_name_selector" "1" "src/patching.sh reads agent CPU limit via name-selector (downsize prevention)"
+
+agent_mem_name_selector=$(grep -c 'containers\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].resources.limits.memory' "$SRC_FILE" || true)
+assert_ge "$agent_mem_name_selector" "1" "src/patching.sh reads agent memory limit via name-selector"
+
+agent_name_resolution=$(grep -c 'containers\[?(@.name==\\"\$AGENT_CJ_NAME\\")\].name' "$SRC_FILE" || true)
+assert_ge "$agent_name_resolution" "1" "src/patching.sh resolves AGENT_CONTAINER_NAME via name-selector (not containers[0])"
+
+# Negative: no agent pod containers[0] reads for CPU/memory limits
+agent_pod_bad_index=$(grep -cE 'containers\[0\]\.resources\.limits\.(cpu|memory)' "$SRC_FILE" || true)
+# Allow up to 1 occurrence because deployment OOM handler and scheduling failure handler
+# read deployment pod resources; we fix _remediate_oomkilled_pod but defer _remediate_scheduling_failure.
+# This assertion ensures the agent-path reads are gone.
+agent_path_bad_reads=$(grep -v '^[[:space:]]*#' "$SRC_FILE" | grep -B2 'containers\[0\]\.resources\.limits\.cpu' | grep -c 'AGENT' || true)
+assert_eq "$agent_path_bad_reads" "0" "src/patching.sh agent CPU limit read does not use containers[0]"
+
+###############################################################################
+# Test 23: Deployment OOM remediation reads memory by container name
+# _remediate_oomkilled_pod feeds into kubectl set resources — wrong read would
+# cause silent mis-sizing of Prometheus/KSM/OpenCost deployments.
+###############################################################################
+oom_remediate_name_selector=$(grep -c 'containers\[?(@.name==\\"\$component\\")\].resources.limits.memory' "$SRC_FILE" || true)
+assert_ge "$oom_remediate_name_selector" "1" "src/patching.sh _remediate_oomkilled_pod reads memory via name-selector"
+
 test_summary
 exit $?
