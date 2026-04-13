@@ -198,5 +198,22 @@ assert_eq "$patching_ips" "0" "patching.sh does not set imagePullSecrets"
 migrate_configmap=$(grep -c 'configmap onelens-agent-chart' "$MIGRATE" || true)
 assert_gt "$migrate_configmap" "0" "migration script creates ConfigMap onelens-agent-chart"
 
+# ---------------------------------------------------------------------------
+# Test 28: install.sh MY_IMAGE read uses name-selector, not containers[0]
+# v2.1.65 regression carried the same bug to install.sh — sidecar injectors
+# (Dynatrace, Istio) may insert at containers[0], causing misdetection of
+# air-gapped mode from the sidecar's image path. v2.1.66 reads by name.
+# ---------------------------------------------------------------------------
+install_image_name_selector=$(grep -c 'containers\[?(@.name=="onelensdeployerjob")\].image' "$ROOT/install.sh" || true)
+assert_gt "$install_image_name_selector" "0" "install.sh reads deployer pod image via name-selector (not containers[0])"
+
+install_image_bad_index=$(grep -c 'MY_IMAGE=.*kubectl get pod.*containers\[0\]\.image' "$ROOT/install.sh" || true)
+assert_eq "$install_image_bad_index" "0" "install.sh MY_IMAGE read does not use containers[0] (sidecar safety)"
+
+# Fallback: install.sh must filter containers[*].image for onelens-deployer substring
+# when the primary name-selector returns empty (covers forks/customizations).
+install_image_fallback=$(grep -c "grep 'onelens-deployer'" "$ROOT/install.sh" || true)
+assert_gt "$install_image_fallback" "0" "install.sh has substring fallback for MY_IMAGE when name-selector fails"
+
 test_summary
 exit $?

@@ -162,5 +162,13 @@ assert_eq "$(calculate_oom_response_memory "400Mi" 4800)" "800Mi" \
     "calculate_oom_response_memory default: 400Mi → 800Mi (2x)"
 
 ###############################################################################
+# v2.1.66: agent memory cap raised to 8192Mi
+# Previous cap (4096Mi) was insufficient — 5 customer clusters were OOMing at
+# the cap. Agent memory scales with metric cardinality/cost data volume, not
+# just pod count. Raised to match Prometheus server cap.
+###############################################################################
+assert_eq "$_USAGE_CAP_AGENT_MEM" "8192" \
+    "_USAGE_CAP_AGENT_MEM raised to 8192 (from 4096) in v2.1.66"
+
 test_summary
 exit $?

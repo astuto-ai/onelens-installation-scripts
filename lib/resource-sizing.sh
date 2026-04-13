@@ -94,7 +94,7 @@ _USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
 _USAGE_CAP_PROM_MEM=8192    # max Prometheus memory for mega clusters (Mi)
 _USAGE_CAP_KSM_MEM=4800     # max KSM memory for mega clusters (Mi)
 _USAGE_CAP_OPENCOST_MEM=4800 # max OpenCost memory for mega clusters (Mi)
-_USAGE_CAP_AGENT_MEM=4096   # max agent memory for mega clusters (4000+ pods)
+_USAGE_CAP_AGENT_MEM=8192   # max agent memory (raised 4096→8192 in v2.1.66; agent mem scales with metric cardinality/cost data volume, not just pod count — 5 customer clusters hit the 4GB cap)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
 
 # apply_cpu_multiplier "$cpu_str" "$multiplier"
