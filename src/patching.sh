@@ -155,8 +155,11 @@ LAST_UPDATER_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
     | grep 'onelensupdater' | grep -vE 'Running|ContainerCreating' \
     | tail -1 | awk '{print $1}')
 if [ -n "$LAST_UPDATER_POD" ]; then
+    # Read by container name — sidecar injectors (Dynatrace, Istio) may insert
+    # containers at index 0, which would give us the sidecar's terminated reason
+    # instead of onelensupdater's. OOMKilled then never detected → no mem bump.
     LAST_TERM_REASON=$(kubectl get pod "$LAST_UPDATER_POD" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+        -o jsonpath='{.status.containerStatuses[?(@.name=="onelensupdater")].state.terminated.reason}' 2>/dev/null || true)
     if [ "$LAST_TERM_REASON" = "OOMKilled" ]; then
         _UPDATER_OOM=true
         echo "Previous updater pod $LAST_UPDATER_POD was OOMKilled."
@@ -923,27 +926,73 @@ fi
 # post-helm Agent CronJob Health section. kubectl patches to CronJobs get
 # overwritten by the next helm upgrade. Setting ONELENS_MEMORY_LIMIT here
 # ensures the helm --set carries the bumped value durably.
+#
+# Two detection strategies, in order:
+#   (1) Live-pod: an agent pod is currently in OOMKilled/Error state — read
+#       its terminated reason via name-selector (sidecar-safe; fixed in v2.1.67
+#       after the v2.1.65 containers[0] class of bug).
+#   (2) Job-history fallback: the live-pod check misses clusters where the
+#       agent runs on an infrequent schedule (e.g., hourly) so failed pods
+#       get GC'd between runs — by the time patching.sh checks, there's no
+#       OOMed pod to inspect. In that case, check Job conditions: if 2+ recent
+#       Jobs fell into BackoffLimitExceeded, treat as chronic failure and bump
+#       memory up to the cap. Bounded by _USAGE_CAP_AGENT_MEM and one bump
+#       per run via _AGENT_OOM_BUMPED, so it can't thrash.
 _AGENT_OOM_BUMPED=false
+_agent_bump_reason=""
+_agent_bump_evidence=""
+
+# Strategy 1: inspect any currently-visible failed agent pod
 _agent_oom_pod=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
     | grep -E '^onelens-agent-[0-9]' | grep -E 'OOMKilled|Error' | tail -1 | awk '{print $1}' || true)
 if [ -n "$_agent_oom_pod" ]; then
     _agent_term=$(kubectl get pod "$_agent_oom_pod" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+        -o jsonpath='{.status.containerStatuses[?(@.name=="onelens-agent")].state.terminated.reason}' 2>/dev/null || true)
     if [ -z "$_agent_term" ]; then
         _agent_term=$(kubectl get pod "$_agent_oom_pod" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
+            -o jsonpath='{.status.containerStatuses[?(@.name=="onelens-agent")].lastState.terminated.reason}' 2>/dev/null || true)
     fi
     if [ "$_agent_term" = "OOMKilled" ]; then
-        _agent_cur_mi=$(_memory_to_mi "$ONELENS_MEMORY_LIMIT")
-        if [ "$_agent_cur_mi" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
-            echo "Agent OOMKilled but already at memory cap (${ONELENS_MEMORY_LIMIT}). Manual investigation needed."
-        else
-            _agent_new=$(calculate_wal_oom_memory "$ONELENS_MEMORY_LIMIT" "$_USAGE_CAP_AGENT_MEM")
-            echo "Agent OOMKilled — bumping agent memory via helm: ${ONELENS_MEMORY_LIMIT} -> $_agent_new"
-            ONELENS_MEMORY_LIMIT="$_agent_new"
-            ONELENS_MEMORY_REQUEST="$_agent_new"
-            _AGENT_OOM_BUMPED=true
-        fi
+        _agent_bump_reason="live-pod OOMKilled"
+        _agent_bump_evidence="pod=$_agent_oom_pod reason=$_agent_term"
+    fi
+fi
+
+# Strategy 2: if live-pod check found nothing, consult Job history.
+# Count recent agent Jobs (last 5) that failed with BackoffLimitExceeded —
+# the hallmark of pods repeatedly crashing until the Job gives up. This works
+# even after failed pods have been GC'd, because the Job resource retains
+# its failed count and conditions.
+if [ -z "$_agent_bump_reason" ]; then
+    # grep -c always emits a count to stdout (even on no match); just trust it
+    # and default to 0 if pipeline returns empty. The earlier `|| echo "0"`
+    # pattern would APPEND a second "0" line because grep -c outputs "0" then
+    # exits 1, triggering the fallback — yielding the literal string "0\n0".
+    _agent_failed_jobs=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
+        | grep -E '^onelens-agent-[0-9]' | tail -5 | grep -c 'Failed' 2>/dev/null)
+    _agent_failed_jobs=${_agent_failed_jobs:-0}
+    # Also look for OOMKilling events within the last window — retained even
+    # when pods are gone. Presence is corroborating evidence, not required.
+    _agent_oom_events=$(kubectl get events -n onelens-agent --no-headers 2>/dev/null \
+        | grep -iE 'OOMKill|OOMKilling' | grep -c 'onelens-agent-' 2>/dev/null)
+    _agent_oom_events=${_agent_oom_events:-0}
+    if [ "$_agent_failed_jobs" -ge 2 ] 2>/dev/null; then
+        _agent_bump_reason="chronic Job failures (GC'd pods)"
+        _agent_bump_evidence="failed_jobs=${_agent_failed_jobs}/5 oom_events=${_agent_oom_events}"
+    fi
+fi
+
+# Apply the bump (same logic for both strategies)
+if [ -n "$_agent_bump_reason" ]; then
+    _agent_cur_mi=$(_memory_to_mi "$ONELENS_MEMORY_LIMIT")
+    if [ "$_agent_cur_mi" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
+        echo "Agent failure detected (${_agent_bump_reason}) but already at memory cap (${ONELENS_MEMORY_LIMIT}). Manual investigation needed. Evidence: ${_agent_bump_evidence}"
+    else
+        _agent_new=$(calculate_wal_oom_memory "$ONELENS_MEMORY_LIMIT" "$_USAGE_CAP_AGENT_MEM")
+        echo "Agent failure detected (${_agent_bump_reason}) — bumping agent memory via helm: ${ONELENS_MEMORY_LIMIT} -> $_agent_new. Evidence: ${_agent_bump_evidence}"
+        ONELENS_MEMORY_LIMIT="$_agent_new"
+        ONELENS_MEMORY_REQUEST="$_agent_new"
+        _AGENT_OOM_BUMPED=true
     fi
 fi
 
@@ -1629,15 +1678,20 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
 
         pod_status=$(kubectl get pod "$pod_name" -n onelens-agent \
             -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        # Read by container name = component — sidecar injectors (Dynatrace, Istio)
+        # may insert containers at index 0. Fall back to $component if name-selector
+        # returns empty (chart default: container name matches component name).
         container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.spec.containers[0].name}' 2>/dev/null || echo "$component")
+            -o jsonpath="{.spec.containers[?(@.name==\"$component\")].name}" 2>/dev/null || true)
+        : "${container_name:=$component}"
         restart_count=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || echo "0")
+            -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].restartCount}" 2>/dev/null || true)
+        : "${restart_count:=0}"
         term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+            -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].state.terminated.reason}" 2>/dev/null || true)
         if [ -z "$term_reason" ]; then
             term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-                -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
+                -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].lastState.terminated.reason}" 2>/dev/null || true)
         fi
 
         # Skip pods that are Running with low restarts (healthy)
@@ -1781,19 +1835,26 @@ _can_remediate() {
 _get_pod_failure_reason() {
     local pod_name="$1"
 
-    # Check container status first (more reliable)
-    local status=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null)
+    # Sidecar-safe failure classification. Use jsonpath predicates to find
+    # ANY container that is terminated or waiting (skips healthy sidecars at
+    # index 0). If multiple containers are failing, jsonpath returns reasons
+    # space-separated — prefer OOMKilled over other reasons.
+    local term_reasons waiting_reasons
+    term_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[?(@.state.terminated)].state.terminated.reason}' 2>/dev/null)
+    waiting_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.status.containerStatuses[?(@.state.waiting)].state.waiting.reason}' 2>/dev/null)
 
-    if echo "$status" | grep -q "waiting"; then
-        echo "$status" | jq -r '.waiting.reason' 2>/dev/null
-    elif echo "$status" | grep -q "terminated"; then
-        local reason=$(echo "$status" | jq -r '.terminated.reason' 2>/dev/null)
-        if [ "$reason" = "OOMKilled" ]; then
+    if [ -n "$term_reasons" ]; then
+        # Prefer OOMKilled over other terminated reasons
+        if echo "$term_reasons" | grep -q "OOMKilled"; then
             echo "OOMKilled"
         else
             echo "Terminated"
         fi
+    elif [ -n "$waiting_reasons" ]; then
+        # Return the first waiting reason (sidecar-order-independent)
+        echo "$waiting_reasons" | awk '{print $1}'
     else
         # Fallback: check pod conditions
         kubectl get pod "$pod_name" -n onelens-agent \
@@ -1884,9 +1945,14 @@ _remediate_scheduling_failure() {
     echo ""
     echo "🔧 Attempting remediation: FailedScheduling pod $pod_name"
 
-    # Get pod memory request
+    # Get pod memory requests for ALL containers — sidecar-safe. This function
+    # is called with only $pod_name (no component context), so we can't name-
+    # select a specific container. containers[*] returns a space-separated list
+    # of every container's memory request (e.g. "500Mi 100Mi" for main+sidecar).
+    # This is informational only (used in logs + node-capacity comparison); a
+    # slightly-off value doesn't break remediation logic.
     pod_memory=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath='{.spec.containers[0].resources.requests.memory}' 2>/dev/null)
+        -o jsonpath='{.spec.containers[*].resources.requests.memory}' 2>/dev/null)
 
     if [ -z "$pod_memory" ]; then
         echo "  ⚠️  Cannot determine memory request"
@@ -2414,18 +2480,21 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
             # Diagnose the most recent failed pod
             AGENT_FAIL_POD=$(echo "$AGENT_FAILED_PODS" | tail -1 | awk '{print $1}')
             if [ -n "$AGENT_FAIL_POD" ]; then
-                # Get termination reason and exit code (check current state first, fall back to lastState)
+                # Get termination reason and exit code via name-selector on
+                # $AGENT_CONTAINER_NAME (resolved earlier with 3-stage fallback).
+                # Reading containers[0] here would pick up a sidecar's status
+                # on clusters with webhook injection.
                 AGENT_TERM_REASON=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                    -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+                    -o jsonpath="{.status.containerStatuses[?(@.name==\"$AGENT_CONTAINER_NAME\")].state.terminated.reason}" 2>/dev/null || true)
                 if [ -z "$AGENT_TERM_REASON" ]; then
                     AGENT_TERM_REASON=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                        -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)
+                        -o jsonpath="{.status.containerStatuses[?(@.name==\"$AGENT_CONTAINER_NAME\")].lastState.terminated.reason}" 2>/dev/null || true)
                 fi
                 AGENT_EXIT_CODE=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                    -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
+                    -o jsonpath="{.status.containerStatuses[?(@.name==\"$AGENT_CONTAINER_NAME\")].state.terminated.exitCode}" 2>/dev/null || true)
                 if [ -z "$AGENT_EXIT_CODE" ]; then
                     AGENT_EXIT_CODE=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
-                        -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}' 2>/dev/null || true)
+                        -o jsonpath="{.status.containerStatuses[?(@.name==\"$AGENT_CONTAINER_NAME\")].lastState.terminated.exitCode}" 2>/dev/null || true)
                 fi
                 # Read by container name — sidecar injection risk if we used containers[0].
                 AGENT_MEM_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \

@@ -275,5 +275,72 @@ assert_eq "$agent_path_bad_reads" "0" "src/patching.sh agent CPU limit read does
 oom_remediate_name_selector=$(grep -c 'containers\[?(@.name==\\"\$component\\")\].resources.limits.memory' "$SRC_FILE" || true)
 assert_ge "$oom_remediate_name_selector" "1" "src/patching.sh _remediate_oomkilled_pod reads memory via name-selector"
 
+###############################################################################
+# Test 24: Agent OOM pre-helm detection uses name-selector for terminated reason
+# v2.1.66 regression follow-up (fixed v2.1.67): the agent OOM pre-helm block
+# was reading containerStatuses[0].state.terminated.reason. Same class of
+# sidecar-unsafety as the original v2.1.65 bug — on clusters with Dynatrace/
+# Istio-style sidecars at index 0, the wrong container's terminated reason is
+# read, so OOMKilled is never detected and no memory bump fires.
+###############################################################################
+agent_term_state_selector=$(grep -c 'containerStatuses\[?(@.name=="onelens-agent")\].state.terminated.reason' "$SRC_FILE" || true)
+assert_ge "$agent_term_state_selector" "1" "src/patching.sh reads agent terminated.reason via name-selector (state)"
+
+agent_term_laststate_selector=$(grep -c 'containerStatuses\[?(@.name=="onelens-agent")\].lastState.terminated.reason' "$SRC_FILE" || true)
+assert_ge "$agent_term_laststate_selector" "1" "src/patching.sh reads agent terminated.reason via name-selector (lastState)"
+
+# Negative: the agent OOM pre-helm block specifically (the `_agent_term=` assignment)
+# must not use containerStatuses[0]. Other call sites (updater self-check at line ~159,
+# deployment remediation loop, agent CronJob health section) still use containers[0]
+# — those are out of scope for v2.1.67 and tracked as follow-ups.
+agent_oom_bad_assign=$(grep -E '_agent_term=\$\(kubectl' "$SRC_FILE" | grep -c 'containerStatuses\[0\]' || true)
+assert_eq "$agent_oom_bad_assign" "0" "src/patching.sh _agent_term assignment does not use containerStatuses[0]"
+
+###############################################################################
+# Test 25: Agent OOM pre-helm detection has a Job-history fallback
+# On clusters with infrequent agent schedule (e.g., hourly), failed agent pods
+# get GC'd between runs, so the live-pod check misses them. v2.1.67 adds a
+# fallback that inspects kubectl get jobs for BackoffLimitExceeded / Failed
+# state, so auto-bump can fire even when no OOMed pod is currently visible.
+###############################################################################
+agent_fallback_jobs=$(grep -cE 'kubectl get jobs.*onelens-agent|_agent_failed_jobs' "$SRC_FILE" || true)
+assert_ge "$agent_fallback_jobs" "1" "src/patching.sh has Job-history fallback for agent OOM detection"
+
+agent_fallback_reason=$(grep -c '_agent_bump_reason' "$SRC_FILE" || true)
+assert_ge "$agent_fallback_reason" "3" "src/patching.sh agent OOM detection logs which strategy fired (live-pod vs job-history)"
+
+# Bump threshold guard — ensure we require 2+ failed jobs (not 1), to reduce false positives
+agent_threshold=$(grep -c '_agent_failed_jobs.*-ge 2' "$SRC_FILE" || true)
+assert_ge "$agent_threshold" "1" "src/patching.sh agent Job-history fallback requires 2+ failed jobs"
+
+###############################################################################
+# Test 26: All other failed-pod / terminated.reason reads use name-selector
+# Extended scope fix: v2.1.67 eliminates the containers[0] / containerStatuses[0]
+# pattern from ALL active code, not just the pre-helm agent path. Any remaining
+# containers[0] occurrences should be in comments only (documenting the fix).
+###############################################################################
+# Positive: updater self-OOM check uses name-selector
+updater_oom_name_selector=$(grep -c 'containerStatuses\[?(@.name=="onelensupdater")\].state.terminated.reason' "$SRC_FILE" || true)
+assert_ge "$updater_oom_name_selector" "1" "src/patching.sh updater self-OOM check uses name-selector"
+
+# Positive: component remediation loop uses name-selector for container_name, restart_count, term_reason
+component_restart_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$component\\")\].restartCount' "$SRC_FILE" || true)
+assert_ge "$component_restart_name_selector" "1" "src/patching.sh component loop reads restartCount via name-selector"
+
+component_term_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$component\\")\].state.terminated.reason' "$SRC_FILE" || true)
+assert_ge "$component_term_name_selector" "1" "src/patching.sh component loop reads terminated.reason via name-selector"
+
+# Positive: post-helm agent CronJob health reads terminated.reason/exitCode via AGENT_CONTAINER_NAME
+agent_posthelm_term_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].state.terminated.reason' "$SRC_FILE" || true)
+assert_ge "$agent_posthelm_term_selector" "1" "src/patching.sh post-helm agent health reads terminated.reason via name-selector"
+
+agent_posthelm_exitcode_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].state.terminated.exitCode' "$SRC_FILE" || true)
+assert_ge "$agent_posthelm_exitcode_selector" "1" "src/patching.sh post-helm agent health reads exitCode via name-selector"
+
+# Negative: no active code uses containers[0] or containerStatuses[0] for image/state/resource reads.
+# Only comments may reference the pattern (for documentation).
+active_containers_idx0=$(grep -v '^[[:space:]]*#' "$SRC_FILE" | grep -cE 'containers\[0\]\.(image|name|resources|restartCount)|containerStatuses\[0\]\.(state|lastState|restartCount)' || true)
+assert_eq "$active_containers_idx0" "0" "src/patching.sh has no active containers[0]/containerStatuses[0] reads in image/status/resource paths"
+
 test_summary
 exit $?
