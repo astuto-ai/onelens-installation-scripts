@@ -199,5 +199,25 @@ assert_ge "$agent_oom_prehlem" "1" "src/patching.sh bumps agent memory via helm 
 agent_mem_kubectl=$(grep -c 'kubectl patch.*AGENT_CJ_NAME.*memory' "$SRC_FILE" || true)
 assert_eq "$agent_mem_kubectl" "0" "src/patching.sh does NOT kubectl patch agent CronJob memory (uses helm instead)"
 
+###############################################################################
+# Test 19: CronJob image reads use name-selector, not containers[0]
+# v2.1.65 regression: sidecar injectors (Dynatrace, Istio) can insert containers
+# at index 0, causing containers[0].image to return the wrong image. The patch
+# would then rewrite onelensupdater/agent container's image with the sidecar's
+# image, breaking the CronJob. Use name-selector jsonpath instead.
+###############################################################################
+updater_image_uses_name_selector=$(grep -c 'containers\[?(@.name=="onelensupdater")\].image' "$SRC_FILE" || true)
+assert_ge "$updater_image_uses_name_selector" "1" "src/patching.sh reads updater image via name-selector (not containers[0])"
+
+agent_image_uses_name_selector=$(grep -c 'containers\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].image' "$SRC_FILE" || true)
+assert_ge "$agent_image_uses_name_selector" "1" "src/patching.sh reads agent image via name-selector (not containers[0])"
+
+# Guard against regression: the image-read lines for CronJob patching must NOT use containers[0]
+updater_image_bad_index=$(grep -c "UPDATER_IMAGE=.*kubectl get cronjob.*containers\[0\]\.image" "$SRC_FILE" || true)
+assert_eq "$updater_image_bad_index" "0" "src/patching.sh updater image-read does not use containers[0] (sidecar safety)"
+
+agent_image_bad_index=$(grep -c "AGENT_IMAGE=.*kubectl get cronjob.*containers\[0\]\.image" "$SRC_FILE" || true)
+assert_eq "$agent_image_bad_index" "0" "src/patching.sh agent image-read does not use containers[0] (sidecar safety)"
+
 test_summary
 exit $?

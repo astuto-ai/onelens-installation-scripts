@@ -216,10 +216,15 @@ if [ -n "$CURRENT_MEM_MI" ] && [ "$CURRENT_MEM_MI" -lt "$TARGET_MEMORY_MI" ] 2>/
 fi
 
 if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
+    # Read image from the container named "onelensupdater" specifically — NOT containers[0].
+    # Sidecar injectors (Dynatrace, Istio, etc.) may insert containers at index 0, so
+    # containers[0].image can return the wrong image. Setting the wrong image in the
+    # strategic-merge patch would replace the onelensupdater container image with the
+    # sidecar's image, breaking the CronJob (v2.1.65 regression — fixed in v2.1.66).
     UPDATER_IMAGE=$(kubectl get cronjob onelensupdater -n onelens-agent \
-        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[?(@.name=="onelensupdater")].image}' 2>/dev/null || true)
     if [ -z "$UPDATER_IMAGE" ]; then
-        echo "WARNING: Skipping CronJob resource patch — container image not found"
+        echo "WARNING: Skipping CronJob resource patch — onelensupdater container image not found"
     else
         echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
         kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
@@ -3235,10 +3240,12 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
+                        # Read image from the agent container by name — NOT containers[0].
+                        # Sidecar injectors (Dynatrace, Istio, etc.) may insert at index 0.
                         AGENT_IMAGE=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent \
-                            -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+                            -o jsonpath="{.spec.jobTemplate.spec.template.spec.containers[?(@.name==\"$AGENT_CONTAINER_NAME\")].image}" 2>/dev/null || true)
                         if [ -z "$AGENT_IMAGE" ]; then
-                            echo "WARNING: Skipping agent CronJob CPU patch — container image not found"
+                            echo "WARNING: Skipping agent CronJob CPU patch — agent container image not found"
                         else
                             _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
                               \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
