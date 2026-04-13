@@ -165,9 +165,12 @@ fi
 
 # Set CronJob resources: 200m CPU. Memory depends on OOM state.
 # Note: _cpu_to_millicores is not available yet (library embedded below), so parse manually.
+# Read by container name (not containers[0]) — sidecar injectors (Dynatrace, Istio)
+# may insert containers at index 0, which would give us the sidecar's resources
+# instead of onelensupdater's, causing wrong patch decisions.
 TARGET_CPU_MILLICORES=200
-CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || true)
-CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || true)
+CURRENT_CPU=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[?(@.name=="onelensupdater")].resources.requests.cpu}' 2>/dev/null || true)
+CURRENT_MEM=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[?(@.name=="onelensupdater")].resources.requests.memory}' 2>/dev/null || true)
 
 # Parse current memory to Mi for comparison
 CURRENT_MEM_MI=""
@@ -216,10 +219,24 @@ if [ -n "$CURRENT_MEM_MI" ] && [ "$CURRENT_MEM_MI" -lt "$TARGET_MEMORY_MI" ] 2>/
 fi
 
 if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
+    # Read image by container name — NOT by array index. Sidecar injectors
+    # (Dynatrace, Istio, etc.) may insert containers at index zero, which would
+    # return the sidecar's image instead of onelensupdater's. The strategic-merge
+    # patch uses name=onelensupdater as merge key so it correctly finds the
+    # onelensupdater container, but writing the wrong image field would corrupt
+    # the CronJob (the v2.1.65 regression — fixed here in v2.1.66).
     UPDATER_IMAGE=$(kubectl get cronjob onelensupdater -n onelens-agent \
-        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+        -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[?(@.name=="onelensupdater")].image}' 2>/dev/null || true)
     if [ -z "$UPDATER_IMAGE" ]; then
-        echo "WARNING: Skipping CronJob resource patch — container image not found"
+        echo "WARNING: Skipping CronJob resource patch — onelensupdater container image not found"
+    elif ! echo "$UPDATER_IMAGE" | grep -q 'onelens-deployer'; then
+        # Sanity guard: image must look like a deployer image. If not, the CronJob
+        # was likely corrupted by the v2.1.65 bug. Refuse to patch — otherwise we
+        # would re-apply the corrupted image and lock it in. Manual recovery required.
+        echo "ERROR: Refusing to patch — onelensupdater image '$UPDATER_IMAGE' does not look like an onelens-deployer image."
+        echo "       Previous state: CURRENT_CPU=${CURRENT_CPU:-unset}, CURRENT_MEM=${CURRENT_MEM:-unset}"
+        echo "       CronJob may have been corrupted by a prior bad patch (v2.1.65 sidecar-injection bug)."
+        echo "       Manual recovery required — contact support to reset the CronJob image."
     else
         echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
         kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
@@ -2440,10 +2457,20 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             AGENT_NEW_CPU="$_USAGE_CAP_CPU"
                         fi
                         echo "Agent cgroup CPU error — patching CronJob CPU ${AGENT_CPU_LIMIT} -> ${AGENT_NEW_CPU}m"
+                        # Read image by container name (not containers[0]) to avoid reading a
+                        # sidecar image injected by Dynatrace/Istio. Strategic-merge patch uses
+                        # name as merge key so it targets the right container, but a wrong image
+                        # value would corrupt the CronJob (v2.1.65 sidecar bug — fixed v2.1.66).
                         AGENT_IMAGE=$(kubectl get cronjob "$AGENT_CJ_NAME" -n onelens-agent \
-                            -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+                            -o jsonpath="{.spec.jobTemplate.spec.template.spec.containers[?(@.name==\"$AGENT_CONTAINER_NAME\")].image}" 2>/dev/null || true)
                         if [ -z "$AGENT_IMAGE" ]; then
-                            echo "WARNING: Skipping agent CronJob CPU patch — container image not found"
+                            echo "WARNING: Skipping agent CronJob CPU patch — agent container image not found"
+                        elif ! echo "$AGENT_IMAGE" | grep -q 'onelens-agent'; then
+                            # Sanity guard: refuse if image doesn't look like an agent image
+                            # (prevents re-applying a corrupted image from a prior bad patch).
+                            echo "ERROR: Refusing to patch — agent image '$AGENT_IMAGE' does not look like an onelens-agent image."
+                            echo "       Previous state: AGENT_CPU_LIMIT=${AGENT_CPU_LIMIT:-unset}"
+                            echo "       May indicate CronJob corruption. Manual recovery required — contact support."
                         else
                             _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
                               \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{

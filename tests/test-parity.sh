@@ -304,5 +304,15 @@ patching_nodes_json=$(grep 'kubectl get nodes' "$ROOT/src/patching.sh" | grep -v
 assert_eq "$install_nodes_json" "0" "install.sh has no kubectl get nodes -o json (OOM risk)"
 assert_eq "$patching_nodes_json" "0" "patching.sh has no kubectl get nodes -o json (OOM risk)"
 
+# ---------------------------------------------------------------------------
+# Test 35: Neither script reads container image via containers[0].image
+# Both scripts must use jsonpath name-selector to survive sidecar injectors
+# (Dynatrace, Istio) that insert containers at index 0. v2.1.65 regression.
+# ---------------------------------------------------------------------------
+install_image_idx0=$(grep -v '^[[:space:]]*#' "$ROOT/install.sh" | grep -c 'containers\[0\]\.image' || true)
+patching_image_idx0=$(grep -v '^[[:space:]]*#' "$ROOT/src/patching.sh" | grep -c 'containers\[0\]\.image' || true)
+assert_eq "$install_image_idx0" "0" "install.sh has no containers[0].image reads (sidecar safety)"
+assert_eq "$patching_image_idx0" "0" "patching.sh has no containers[0].image reads (sidecar safety)"
+
 test_summary
 exit $?

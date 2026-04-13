@@ -392,8 +392,18 @@ fi
 # --- Air-gapped self-detection ---
 # If the deployer pod's image is NOT from public.ecr.aws, this is an air-gapped cluster.
 # Extract the private registry URL from the image path for chart pulls and image overrides.
+#
+# Read image by container name (onelensdeployerjob) — NOT containers[0]. Sidecar injectors
+# (Dynatrace, Istio, etc.) may insert containers at index 0 of the install Job's pod,
+# which would make us read the sidecar's image and misdetect air-gapped mode.
 REGISTRY_URL=""
-MY_IMAGE=$(kubectl get pod "$HOSTNAME" -n onelens-agent -o jsonpath='{.spec.containers[0].image}' 2>/dev/null || true)
+MY_IMAGE=$(kubectl get pod "$HOSTNAME" -n onelens-agent -o jsonpath='{.spec.containers[?(@.name=="onelensdeployerjob")].image}' 2>/dev/null || true)
+# Fallback for older charts or customizations where the container name differs:
+# pick any container image whose path contains "onelens-deployer".
+if [ -z "$MY_IMAGE" ] || ! echo "$MY_IMAGE" | grep -q 'onelens-deployer'; then
+    MY_IMAGE=$(kubectl get pod "$HOSTNAME" -n onelens-agent -o jsonpath='{.spec.containers[*].image}' 2>/dev/null \
+        | tr ' ' '\n' | grep 'onelens-deployer' | head -1 || true)
+fi
 if [ -n "$MY_IMAGE" ] && echo "$MY_IMAGE" | grep -qv "public.ecr.aws"; then
     REGISTRY_URL=$(echo "$MY_IMAGE" | sed 's|/onelens-deployer.*||')
     echo "Air-gapped mode detected. Registry: $REGISTRY_URL"

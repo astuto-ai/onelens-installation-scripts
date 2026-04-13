@@ -199,5 +199,49 @@ assert_ge "$agent_oom_prehlem" "1" "src/patching.sh bumps agent memory via helm 
 agent_mem_kubectl=$(grep -c 'kubectl patch.*AGENT_CJ_NAME.*memory' "$SRC_FILE" || true)
 assert_eq "$agent_mem_kubectl" "0" "src/patching.sh does NOT kubectl patch agent CronJob memory (uses helm instead)"
 
+###############################################################################
+# Test 19: CronJob image reads use name-selector, not containers[0]
+# v2.1.65 regression: sidecar injectors (Dynatrace, Istio) can insert containers
+# at index 0, causing containers[0].image to return the sidecar's image. The
+# strategic-merge patch would then rewrite the targeted container's image with
+# the sidecar's image, silently breaking the CronJob. v2.1.66 fixes this by
+# reading the image via jsonpath name-selector.
+###############################################################################
+# Positive: name-selector is used for image reads
+updater_image_name_selector=$(grep -c 'containers\[?(@.name=="onelensupdater")\].image' "$SRC_FILE" || true)
+assert_ge "$updater_image_name_selector" "1" "src/patching.sh reads updater image via name-selector (not containers[0])"
+
+agent_image_name_selector=$(grep -c 'containers\[?(@.name==\\"\$AGENT_CONTAINER_NAME\\")\].image' "$SRC_FILE" || true)
+assert_ge "$agent_image_name_selector" "1" "src/patching.sh reads agent image via name-selector (not containers[0])"
+
+# Negative: image-reads that feed into kubectl-patch must not use containers[0]
+updater_image_bad_index=$(grep -c 'UPDATER_IMAGE=.*kubectl get cronjob.*containers\[0\]\.image' "$SRC_FILE" || true)
+assert_eq "$updater_image_bad_index" "0" "src/patching.sh updater image-read does not use containers[0] (sidecar safety)"
+
+agent_image_bad_index=$(grep -c 'AGENT_IMAGE=.*kubectl get cronjob.*containers\[0\]\.image' "$SRC_FILE" || true)
+assert_eq "$agent_image_bad_index" "0" "src/patching.sh agent image-read does not use containers[0] (sidecar safety)"
+
+###############################################################################
+# Test 20: CronJob resource reads (CPU/mem) also use name-selector
+# Reads feed into patch-or-skip decisions — if a sidecar's resources are read
+# instead, the script may wrongly decide "already at target" and skip bumping.
+###############################################################################
+updater_cpu_name_selector=$(grep -c 'containers\[?(@.name=="onelensupdater")\].resources.requests.cpu' "$SRC_FILE" || true)
+assert_ge "$updater_cpu_name_selector" "1" "src/patching.sh reads updater CPU via name-selector"
+
+updater_mem_name_selector=$(grep -c 'containers\[?(@.name=="onelensupdater")\].resources.requests.memory' "$SRC_FILE" || true)
+assert_ge "$updater_mem_name_selector" "1" "src/patching.sh reads updater memory via name-selector"
+
+###############################################################################
+# Test 21: Sanity guards refuse to patch if image is unexpectedly not deployer/agent
+# If v2.1.65 corrupted a CronJob's image (e.g., dynatrace/oneagent), v2.1.66 must
+# NOT re-apply that corrupted image. Guard greps for expected product name in image.
+###############################################################################
+updater_image_sanity=$(grep -c "UPDATER_IMAGE\".*grep.*'onelens-deployer'" "$SRC_FILE" || true)
+assert_ge "$updater_image_sanity" "1" "src/patching.sh sanity-guards updater image (refuses patch if not onelens-deployer)"
+
+agent_image_sanity=$(grep -c "AGENT_IMAGE\".*grep.*'onelens-agent'" "$SRC_FILE" || true)
+assert_ge "$agent_image_sanity" "1" "src/patching.sh sanity-guards agent image (refuses patch if not onelens-agent)"
+
 test_summary
 exit $?
