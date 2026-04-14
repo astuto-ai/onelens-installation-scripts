@@ -242,7 +242,11 @@ if [ "$NEED_CPU_PATCH" = "true" ] || [ "$NEED_MEM_PATCH" = "true" ]; then
         echo "       Manual recovery required — contact support to reset the CronJob image."
     else
         echo "Updating CronJob resources (cpu=${CURRENT_CPU:-?}→${TARGET_CPU_MILLICORES}m, mem=${CURRENT_MEM:-?}→${TARGET_MEMORY_MI}Mi)..."
-        kubectl patch cronjob onelensupdater -n onelens-agent --type='merge' --field-manager='Helm' -p="{
+        # MUST use --type='strategic' (not 'merge') for container-array patches.
+        # JSON Merge Patch (--type=merge) treats arrays as opaque and REPLACES the
+        # entire containers list, stripping env, command, args, volumeMounts — any
+        # field not in the patch. Strategic Merge Patch merges by container name.
+        kubectl patch cronjob onelensupdater -n onelens-agent --type='strategic' --field-manager='Helm' -p="{
           \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
             \"name\":\"onelensupdater\",
             \"image\":\"$UPDATER_IMAGE\",
@@ -1697,6 +1701,15 @@ if [ -n "$PROM_SVC" ]; then
         PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST="$NEW_PGW_MEM"
         PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT="$NEW_PGW_MEM"
 
+        # Evaluate: Agent (CronJob — runs hourly, but Prometheus captures memory
+        # during each run's window). This replaces the heuristic-based Strategy 2
+        # (Job-history fallback) that was prone to false-positive bumps.
+        _evaluate_and_log "onelens-agent" "onelens-agent" \
+            "$ONELENS_MEMORY_LIMIT" "$ONELENS_CPU_LIMIT" \
+            "$_USAGE_FLOOR_AGENT_MEM" "$_USAGE_CAP_AGENT_MEM" "NEW_AGENT_OOM"
+        ONELENS_MEMORY_REQUEST="$_OUT_MEM"; ONELENS_MEMORY_LIMIT="$_OUT_MEM"
+        ONELENS_CPU_REQUEST="$_OUT_CPU"; ONELENS_CPU_LIMIT="$_OUT_CPU"
+
         # Summary
         if [ "$SIZING_CHANGES" -gt 0 ]; then
             echo "Usage-based sizing: $SIZING_CHANGES component(s) adjusted"
@@ -1753,31 +1766,14 @@ if [ -n "$_agent_oom_pod" ]; then
     fi
 fi
 
-# Strategy 2: if live-pod check found nothing, consult Job history.
-# Count recent agent Jobs (last 5) that failed with BackoffLimitExceeded —
-# the hallmark of pods repeatedly crashing until the Job gives up. This works
-# even after failed pods have been GC'd, because the Job resource retains
-# its failed count and conditions.
-if [ -z "$_agent_bump_reason" ]; then
-    # grep -c always emits a count to stdout (even on no match); just trust it
-    # and default to 0 if pipeline returns empty. The earlier `|| echo "0"`
-    # pattern would APPEND a second "0" line because grep -c outputs "0" then
-    # exits 1, triggering the fallback — yielding the literal string "0\n0".
-    _agent_failed_jobs=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
-        | grep -E '^onelens-agent-[0-9]' | tail -5 | grep -c 'Failed' 2>/dev/null)
-    _agent_failed_jobs=${_agent_failed_jobs:-0}
-    # Also look for OOMKilling events within the last window — retained even
-    # when pods are gone. Presence is corroborating evidence, not required.
-    _agent_oom_events=$(kubectl get events -n onelens-agent --no-headers 2>/dev/null \
-        | grep -iE 'OOMKill|OOMKilling' | grep -c 'onelens-agent-' 2>/dev/null)
-    _agent_oom_events=${_agent_oom_events:-0}
-    if [ "$_agent_failed_jobs" -ge 2 ] 2>/dev/null; then
-        _agent_bump_reason="chronic Job failures (GC'd pods)"
-        _agent_bump_evidence="failed_jobs=${_agent_failed_jobs}/5 oom_events=${_agent_oom_events}"
-    fi
-fi
+# Strategy 2 (Job-history fallback) removed in v2.1.68.
+# It caused false-positive bumps on 35+ clusters by counting historical Job failures
+# (not just current ones). Agent memory is now sized by the usage-based evaluation
+# engine (Prometheus container_memory_working_set_bytes over 72h), same as
+# Prometheus/KSM/OpenCost. Strategy 1 (live-pod OOM above) is kept for immediate
+# OOM response — usage-based handles steady-state right-sizing.
 
-# Apply the bump (same logic for both strategies)
+# Apply the bump (Strategy 1 only — live-pod OOM detection)
 if [ -n "$_agent_bump_reason" ]; then
     _agent_cur_mi=$(_memory_to_mi "$ONELENS_MEMORY_LIMIT")
     if [ "$_agent_cur_mi" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
@@ -3232,30 +3228,40 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
             echo "Agent CronJob backoffLimit patched" || echo "WARNING: Failed to patch agent backoffLimit"
     fi
 
-    # Check for agent pods stuck in Pending/ContainerCreating (volume attach, image pull, scheduling)
-    AGENT_STUCK_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -E "$AGENT_POD_PATTERN" \
-        | awk '$3 == "Pending" || $3 == "ContainerCreating" {print $1; exit}' || true)
-    if [ -n "$AGENT_STUCK_POD" ]; then
-        AGENT_STUCK_AGE=$(kubectl get pod "$AGENT_STUCK_POD" -n onelens-agent \
-            -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
-        AGENT_STUCK_SECS=""
-        if [ -n "$AGENT_STUCK_AGE" ]; then
-            AGENT_STUCK_SECS=$(seconds_since "$AGENT_STUCK_AGE")
+    # Clean up stuck/orphaned agent Jobs that block concurrencyPolicy: Forbid.
+    # With Forbid, the CronJob won't create a new Job while any previous Job is
+    # "active". An active Job whose pod is stuck (Pending, ImagePullBackOff, etc.)
+    # or whose pod was GC'd (orphaned Job) creates a permanent deadlock.
+    # The old code (v2.1.67) only checked for pods in Pending/ContainerCreating —
+    # missed ImagePullBackOff/Init states and orphaned Jobs entirely. This version
+    # checks Jobs first (via .status.active), then inspects the pod state. It
+    # deletes the JOB (not just the pod) to definitively clear the deadlock.
+    # NEVER deletes a Job whose pod is Running — safe for 30-45 min agent runs.
+    _active_agent_jobs=$(kubectl get jobs -n onelens-agent \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.active}{"\n"}{end}' 2>/dev/null \
+        | grep -E "^${AGENT_CJ_NAME}-[0-9]+ [1-9]" | awk '{print $1}' || true)
+    for _stuck_job in $_active_agent_jobs; do
+        _job_pod_line=$(kubectl get pods -n onelens-agent -l "job-name=$_stuck_job" --no-headers 2>/dev/null | head -1 || true)
+        _pod_name=$(echo "$_job_pod_line" | awk '{print $1}')
+        _pod_status=$(echo "$_job_pod_line" | awk '{print $3}')
+        if [ -z "$_job_pod_line" ]; then
+            echo "Orphaned agent Job $_stuck_job (no pod) — deleting to unblock CronJob"
+            kubectl delete job "$_stuck_job" -n onelens-agent 2>/dev/null || true
+        elif [ "$_pod_status" = "Running" ] || [ "$_pod_status" = "Completed" ]; then
+            : # Pod is healthy or done — leave alone
+        else
+            # Pod is in a stuck state (Pending, ImagePullBackOff, Init:*, ErrImagePull, etc.)
+            _pod_age_ts=$(kubectl get pod "$_pod_name" -n onelens-agent \
+                -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
+            _pod_age_secs=$(seconds_since "$_pod_age_ts" 2>/dev/null || echo "0")
+            if [ "$_pod_age_secs" -gt 600 ] 2>/dev/null; then
+                echo "Agent Job $_stuck_job stuck (pod=$_pod_name status=$_pod_status age=${_pod_age_secs}s) — deleting Job to unblock CronJob"
+                kubectl delete job "$_stuck_job" -n onelens-agent 2>/dev/null || true
+            else
+                echo "WARNING: Agent Job $_stuck_job pod=$_pod_name status=$_pod_status age=${_pod_age_secs}s — waiting (< 10 min threshold)"
+            fi
         fi
-        AGENT_STUCK_EVENTS=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$AGENT_STUCK_POD" --no-headers 2>/dev/null | tail -5 || true)
-        echo "WARNING: Agent pod stuck: $AGENT_STUCK_POD (${AGENT_STUCK_SECS:-?}s)"
-        if [ -n "$AGENT_STUCK_EVENTS" ]; then
-            echo "--- Agent stuck pod events ---"
-            echo "$AGENT_STUCK_EVENTS"
-            echo "--- end ---"
-        fi
-        # Delete if stuck > 10 min (hourly CronJob, can't afford to wait)
-        if [ -n "$AGENT_STUCK_SECS" ] && [ "$AGENT_STUCK_SECS" -gt 600 ] 2>/dev/null; then
-            echo "Agent pod stuck > 10 min — deleting to unblock CronJob"
-            kubectl delete pod "$AGENT_STUCK_POD" -n onelens-agent --grace-period=0 2>/dev/null || true
-        fi
-    fi
+    done
 
     # Check recent agent Job pods (last 3 jobs)
     AGENT_JOBS=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
@@ -3353,7 +3359,8 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                             echo "       Previous state: AGENT_CPU_LIMIT=${AGENT_CPU_LIMIT:-unset}"
                             echo "       May indicate CronJob corruption. Manual recovery required — contact support."
                         else
-                            _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='merge' --field-manager='Helm' -p="{
+                            # MUST use --type='strategic' — see updater patch comment.
+                            _agent_cpu_patch_err=$(kubectl patch cronjob "$AGENT_CJ_NAME" -n onelens-agent --type='strategic' --field-manager='Helm' -p="{
                               \"spec\":{\"jobTemplate\":{\"spec\":{\"template\":{\"spec\":{\"containers\":[{
                                 \"name\":\"$AGENT_CONTAINER_NAME\",
                                 \"image\":\"$AGENT_IMAGE\",
