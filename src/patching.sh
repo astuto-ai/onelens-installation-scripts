@@ -2637,6 +2637,24 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
         _should_trigger=true
     elif [ -z "$AGENT_LAST_SUCCESS" ]; then
         _should_trigger=true
+    else
+        # Staleness check: if the last successful agent Job completed > 2 hours ago,
+        # the agent is stale. The hourly CronJob should have produced a newer success
+        # but didn't — likely silent failures (OOM, scheduling, ResourceQuota).
+        # Trigger an immediate manual run to recover data freshness.
+        _last_success_job=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
+            | grep -E "$AGENT_POD_PATTERN" | grep 'Complete' | tail -1 | awk '{print $1}' || true)
+        if [ -n "$_last_success_job" ]; then
+            _last_success_ts=$(kubectl get job "$_last_success_job" -n onelens-agent \
+                -o jsonpath='{.status.completionTime}' 2>/dev/null || true)
+            if [ -n "$_last_success_ts" ]; then
+                _last_success_secs=$(seconds_since "$_last_success_ts" 2>/dev/null || echo "0")
+                if [ "$_last_success_secs" -gt 7200 ] 2>/dev/null; then
+                    _should_trigger=true
+                    echo "Agent data stale (last success ${_last_success_secs}s ago > 2h threshold)"
+                fi
+            fi
+        fi
     fi
 
     if [ "$_should_trigger" = "true" ]; then
