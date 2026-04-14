@@ -52,11 +52,12 @@ assert_eq "$(_eval_cpu "prom" "420Mi" "150m" "200000000" "0.08" "false" "false" 
 # 72h full evaluation (can downsize)
 ###############################################################################
 
-# Downsize: safety guard limits to max 50% reduction per cycle
-# 200MB * 1.35 = 258Mi, current = 1771Mi. 258Mi < 886Mi (50% of 1771) → blocked by safety guard
-# This is correct: severely over-provisioned clusters downsize gradually (50% per 72h cycle)
+# Downsize: gross over-provisioning override (v2.1.69)
+# 200MB * 1.35 = 258Mi, current = 1771Mi. 1771/258 = 6.9x → exceeds 3x threshold.
+# Override fires: proposed 258 < 50% of 1771 (886) → cut to 50% = 886 → rounded to 900Mi.
+# Before v2.1.69 this was blocked ("keep current"), now it forces a 50% step-down per cycle.
 assert_eq "$(_eval_mem "prom" "1771Mi" "150m" "200000000" "0.08" "false" "false" "true" "false" 1.35 1.25 150 4800 50 1200)" \
-    "1771Mi" "72h eval: safety guard limits severe downsize (258Mi < 50% of 1771Mi)"
+    "900Mi" "gross over-provision: 1771Mi → 900Mi (50% cut, 6.9x over actual usage)"
 
 # Moderate downsize allowed: within 50% safety guard
 # 400MB * 1.35 = 515Mi raw → rounded to 600Mi, current = 720Mi. 600Mi >= 360Mi (50% of 720) → allowed
@@ -68,10 +69,22 @@ assert_eq "$(_eval_mem "prom" "720Mi" "150m" "400000000" "0.08" "false" "false" 
 assert_eq "$(_eval_mem "prom" "720Mi" "150m" "1500000000" "0.08" "false" "false" "true" "false" 1.35 1.25 150 4800 50 1200)" \
     "2000Mi" "72h eval: upsize (2000Mi from 720Mi)"
 
-# Safety guard: refuse if new < 50% of current
+# Safety guard: refuse if new < 50% of current (NOT gross — 400/150 = 2.7x < 3x threshold)
 # 50MB * 1.35 = 65Mi → below floor 150Mi. 150Mi < 50% of 400Mi (200Mi) → blocked
+# Gross override doesn't fire (2.7x < 3x) → normal full-eval safety guard blocks.
 assert_eq "$(_eval_mem "prom" "400Mi" "150m" "50000000" "0.08" "false" "false" "true" "false" 1.35 1.25 150 4800 50 1200)" \
-    "400Mi" "72h eval: safety guard blocks (150Mi < 200Mi = 50% of 400Mi)"
+    "400Mi" "72h eval: safety guard blocks (150Mi < 200Mi = 50% of 400Mi, 2.7x < 3x)"
+
+# Gross over-provisioning on 5-min check (NOT full eval): forces downsize
+# 84MB * 1.35 = 108Mi → floor 384Mi. Current 8192Mi / 384Mi = 21x → override fires.
+# 384 < 50% of 8192 (4096) → cut to 50% = 4096 → rounded to 4100Mi.
+assert_eq "$(_eval_mem "test" "8192Mi" "600m" "88080384" "0.1" "false" "false" "false" "false" 1.35 1.25 384 8192 50 1200)" \
+    "4100Mi" "5-min gross override: 8192Mi → 4100Mi (50% cut, 21x over usage)"
+
+# Not grossly over-provisioned on 5-min (2x): normal upsize-only → no change
+# 400MB * 1.35 = 515Mi → floor stays at 515Mi. Current 800Mi / 515Mi = 1.6x < 3x → no override.
+assert_eq "$(_eval_mem "test" "800Mi" "200m" "419430400" "0.1" "false" "false" "false" "false" 1.35 1.25 384 8192 50 1200)" \
+    "800Mi" "5-min no override: 800Mi stays (1.6x < 3x threshold)"
 
 # CPU downsize on 72h eval
 # 0.04 cores * 1.25 = 50m, current = 150m → downsize to 50m
