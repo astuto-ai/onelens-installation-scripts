@@ -297,21 +297,20 @@ agent_oom_bad_assign=$(grep -E '_agent_term=\$\(kubectl' "$SRC_FILE" | grep -c '
 assert_eq "$agent_oom_bad_assign" "0" "src/patching.sh _agent_term assignment does not use containerStatuses[0]"
 
 ###############################################################################
-# Test 25: Agent OOM pre-helm detection has a Job-history fallback
-# On clusters with infrequent agent schedule (e.g., hourly), failed agent pods
-# get GC'd between runs, so the live-pod check misses them. v2.1.67 adds a
-# fallback that inspects kubectl get jobs for BackoffLimitExceeded / Failed
-# state, so auto-bump can fire even when no OOMed pod is currently visible.
+# Test 25: Strategy 2 (Job-history fallback) REMOVED in v2.1.68
+# It caused false-positive memory bumps on 35+ clusters. Agent memory is now
+# sized by the usage-based evaluation engine (Prometheus data), same as
+# Prometheus/KSM/OpenCost. Strategy 1 (live-pod OOM) is kept.
 ###############################################################################
-agent_fallback_jobs=$(grep -cE 'kubectl get jobs.*onelens-agent|_agent_failed_jobs' "$SRC_FILE" || true)
-assert_ge "$agent_fallback_jobs" "1" "src/patching.sh has Job-history fallback for agent OOM detection"
+strategy2_removed=$(grep -c '_agent_failed_jobs' "$SRC_FILE" || true)
+assert_eq "$strategy2_removed" "0" "src/patching.sh Strategy 2 (Job-history fallback) removed — no _agent_failed_jobs"
 
-agent_fallback_reason=$(grep -c '_agent_bump_reason' "$SRC_FILE" || true)
-assert_ge "$agent_fallback_reason" "3" "src/patching.sh agent OOM detection logs which strategy fired (live-pod vs job-history)"
+agent_usage_based=$(grep -c '_evaluate_and_log.*onelens-agent' "$SRC_FILE" || true)
+assert_ge "$agent_usage_based" "1" "src/patching.sh agent added to usage-based evaluation engine"
 
-# Bump threshold guard — ensure we require 2+ failed jobs (not 1), to reduce false positives
-agent_threshold=$(grep -c '_agent_failed_jobs.*-ge 2' "$SRC_FILE" || true)
-assert_ge "$agent_threshold" "1" "src/patching.sh agent Job-history fallback requires 2+ failed jobs"
+# Strategy 1 (live-pod OOM) is still present
+agent_strategy1=$(grep -c '_agent_bump_reason' "$SRC_FILE" || true)
+assert_ge "$agent_strategy1" "3" "src/patching.sh Strategy 1 (live-pod OOM) still present"
 
 ###############################################################################
 # Test 26: All other failed-pod / terminated.reason reads use name-selector
@@ -341,6 +340,44 @@ assert_ge "$agent_posthelm_exitcode_selector" "1" "src/patching.sh post-helm age
 # Only comments may reference the pattern (for documentation).
 active_containers_idx0=$(grep -v '^[[:space:]]*#' "$SRC_FILE" | grep -cE 'containers\[0\]\.(image|name|resources|restartCount)|containerStatuses\[0\]\.(state|lastState|restartCount)' || true)
 assert_eq "$active_containers_idx0" "0" "src/patching.sh has no active containers[0]/containerStatuses[0] reads in image/status/resource paths"
+
+###############################################################################
+# Test 27: Container-array kubectl patches use --type='strategic' (not 'merge')
+# JSON Merge Patch (--type=merge) treats arrays as opaque — REPLACES the entire
+# containers list, stripping env, command, args, volumeMounts. Strategic Merge
+# Patch merges by container name, preserving unspecified fields.
+# v2.1.65-v2.1.67 used --type=merge which caused browserstack-euc1-stag-001's
+# deployment_type env var to be stripped → entrypoint.sh crash.
+###############################################################################
+# Positive: --type='strategic' on container patches (multiline commands — check
+# that the line with --type='strategic' is a kubectl patch cronjob line)
+strategic_count=$(grep -c "type='strategic'" "$SRC_FILE" || true)
+assert_ge "$strategic_count" "2" "src/patching.sh has at least 2 --type='strategic' patches (updater + agent)"
+
+# Negative: no --type='merge' on kubectl patch lines that are near containers
+# (container patches are multiline; check that no kubectl patch with containers
+# nearby uses --type='merge' by checking the MUST-use-strategic comment is present)
+strategic_comment=$(grep -c "MUST use --type='strategic'" "$SRC_FILE" || true)
+assert_ge "$strategic_comment" "2" "src/patching.sh has MUST-use-strategic comments on both container patches"
+
+###############################################################################
+# Test 28: Stuck-Job cleanup uses Job-first detection (not pod-first)
+# v2.1.67 only checked pods (missed orphaned Jobs, ImagePullBackOff, Init:*).
+# v2.1.68 queries Jobs via .status.active, then checks pod via job-name label.
+# Deletes the JOB (not pod) to definitively unblock concurrencyPolicy:Forbid.
+###############################################################################
+stuck_job_label_selector=$(grep -c 'job-name=\$_stuck_job' "$SRC_FILE" || true)
+assert_ge "$stuck_job_label_selector" "1" "src/patching.sh stuck-Job cleanup uses job-name label to find pods"
+
+stuck_job_delete=$(grep -v '^[[:space:]]*#' "$SRC_FILE" | grep -c 'kubectl delete job.*_stuck_job' || true)
+assert_ge "$stuck_job_delete" "1" "src/patching.sh deletes stuck JOB (not pod) to unblock CronJob"
+
+orphan_detection=$(grep -c 'Orphaned agent Job' "$SRC_FILE" || true)
+assert_ge "$orphan_detection" "1" "src/patching.sh detects orphaned Jobs (no pod) for cleanup"
+
+# Old pod-deletion pattern removed
+old_stuck_pod_delete=$(grep -c 'kubectl delete pod.*AGENT_STUCK_POD' "$SRC_FILE" || true)
+assert_eq "$old_stuck_pod_delete" "0" "src/patching.sh old pod-deletion stuck cleanup removed"
 
 test_summary
 exit $?
