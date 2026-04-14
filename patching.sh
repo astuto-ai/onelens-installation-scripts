@@ -742,6 +742,35 @@ evaluate_container_sizing() {
     proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
     proposed_cpu=$(calculate_usage_cpu "$max_cpu_cores" "$cpu_buffer" "$cpu_floor" "$cpu_cap")
 
+    # Gross over-provisioning override: if current memory is more than 3x what
+    # Prometheus data suggests (with buffer), force a downsize even on 5-min
+    # checks — don't wait for the 72h full-eval cycle. This catches components
+    # that were false-bumped or newly added to the evaluation engine. The 50%
+    # safe-downsize guard still applies: if proposed < 50% of current, cut to
+    # 50% of current (rounded to nearest 100Mi). Multiple cycles converge.
+    if [ -n "$proposed_mem" ]; then
+        local _gop_cur_mi _gop_prop_mi
+        _gop_cur_mi=$(_memory_to_mi "$current_mem")
+        _gop_prop_mi=$(_memory_to_mi "$proposed_mem")
+        if [ "$_gop_cur_mi" -gt 0 ] && [ "$_gop_prop_mi" -gt 0 ] && \
+           [ "$_gop_cur_mi" -gt $((_gop_prop_mi * 3)) ] 2>/dev/null; then
+            if is_safe_downsize "$proposed_mem" "$current_mem"; then
+                new_mem="$proposed_mem"
+            else
+                # Proposed is < 50% of current. Cut to 50% (rounded to 100Mi).
+                local _half_mi=$(( (_gop_cur_mi / 2 + 99) / 100 * 100 ))
+                new_mem="${_half_mi}Mi"
+            fi
+            # CPU: also allow adjustment on gross override
+            if [ -n "$proposed_cpu" ]; then
+                new_cpu="$proposed_cpu"
+            fi
+            echo "MEM=$new_mem"
+            echo "CPU=$new_cpu"
+            return 0
+        fi
+    fi
+
     if [ "$is_full_eval" = "true" ]; then
         # Full 72h evaluation: can go up OR down
         if [ -n "$proposed_mem" ]; then
@@ -3432,6 +3461,24 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
         _should_trigger=true
     elif [ -z "$AGENT_LAST_SUCCESS" ]; then
         _should_trigger=true
+    else
+        # Staleness check: if the last successful agent Job completed > 2 hours ago,
+        # the agent is stale. The hourly CronJob should have produced a newer success
+        # but didn't — likely silent failures (OOM, scheduling, ResourceQuota).
+        # Trigger an immediate manual run to recover data freshness.
+        _last_success_job=$(kubectl get jobs -n onelens-agent --no-headers 2>/dev/null \
+            | grep -E "$AGENT_POD_PATTERN" | grep 'Complete' | tail -1 | awk '{print $1}' || true)
+        if [ -n "$_last_success_job" ]; then
+            _last_success_ts=$(kubectl get job "$_last_success_job" -n onelens-agent \
+                -o jsonpath='{.status.completionTime}' 2>/dev/null || true)
+            if [ -n "$_last_success_ts" ]; then
+                _last_success_secs=$(seconds_since "$_last_success_ts" 2>/dev/null || echo "0")
+                if [ "$_last_success_secs" -gt 7200 ] 2>/dev/null; then
+                    _should_trigger=true
+                    echo "Agent data stale (last success ${_last_success_secs}s ago > 2h threshold)"
+                fi
+            fi
+        fi
     fi
 
     if [ "$_should_trigger" = "true" ]; then
