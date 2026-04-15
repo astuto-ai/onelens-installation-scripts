@@ -51,7 +51,7 @@ Your Kubernetes clusters are automatically discovered and visible in the OneLens
 
 ```bash
 helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
-helm repo update && \
+helm repo update onelens && \
 helm upgrade --install onelensdeployer onelens/onelensdeployer \
   -n onelens-agent --create-namespace \
   --set job.env.CLUSTER_NAME=<cluster-name> \
@@ -372,7 +372,7 @@ Apply custom labels to OneLens resources. Useful for organizational policies tha
 To upgrade to a newer version:
 
 ```bash
-helm repo update
+helm repo update onelens
 helm upgrade onelensdeployer onelens/onelensdeployer \
   -n onelens-agent --reuse-values
 ```

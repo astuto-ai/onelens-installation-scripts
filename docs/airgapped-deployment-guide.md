@@ -210,7 +210,7 @@ Run the standard OneLens install command, pointing to your private registry inst
 **Standard install (for reference):**
 
 ```bash
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && helm repo update
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && helm repo update onelens
 helm upgrade --install onelensdeployer onelens/onelensdeployer \
   -n onelens-agent --create-namespace \
   --set job.env.CLUSTER_NAME=<cluster-name> \
