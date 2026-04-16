@@ -369,7 +369,10 @@ if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
     GPU_MONITORING_STATUS="cost_only"
     DCGM_PODS_OURS=$(kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-    DCGM_PODS_OTHER=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+    # Broad detection: check both standalone DCGM label and GPU Operator label
+    dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+    dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+    DCGM_PODS_OTHER=$(( dcgm_by_app > dcgm_by_operator ? dcgm_by_app : dcgm_by_operator ))
     DCGM_PODS_TOTAL=$((DCGM_PODS_OURS + DCGM_PODS_OTHER))
     if [ "$DCGM_PODS_TOTAL" -eq 0 ] 2>/dev/null; then
         echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
@@ -434,6 +437,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
   REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
+  GPU_ENABLED_OVERRIDE=$(_get '.["onelens-agent"].gpu.enabled')
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
@@ -500,6 +504,7 @@ else
   REGISTRATION_ID="${REGISTRATION_ID:-}"
   DEFAULT_CLUSTER_ID=""
   REGISTRY_URL=""
+  GPU_ENABLED_OVERRIDE=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   CUSTOMER_VALUES_FILE=""
@@ -967,6 +972,26 @@ if [ "$GPU_NODE_COUNT" -gt 0 ] && [ "$DCGM_PODS_TOTAL" -gt 0 ] 2>/dev/null && [ 
 fi
 if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
+fi
+
+# --- GPU Phase 2: resolve gpu.enabled for helm upgrade ---
+# Decides whether to deploy the DCGM exporter DaemonSet via the chart.
+# - Customer explicitly set "true" or "false" → respect it
+# - GPU nodes + customer-managed DCGM (outside onelens-agent ns) → false (don't conflict)
+# - GPU nodes + no customer DCGM → true (deploy ours)
+# - No GPU nodes → false
+GPU_ENABLED="false"
+if [ -n "${GPU_ENABLED_OVERRIDE:-}" ] && [ "$GPU_ENABLED_OVERRIDE" != "auto" ]; then
+    GPU_ENABLED="$GPU_ENABLED_OVERRIDE"
+    echo "GPU helm value: gpu.enabled=$GPU_ENABLED (customer override)"
+elif [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
+        GPU_ENABLED="false"
+        echo "GPU helm value: gpu.enabled=false (customer-managed DCGM detected)"
+    else
+        GPU_ENABLED="true"
+        echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+    fi
 fi
 
 # --- Agent OOM pre-helm detection ---
@@ -2243,6 +2268,101 @@ echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
 _report_milestone  # M7: helm-upgrade-start — all sizing done, about to apply
 eval "$HELM_CMD"
 UPGRADE_EXIT=$?
+
+# --- GPU Phase 2: deploy/cleanup DCGM exporter via kubectl (decoupled from helm) ---
+# Deployed separately so DCGM failures (PSA blocking SYS_ADMIN, image pull, etc.)
+# cannot block the main helm upgrade via --wait timeout.
+if [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "true" ]; then
+    DCGM_IMAGE="nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+    if [ -n "$REGISTRY_URL" ]; then
+        DCGM_IMAGE="$REGISTRY_URL/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+    fi
+    echo "Deploying DCGM exporter DaemonSet (image: $DCGM_IMAGE)"
+    if kubectl apply -n onelens-agent -f - <<DCGM_EOF 2>&1
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-dcgm-exporter
+  namespace: onelens-agent
+  labels:
+    app: nvidia-dcgm-exporter
+    managed-by: onelens
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app: nvidia-dcgm-exporter
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: dcgm-exporter
+          image: $DCGM_IMAGE
+          args: ["-f", "/etc/dcgm-exporter/dcp-metrics-included.csv"]
+          ports:
+            - name: metrics
+              containerPort: 9400
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 2Gi
+          securityContext:
+            capabilities:
+              add: ["SYS_ADMIN"]
+          env:
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+          volumeMounts:
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+      volumes:
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvidia-dcgm-exporter
+  namespace: onelens-agent
+  labels:
+    app: nvidia-dcgm-exporter
+    managed-by: onelens
+spec:
+  selector:
+    app: nvidia-dcgm-exporter
+  ports:
+    - name: gpu-metrics
+      port: 9400
+      targetPort: 9400
+DCGM_EOF
+    then
+        echo "DCGM exporter deployed successfully"
+    else
+        echo "WARNING: DCGM exporter deployment failed — GPU utilization monitoring unavailable"
+        echo "  This does not affect other OneLens components."
+        echo "  Common causes: Pod Security Admission blocking SYS_ADMIN or hostPath mounts."
+    fi
+elif [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "false" ]; then
+    # Clean up OneLens-managed DCGM if it was previously deployed but is no longer needed
+    # (e.g., customer installed their own DCGM, or GPU nodes were removed)
+    if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
+        echo "Cleaning up OneLens DCGM exporter (no longer needed)"
+        kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+        kubectl delete svc nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+    fi
+fi
 
 # Retry loop: if any pod OOMs after upgrade, bump that component and retry immediately
 while true; do

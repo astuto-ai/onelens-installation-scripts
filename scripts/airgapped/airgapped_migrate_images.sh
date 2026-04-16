@@ -218,6 +218,16 @@ else
     echo "  WARNING: Skipping pushgateway — could not determine tag."
 fi
 
+# dcgm-exporter (GPU monitoring — only deployed on GPU clusters)
+_repo="nvcr.io/nvidia/k8s/dcgm-exporter"
+_tag=$(grep 'dcgmExporter' "$_V" -A1 | grep 'image:' | head -1 | awk -F: '{print $NF}' | tr -d ' "' || true)
+if [ -z "$_tag" ]; then
+    _tag="3.3.9-3.6.1-ubuntu22.04"
+fi
+IMAGES="${IMAGES}
+${_repo}:${_tag} dcgm-exporter:${_tag}"
+echo "  dcgm-exporter: ${_repo}:${_tag}"
+
 # --- Mirror images ---
 echo ""
 echo "=== Mirroring images ==="

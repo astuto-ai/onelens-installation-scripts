@@ -63,6 +63,10 @@ onelens-agent:
     API_BASE_URL: "https://dev-api.onelens.cloud" # DON'T ADD TRAILING SLASH
     CLUSTER_TOKEN: "your-raw-token" # Don't encode
     REGISTRATION_ID: "your-raw-id" # Don't encode
+  gpu:
+    enabled: "false"
+    dcgmExporter:
+      image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
 prometheus:
   enabled: true
   rbac:

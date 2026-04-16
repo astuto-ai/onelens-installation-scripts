@@ -379,5 +379,47 @@ assert_ge "$orphan_detection" "1" "src/patching.sh detects orphaned Jobs (no pod
 old_stuck_pod_delete=$(grep -c 'kubectl delete pod.*AGENT_STUCK_POD' "$SRC_FILE" || true)
 assert_eq "$old_stuck_pod_delete" "0" "src/patching.sh old pod-deletion stuck cleanup removed"
 
+# ---------------------------------------------------------------------------
+# GPU Phase 2: chart values and template tests
+# ---------------------------------------------------------------------------
+
+# globalvalues.yaml has gpu section under onelens-agent (for customer opt-out signaling)
+gv_gpu=$(grep -c 'gpu:' "$ROOT/globalvalues.yaml" || true)
+assert_gt "$gv_gpu" "0" "globalvalues.yaml has gpu section"
+
+gv_gpu_enabled=$(grep 'enabled: "false"' "$ROOT/globalvalues.yaml" | grep -v '#' | head -1)
+assert_ne "$gv_gpu_enabled" "" "globalvalues.yaml has gpu.enabled: false (safe default)"
+
+# GPU_ENABLED logic is in built patching.sh
+built_gpu_enabled=$(grep -c 'GPU_ENABLED=' "$OUT_FILE" || true)
+assert_gt "$built_gpu_enabled" "0" "built patching.sh has GPU_ENABLED resolution logic"
+
+# DCGM is deployed via kubectl apply (not helm) in built patching.sh
+built_dcgm_kubectl=$(grep -c 'kubectl apply.*DCGM_EOF' "$OUT_FILE" || true)
+assert_gt "$built_dcgm_kubectl" "0" "built patching.sh deploys DCGM via kubectl apply"
+
+# DCGM deployment is non-fatal in built patching.sh
+built_dcgm_nonfatal=$(grep -c 'WARNING.*DCGM.*failed' "$OUT_FILE" || true)
+assert_gt "$built_dcgm_nonfatal" "0" "built patching.sh DCGM failure is non-fatal"
+
+# No --set gpu.enabled in built patching.sh (decoupled from helm)
+built_gpu_helm_set=$(grep 'onelens-agent.gpu.enabled' "$OUT_FILE" | grep -c '\-\-set' || true)
+assert_eq "$built_gpu_helm_set" "0" "built patching.sh does NOT pass gpu.enabled to helm"
+
+# DCGM image is from nvcr.io (NVIDIA's registry) in built patching.sh
+built_dcgm_img=$(grep 'nvcr.io/nvidia.*dcgm-exporter' "$OUT_FILE" | head -1)
+assert_ne "$built_dcgm_img" "" "built patching.sh DCGM image is from nvcr.io"
+
+# DCGM template should NOT exist in adjacent agent chart (deployed via kubectl, not helm)
+AGENT_CHART_DIR="$ROOT/../onelens-agent/helm-chart/onelens-agent-base"
+if [ -d "$AGENT_CHART_DIR" ]; then
+    dcgm_template_exists=$(ls "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" 2>/dev/null && echo "1" || echo "0")
+    assert_eq "$dcgm_template_exists" "0" "dcgm-exporter.yaml template does NOT exist in agent chart (decoupled)"
+    agent_values_gpu=$(grep -c 'gpu:' "$AGENT_CHART_DIR/values.yaml" || true)
+    assert_gt "$agent_values_gpu" "0" "agent-base chart values.yaml has gpu section (for opt-out)"
+else
+    echo "  SKIP: onelens-agent repo not adjacent — skipping chart template tests"
+fi
+
 test_summary
 exit $?

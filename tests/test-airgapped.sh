@@ -56,6 +56,7 @@ assert_gt "$patching_persist" "0" "patching.sh re-persists REGISTRY_URL in helm 
 # ---------------------------------------------------------------------------
 # Test 8: Exactly 11 image override flags per script
 # 7 image overrides (some need both registry + repository) + 1 REGISTRY_URL persistence = 11
+# DCGM image is NOT in the helm air-gapped section — it's handled separately via kubectl apply.
 # Components using {registry}/{repository}:{tag} (KSM, OpenCost, kube-rbac-proxy)
 # need both registry and repository overridden to flatten the ECR path.
 # Count all --set lines inside the air-gapped if-block (between REGISTRY_URL check and fi).
