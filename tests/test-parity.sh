@@ -424,5 +424,23 @@ patching_dcgm_airgap=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/src/pat
 assert_gt "$install_dcgm_airgap" "0" "install.sh has air-gapped DCGM image override"
 assert_gt "$patching_dcgm_airgap" "0" "patching.sh has air-gapped DCGM image override"
 
+# Test 51: Both scripts discover GPU node label dynamically (not hardcoded nodeSelector)
+install_label_discovery=$(grep -c 'GPU_NODE_LABEL_KEY' "$ROOT/install.sh" || true)
+patching_label_discovery=$(grep -c 'GPU_NODE_LABEL_KEY' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_label_discovery" "0" "install.sh uses dynamic GPU_NODE_LABEL_KEY"
+assert_gt "$patching_label_discovery" "0" "patching.sh uses dynamic GPU_NODE_LABEL_KEY"
+
+# Test 52: Both scripts use nodeAffinity (not nodeSelector) in DCGM manifest
+install_affinity=$(sed -n '/DCGM_EOF/,/DCGM_EOF/p' "$ROOT/install.sh" | grep -c 'nodeAffinity' || true)
+patching_affinity=$(sed -n '/DCGM_EOF/,/DCGM_EOF/p' "$ROOT/src/patching.sh" | grep -c 'nodeAffinity' || true)
+assert_gt "$install_affinity" "0" "install.sh DCGM uses nodeAffinity"
+assert_gt "$patching_affinity" "0" "patching.sh DCGM uses nodeAffinity"
+
+# Test 53: Both scripts use prefix-based nvidia.com/gpu label search
+install_prefix=$(grep -c 'startswith("nvidia.com/gpu")' "$ROOT/install.sh" || true)
+patching_prefix=$(grep -c 'startswith("nvidia.com/gpu")' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_prefix" "0" "install.sh uses prefix search for nvidia.com/gpu labels"
+assert_gt "$patching_prefix" "0" "patching.sh uses prefix search for nvidia.com/gpu labels"
+
 test_summary
 exit $?
