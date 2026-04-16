@@ -314,5 +314,55 @@ patching_image_idx0=$(grep -v '^[[:space:]]*#' "$ROOT/src/patching.sh" | grep -c
 assert_eq "$install_image_idx0" "0" "install.sh has no containers[0].image reads (sidecar safety)"
 assert_eq "$patching_image_idx0" "0" "patching.sh has no containers[0].image reads (sidecar safety)"
 
+# ---------------------------------------------------------------------------
+# Test 36: GPU detection Stage 1 code matches between scripts
+# Both scripts must initialize the same GPU variables and use the same
+# kubectl + awk pipeline for node counting and DCGM pod detection.
+# ---------------------------------------------------------------------------
+install_gpu_vars=$(grep -E '^(GPU_NODE_COUNT|TOTAL_GPU_COUNT|GPU_MONITORING_STATUS|DCGM_PODS_OURS|DCGM_PODS_OTHER|DCGM_PODS_TOTAL)=' "$ROOT/install.sh" | sed 's/^[[:space:]]*//' | sort)
+patching_gpu_vars=$(grep -E '^(GPU_NODE_COUNT|TOTAL_GPU_COUNT|GPU_MONITORING_STATUS|DCGM_PODS_OURS|DCGM_PODS_OTHER|DCGM_PODS_TOTAL)=' "$ROOT/src/patching.sh" | sed 's/^[[:space:]]*//' | sort)
+assert_ne "$install_gpu_vars" "" "install.sh initializes GPU detection variables"
+assert_eq "$install_gpu_vars" "$patching_gpu_vars" "GPU detection variable initializations match"
+
+# ---------------------------------------------------------------------------
+# Test 37: Both scripts detect DCGM pods in onelens-agent namespace
+# ---------------------------------------------------------------------------
+install_dcgm_ours=$(grep -c 'kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter' "$ROOT/install.sh" || true)
+patching_dcgm_ours=$(grep -c 'kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_dcgm_ours" "0" "install.sh checks for DCGM pods in onelens-agent namespace"
+assert_gt "$patching_dcgm_ours" "0" "patching.sh checks for DCGM pods in onelens-agent namespace"
+
+# ---------------------------------------------------------------------------
+# Test 38: Both scripts detect DCGM pods cluster-wide
+# ---------------------------------------------------------------------------
+install_dcgm_all=$(grep -c 'kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter' "$ROOT/install.sh" || true)
+patching_dcgm_all=$(grep -c 'kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_dcgm_all" "0" "install.sh checks for DCGM pods cluster-wide"
+assert_gt "$patching_dcgm_all" "0" "patching.sh checks for DCGM pods cluster-wide"
+
+# ---------------------------------------------------------------------------
+# Test 39: Both scripts emit GPU_MONITORING_STATUS log line
+# ---------------------------------------------------------------------------
+install_status_log=$(grep -c 'echo "GPU_MONITORING_STATUS=' "$ROOT/install.sh" || true)
+patching_status_log=$(grep -c 'echo "GPU_MONITORING_STATUS=' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_status_log" "0" "install.sh emits GPU_MONITORING_STATUS log line"
+assert_gt "$patching_status_log" "0" "patching.sh emits GPU_MONITORING_STATUS log line"
+
+# ---------------------------------------------------------------------------
+# Test 40: Only patching.sh has Prometheus PROF metric check (Stage 2)
+# install.sh has no Prometheus at install time — intentional difference.
+# ---------------------------------------------------------------------------
+patching_prof_check=$(grep -c 'DCGM_FI_PROF_GR_ENGINE_ACTIVE' "$ROOT/src/patching.sh" || true)
+install_prof_check=$(grep -c 'DCGM_FI_PROF_GR_ENGINE_ACTIVE' "$ROOT/install.sh" || true)
+assert_gt "$patching_prof_check" "0" "patching.sh has Stage 2 Prometheus PROF metric check"
+assert_eq "$install_prof_check" "0" "install.sh does NOT have Prometheus PROF check (no Prometheus at install time)"
+
+# ---------------------------------------------------------------------------
+# Test 41: Patching.sh Stage 2 guards on PROM_QUERY_URL
+# Prometheus may not be available — Stage 2 must not run if PROM_QUERY_URL is empty.
+# ---------------------------------------------------------------------------
+patching_prom_guard=$(grep 'DCGM_PODS_TOTAL' "$ROOT/src/patching.sh" | grep -c 'PROM_QUERY_URL' || true)
+assert_gt "$patching_prom_guard" "0" "patching.sh Stage 2 guards on PROM_QUERY_URL availability"
+
 test_summary
 exit $?
