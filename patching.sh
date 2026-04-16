@@ -1207,6 +1207,34 @@ if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     else
         echo "DCGM exporter: $DCGM_PODS_OURS pods (in onelens-agent namespace)"
     fi
+
+    # Discover GPU node label for DCGM DaemonSet scheduling.
+    # Different clusters use different labels: NFD sets nvidia.com/gpu.present,
+    # some AMIs set it too, GKE uses cloud.google.com/gke-accelerator, etc.
+    # We check a priority list and use the first match.
+    GPU_NODE_LABEL_KEY=""
+    _gpu_node_name=$(kubectl get nodes --chunk-size=100 -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null | awk '$2 != "<none>" && $2+0 > 0 {print $1; exit}' || true)
+    if [ -n "$_gpu_node_name" ]; then
+        _gpu_node_json=$(kubectl get node "$_gpu_node_name" -o json 2>/dev/null || true)
+        # Search for any label starting with nvidia.com/gpu (covers all NVIDIA conventions)
+        GPU_NODE_LABEL_KEY=$(echo "$_gpu_node_json" | jq -r '.metadata.labels | keys[] | select(startswith("nvidia.com/gpu"))' 2>/dev/null | head -1 || true)
+        # Fallback: cloud-specific labels
+        if [ -z "$GPU_NODE_LABEL_KEY" ]; then
+            for _label in "feature.node.kubernetes.io/pci-10de.present" "cloud.google.com/gke-accelerator"; do
+                _val=$(echo "$_gpu_node_json" | jq -r --arg l "$_label" '.metadata.labels[$l] // empty' 2>/dev/null || true)
+                if [ -n "$_val" ]; then
+                    GPU_NODE_LABEL_KEY="$_label"
+                    break
+                fi
+            done
+        fi
+        if [ -n "$GPU_NODE_LABEL_KEY" ]; then
+            echo "GPU node label: $GPU_NODE_LABEL_KEY (from node $_gpu_node_name)"
+        else
+            echo "WARNING: GPU nodes detected but no GPU scheduling label found on node $_gpu_node_name"
+            echo "  DCGM exporter cannot be deployed. GPU cost metrics still work."
+        fi
+    fi
 fi
 
 # --- Resource tier selection ---
@@ -3096,12 +3124,12 @@ UPGRADE_EXIT=$?
 # --- GPU Phase 2: deploy/cleanup DCGM exporter via kubectl (decoupled from helm) ---
 # Deployed separately so DCGM failures (PSA blocking SYS_ADMIN, image pull, etc.)
 # cannot block the main helm upgrade via --wait timeout.
-if [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "true" ]; then
+if [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "true" ] && [ -n "$GPU_NODE_LABEL_KEY" ]; then
     DCGM_IMAGE="nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
     if [ -n "$REGISTRY_URL" ]; then
         DCGM_IMAGE="$REGISTRY_URL/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
     fi
-    echo "Deploying DCGM exporter DaemonSet (image: $DCGM_IMAGE)"
+    echo "Deploying DCGM exporter DaemonSet (label: $GPU_NODE_LABEL_KEY, image: $DCGM_IMAGE)"
     if kubectl apply -n onelens-agent -f - <<DCGM_EOF 2>&1
 apiVersion: apps/v1
 kind: DaemonSet
@@ -3120,8 +3148,13 @@ spec:
       labels:
         app: nvidia-dcgm-exporter
     spec:
-      nodeSelector:
-        nvidia.com/gpu.present: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: $GPU_NODE_LABEL_KEY
+                    operator: Exists
       tolerations:
         - operator: Exists
       containers:

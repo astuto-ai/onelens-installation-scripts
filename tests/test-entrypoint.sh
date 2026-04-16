@@ -220,9 +220,13 @@ assert_gt "$dcgm_label_guard" "0" "entrypoint.sh DCGM cleanup uses managed-by=on
 dcgm_airgap=$(grep -c 'onelens-agent-env.*REGISTRY_URL' "$ENTRYPOINT" || true)
 assert_gt "$dcgm_airgap" "0" "entrypoint.sh reads REGISTRY_URL from ConfigMap for air-gapped"
 
-# DCGM manifest has nodeSelector for GPU nodes
-dcgm_nodeselector=$(sed -n '/DCGM_EOF/,/DCGM_EOF/p' "$ENTRYPOINT" | grep -c 'nvidia.com/gpu.present' || true)
-assert_gt "$dcgm_nodeselector" "0" "entrypoint.sh DCGM manifest has GPU nodeSelector"
+# DCGM manifest uses nodeAffinity with dynamic label (not hardcoded nodeSelector)
+dcgm_affinity=$(sed -n '/DCGM_EOF/,/DCGM_EOF/p' "$ENTRYPOINT" | grep -c 'nodeAffinity' || true)
+assert_gt "$dcgm_affinity" "0" "entrypoint.sh DCGM manifest uses nodeAffinity"
+
+# DCGM label discovery uses prefix search for nvidia.com/gpu labels
+dcgm_label_discovery=$(grep -c 'startswith("nvidia.com/gpu")' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_label_discovery" "0" "entrypoint.sh discovers GPU label dynamically via prefix search"
 
 ###############################################################################
 # Summary
