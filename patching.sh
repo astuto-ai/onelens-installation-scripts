@@ -1289,7 +1289,9 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
   REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
-  GPU_ENABLED_OVERRIDE=$(_get '.["onelens-agent"].gpu.enabled')
+  # Read gpu.enabled WITHOUT -a flag — only user-supplied values, not chart defaults.
+  # The chart default is "false" which would be mistaken for a customer override with -a.
+  GPU_ENABLED_OVERRIDE=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.["onelens-agent"].gpu.enabled // empty' 2>/dev/null || true)
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
