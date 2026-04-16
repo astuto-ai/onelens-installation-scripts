@@ -374,24 +374,24 @@ patching_gpu_enabled_init=$(grep -c '^GPU_ENABLED="false"' "$ROOT/src/patching.s
 assert_gt "$install_gpu_enabled_init" "0" "install.sh initializes GPU_ENABLED"
 assert_gt "$patching_gpu_enabled_init" "0" "patching.sh initializes GPU_ENABLED"
 
-# Test 43: Both scripts pass --set-string gpu.enabled to helm
-install_gpu_set=$(grep -c '\-\-set-string onelens-agent.gpu.enabled' "$ROOT/install.sh" || true)
-patching_gpu_set=$(grep -c '\-\-set-string onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_gpu_set" "0" "install.sh passes --set-string gpu.enabled to helm"
-assert_gt "$patching_gpu_set" "0" "patching.sh passes --set-string gpu.enabled to helm"
+# Test 43: DCGM is deployed via kubectl apply, NOT via helm --set
+# This ensures DCGM failures cannot block helm --wait and cascade to all components
+install_dcgm_kubectl=$(grep -c 'kubectl apply.*DCGM_EOF' "$ROOT/install.sh" || true)
+patching_dcgm_kubectl=$(grep -c 'kubectl apply.*DCGM_EOF' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_dcgm_kubectl" "0" "install.sh deploys DCGM via kubectl apply (not helm)"
+assert_gt "$patching_dcgm_kubectl" "0" "patching.sh deploys DCGM via kubectl apply (not helm)"
 
-# Test 44: Both scripts use --set-string (not --set) for gpu.enabled
-# Using --set would convert "false" to Go boolean, breaking the template ne comparison
-install_gpu_plain_set=$(grep 'onelens-agent.gpu.enabled' "$ROOT/install.sh" | grep -cv '\-\-set-string' || true)
-patching_gpu_plain_set=$(grep 'onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" | grep -cv '\-\-set-string' || true)
-assert_eq "$install_gpu_plain_set" "0" "install.sh does not use --set (plain) for gpu.enabled"
-assert_eq "$patching_gpu_plain_set" "0" "patching.sh does not use --set (plain) for gpu.enabled"
+# Test 44: Neither script passes gpu.enabled to helm (decoupled)
+install_gpu_helm=$(grep 'onelens-agent.gpu.enabled' "$ROOT/install.sh" | grep -c '\-\-set' || true)
+patching_gpu_helm=$(grep 'onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" | grep -c '\-\-set' || true)
+assert_eq "$install_gpu_helm" "0" "install.sh does NOT pass gpu.enabled to helm"
+assert_eq "$patching_gpu_helm" "0" "patching.sh does NOT pass gpu.enabled to helm"
 
-# Test 45: Both scripts have DCGM image override in air-gapped section
-install_dcgm_airgap=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/install.sh" | grep -c 'dcgm-exporter' || true)
-patching_dcgm_airgap=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/src/patching.sh" | grep -c 'dcgm-exporter' || true)
-assert_gt "$install_dcgm_airgap" "0" "install.sh has DCGM image override in air-gapped section"
-assert_gt "$patching_dcgm_airgap" "0" "patching.sh has DCGM image override in air-gapped section"
+# Test 45: Both scripts have DCGM image from nvcr.io (NVIDIA's registry) in kubectl apply block
+install_dcgm_img=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/install.sh" | grep -c 'nvcr.io/nvidia' || true)
+patching_dcgm_img=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/src/patching.sh" | grep -c 'nvcr.io/nvidia' || true)
+assert_gt "$install_dcgm_img" "0" "install.sh DCGM image is from nvcr.io"
+assert_gt "$patching_dcgm_img" "0" "patching.sh DCGM image is from nvcr.io"
 
 # Test 46: Both scripts check DCGM_PODS_OTHER in the GPU_ENABLED resolution block
 install_pods_other_check=$(sed -n '/GPU Phase 2: resolve gpu.enabled/,/^$/p' "$ROOT/install.sh" | grep -c 'DCGM_PODS_OTHER' || true)
@@ -405,6 +405,24 @@ patching_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/src/patching.sh" |
 install_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/install.sh" || true)
 assert_gt "$patching_gpu_override" "0" "patching.sh reads GPU_ENABLED_OVERRIDE from existing release"
 assert_eq "$install_gpu_override" "0" "install.sh does NOT read GPU_ENABLED_OVERRIDE (fresh install)"
+
+# Test 48: Both scripts detect GPU Operator DCGM (app.kubernetes.io/component label)
+install_gpu_operator=$(grep -c 'app.kubernetes.io/component=dcgm-exporter' "$ROOT/install.sh" || true)
+patching_gpu_operator=$(grep -c 'app.kubernetes.io/component=dcgm-exporter' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_gpu_operator" "0" "install.sh detects GPU Operator-managed DCGM"
+assert_gt "$patching_gpu_operator" "0" "patching.sh detects GPU Operator-managed DCGM"
+
+# Test 49: Both scripts have non-fatal DCGM deployment (WARNING on failure, not exit)
+install_dcgm_nonfatal=$(sed -n '/GPU Phase 2: deploy/,/^fi$/p' "$ROOT/install.sh" | grep -c 'WARNING.*DCGM.*failed' || true)
+patching_dcgm_nonfatal=$(sed -n '/GPU Phase 2: deploy/,/^fi$/p' "$ROOT/src/patching.sh" | grep -c 'WARNING.*DCGM.*failed' || true)
+assert_gt "$install_dcgm_nonfatal" "0" "install.sh DCGM failure is non-fatal (WARNING)"
+assert_gt "$patching_dcgm_nonfatal" "0" "patching.sh DCGM failure is non-fatal (WARNING)"
+
+# Test 50: Both scripts have air-gapped DCGM image override in kubectl apply block
+install_dcgm_airgap=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/install.sh" | grep -c 'REGISTRY_URL' || true)
+patching_dcgm_airgap=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/src/patching.sh" | grep -c 'REGISTRY_URL' || true)
+assert_gt "$install_dcgm_airgap" "0" "install.sh has air-gapped DCGM image override"
+assert_gt "$patching_dcgm_airgap" "0" "patching.sh has air-gapped DCGM image override"
 
 test_summary
 exit $?

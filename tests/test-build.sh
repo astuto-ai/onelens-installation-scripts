@@ -383,46 +383,40 @@ assert_eq "$old_stuck_pod_delete" "0" "src/patching.sh old pod-deletion stuck cl
 # GPU Phase 2: chart values and template tests
 # ---------------------------------------------------------------------------
 
-# globalvalues.yaml has gpu section under onelens-agent
+# globalvalues.yaml has gpu section under onelens-agent (for customer opt-out signaling)
 gv_gpu=$(grep -c 'gpu:' "$ROOT/globalvalues.yaml" || true)
 assert_gt "$gv_gpu" "0" "globalvalues.yaml has gpu section"
 
 gv_gpu_enabled=$(grep 'enabled: "false"' "$ROOT/globalvalues.yaml" | grep -v '#' | head -1)
 assert_ne "$gv_gpu_enabled" "" "globalvalues.yaml has gpu.enabled: false (safe default)"
 
-gv_dcgm_image=$(grep -c 'dcgm-exporter' "$ROOT/globalvalues.yaml" || true)
-assert_gt "$gv_dcgm_image" "0" "globalvalues.yaml has DCGM exporter image"
-
-# wrapper chart values.yaml has gpu section
-cv_gpu=$(grep -c 'gpu:' "$ROOT/charts/onelens-agent/values.yaml" || true)
-assert_gt "$cv_gpu" "0" "wrapper chart values.yaml has gpu section"
-
-cv_gpu_enabled=$(grep 'enabled: "false"' "$ROOT/charts/onelens-agent/values.yaml" | grep -v '#' | head -1)
-assert_ne "$cv_gpu_enabled" "" "wrapper chart values.yaml has gpu.enabled: false (safe default)"
-
 # GPU_ENABLED logic is in built patching.sh
 built_gpu_enabled=$(grep -c 'GPU_ENABLED=' "$OUT_FILE" || true)
 assert_gt "$built_gpu_enabled" "0" "built patching.sh has GPU_ENABLED resolution logic"
 
-built_gpu_set=$(grep -c 'set-string onelens-agent.gpu.enabled' "$OUT_FILE" || true)
-assert_gt "$built_gpu_set" "0" "built patching.sh passes --set-string gpu.enabled to helm"
+# DCGM is deployed via kubectl apply (not helm) in built patching.sh
+built_dcgm_kubectl=$(grep -c 'kubectl apply.*DCGM_EOF' "$OUT_FILE" || true)
+assert_gt "$built_dcgm_kubectl" "0" "built patching.sh deploys DCGM via kubectl apply"
 
-# DCGM template exists in adjacent agent repo (if present)
+# DCGM deployment is non-fatal in built patching.sh
+built_dcgm_nonfatal=$(grep -c 'WARNING.*DCGM.*failed' "$OUT_FILE" || true)
+assert_gt "$built_dcgm_nonfatal" "0" "built patching.sh DCGM failure is non-fatal"
+
+# No --set gpu.enabled in built patching.sh (decoupled from helm)
+built_gpu_helm_set=$(grep 'onelens-agent.gpu.enabled' "$OUT_FILE" | grep -c '\-\-set' || true)
+assert_eq "$built_gpu_helm_set" "0" "built patching.sh does NOT pass gpu.enabled to helm"
+
+# DCGM image is from nvcr.io (NVIDIA's registry) in built patching.sh
+built_dcgm_img=$(grep 'nvcr.io/nvidia.*dcgm-exporter' "$OUT_FILE" | head -1)
+assert_ne "$built_dcgm_img" "" "built patching.sh DCGM image is from nvcr.io"
+
+# DCGM template should NOT exist in adjacent agent chart (deployed via kubectl, not helm)
 AGENT_CHART_DIR="$ROOT/../onelens-agent/helm-chart/onelens-agent-base"
 if [ -d "$AGENT_CHART_DIR" ]; then
-    assert_file_exists "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" "dcgm-exporter.yaml template exists in agent chart"
-    dcgm_node_selector=$(grep -c 'nvidia.com/gpu.present' "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" || true)
-    assert_gt "$dcgm_node_selector" "0" "DCGM template has GPU nodeSelector"
-    dcgm_toleration=$(grep -c 'operator: Exists' "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" || true)
-    assert_gt "$dcgm_toleration" "0" "DCGM template has wildcard toleration"
-    dcgm_service_label=$(grep 'app: nvidia-dcgm-exporter' "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" | head -1)
-    assert_ne "$dcgm_service_label" "" "DCGM template has app label matching Prometheus scrape config"
-    dcgm_port_name=$(grep -c 'gpu-metrics' "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" || true)
-    assert_gt "$dcgm_port_name" "0" "DCGM Service port name matches Prometheus scrape config"
-    dcgm_condition=$(grep -c 'ne .Values.gpu.enabled "false"' "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" || true)
-    assert_gt "$dcgm_condition" "0" "DCGM template is conditional on gpu.enabled"
+    dcgm_template_exists=$(ls "$AGENT_CHART_DIR/templates/dcgm-exporter.yaml" 2>/dev/null && echo "1" || echo "0")
+    assert_eq "$dcgm_template_exists" "0" "dcgm-exporter.yaml template does NOT exist in agent chart (decoupled)"
     agent_values_gpu=$(grep -c 'gpu:' "$AGENT_CHART_DIR/values.yaml" || true)
-    assert_gt "$agent_values_gpu" "0" "agent-base chart values.yaml has gpu section"
+    assert_gt "$agent_values_gpu" "0" "agent-base chart values.yaml has gpu section (for opt-out)"
 else
     echo "  SKIP: onelens-agent repo not adjacent — skipping chart template tests"
 fi
