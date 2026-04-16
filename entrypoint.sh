@@ -98,10 +98,11 @@ elif [ "$deployment_type" = "cronjob" ]; then
     UNHEALTHY_REASONS=""
 
     # Check 1: All pods Running and Ready
-    # Filter out terminal job/cronjob pods (Completed, Error) — these are not long-running
-    # workloads and should not trigger remediation.
+    # Filter out terminal job/cronjob pods (Completed, Error) and DCGM exporter pods.
+    # DCGM is a monitoring sidecar — its failures (PSA, image pull) should not
+    # trigger full patching.sh remediation for core components.
     NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | grep -vE 'Completed|Error|Terminating' \
+        | grep -vE 'Completed|Error|Terminating|nvidia-dcgm-exporter' \
         | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1 " (" $3 ")"}' || true)
     if [ -n "$NOT_READY" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pods not ready: ${NOT_READY}\n"
@@ -158,6 +159,109 @@ elif [ "$deployment_type" = "cronjob" ]; then
         curl -s --max-time 10 --location --request PUT "${API_ENDPOINT}/v1/kubernetes/cluster-version" \
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null 2>&1 || true
+
+        # --- GPU: DCGM exporter lifecycle (runs every healthcheck cycle) ---
+        # Ensures DCGM DaemonSet exists when GPU nodes are present. Once deployed,
+        # the DaemonSet controller handles spot/scale churn automatically.
+        # Non-fatal — failures don't affect healthcheck result.
+        _gpu_caps=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
+        _gpu_node_count=0
+        if [ -n "$_gpu_caps" ]; then
+            _gpu_node_count=$(echo "$_gpu_caps" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
+        fi
+        if [ "$_gpu_node_count" -gt 0 ]; then
+            # Check for customer-managed DCGM (standalone + GPU Operator labels)
+            _dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+            _dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+            _dcgm_other=$(( _dcgm_by_app > _dcgm_by_operator ? _dcgm_by_app : _dcgm_by_operator ))
+            if [ "$_dcgm_other" -eq 0 ]; then
+                # No customer DCGM — ensure ours exists
+                if ! kubectl get ds nvidia-dcgm-exporter -n onelens-agent --no-headers 2>/dev/null | grep -q .; then
+                    _registry_url=$(kubectl get cm onelens-agent-env -n onelens-agent -o jsonpath='{.data.REGISTRY_URL}' 2>/dev/null || true)
+                    _dcgm_image="nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+                    if [ -n "$_registry_url" ]; then
+                        _dcgm_image="$_registry_url/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+                    fi
+                    echo "GPU: deploying DCGM exporter ($_gpu_node_count GPU nodes detected)"
+                    kubectl apply -n onelens-agent -f - <<DCGM_EOF 2>&1 || echo "  WARNING: DCGM deploy failed (non-fatal)"
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-dcgm-exporter
+  namespace: onelens-agent
+  labels:
+    app: nvidia-dcgm-exporter
+    managed-by: onelens
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app: nvidia-dcgm-exporter
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: dcgm-exporter
+          image: $_dcgm_image
+          args: ["-f", "/etc/dcgm-exporter/dcp-metrics-included.csv"]
+          ports:
+            - name: metrics
+              containerPort: 9400
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 2Gi
+          securityContext:
+            capabilities:
+              add: ["SYS_ADMIN"]
+          env:
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+          volumeMounts:
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+      volumes:
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvidia-dcgm-exporter
+  namespace: onelens-agent
+  labels:
+    app: nvidia-dcgm-exporter
+    managed-by: onelens
+spec:
+  selector:
+    app: nvidia-dcgm-exporter
+  ports:
+    - name: gpu-metrics
+      port: 9400
+      targetPort: 9400
+DCGM_EOF
+                fi
+            fi
+        else
+            # No GPU nodes — clean up our DCGM if it exists
+            if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
+                echo "GPU: cleaning up DCGM exporter (no GPU nodes)"
+                kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+                kubectl delete svc nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+            fi
+        fi
 
         exit 0
     fi

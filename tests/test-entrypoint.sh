@@ -187,6 +187,44 @@ else
 fi
 
 ###############################################################################
+# GPU: DCGM lifecycle in healthcheck
+###############################################################################
+
+# DCGM pods excluded from NOT_READY health check
+dcgm_excluded=$(sed -n '/NOT_READY=/,/|| true)/p' "$ENTRYPOINT" | grep -c 'nvidia-dcgm-exporter' || true)
+assert_gt "$dcgm_excluded" "0" "entrypoint.sh excludes DCGM pods from NOT_READY health check"
+
+# DCGM lifecycle block exists in healthcheck healthy path
+dcgm_lifecycle=$(grep -c 'GPU: DCGM exporter lifecycle' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_lifecycle" "0" "entrypoint.sh has DCGM lifecycle block in healthcheck"
+
+# DCGM detection uses same GPU capacity check as patching.sh
+dcgm_gpu_detect=$(grep -c 'status.capacity.nvidia' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_gpu_detect" "0" "entrypoint.sh detects GPU nodes via capacity"
+
+# DCGM detection checks both standalone and GPU Operator labels
+dcgm_standalone=$(grep -c 'app=nvidia-dcgm-exporter' "$ENTRYPOINT" || true)
+dcgm_operator=$(grep -c 'app.kubernetes.io/component=dcgm-exporter' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_standalone" "0" "entrypoint.sh checks standalone DCGM label"
+assert_gt "$dcgm_operator" "0" "entrypoint.sh checks GPU Operator DCGM label"
+
+# DCGM deploy is non-fatal
+dcgm_nonfatal=$(grep -c 'WARNING.*DCGM.*failed.*non-fatal' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_nonfatal" "0" "entrypoint.sh DCGM deploy failure is non-fatal"
+
+# DCGM cleanup uses managed-by=onelens label guard
+dcgm_label_guard=$(grep -c 'managed-by=onelens' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_label_guard" "0" "entrypoint.sh DCGM cleanup uses managed-by=onelens label"
+
+# DCGM air-gapped: reads REGISTRY_URL from ConfigMap
+dcgm_airgap=$(grep -c 'onelens-agent-env.*REGISTRY_URL' "$ENTRYPOINT" || true)
+assert_gt "$dcgm_airgap" "0" "entrypoint.sh reads REGISTRY_URL from ConfigMap for air-gapped"
+
+# DCGM manifest has nodeSelector for GPU nodes
+dcgm_nodeselector=$(sed -n '/DCGM_EOF/,/DCGM_EOF/p' "$ENTRYPOINT" | grep -c 'nvidia.com/gpu.present' || true)
+assert_gt "$dcgm_nodeselector" "0" "entrypoint.sh DCGM manifest has GPU nodeSelector"
+
+###############################################################################
 # Summary
 ###############################################################################
 test_summary
