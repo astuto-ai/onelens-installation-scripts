@@ -403,6 +403,19 @@ if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
 fi
 
+# --- GPU Phase 2: resolve gpu.enabled for helm install ---
+# No customer-override check needed (fresh install, no existing release).
+GPU_ENABLED="false"
+if [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
+        GPU_ENABLED="false"
+        echo "GPU helm value: gpu.enabled=false (existing customer DCGM detected)"
+    else
+        GPU_ENABLED="true"
+        echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+    fi
+fi
+
 # --- Air-gapped self-detection ---
 # If the deployer pod's image is NOT from public.ecr.aws, this is an air-gapped cluster.
 # Extract the private registry URL from the image path for chart pulls and image overrides.
@@ -606,7 +619,8 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG $CHAR
     --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
     --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\" \
     --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
-    --set onelens-agent.storageClass.provisioner=\"$STORAGE_CLASS_PROVISIONER\""
+    --set onelens-agent.storageClass.provisioner=\"$STORAGE_CLASS_PROVISIONER\" \
+    --set-string onelens-agent.gpu.enabled=\"$GPU_ENABLED\""
 
 # Air-gapped: override all image sources to private registry.
 # Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
@@ -624,6 +638,7 @@ if [ -n "$REGISTRY_URL" ]; then
     CMD+=" --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway"
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL"
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy"
+    CMD+=" --set onelens-agent.gpu.dcgmExporter.image=$REGISTRY_URL/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
     CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
 fi
 

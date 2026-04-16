@@ -1258,6 +1258,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
   REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
+  GPU_ENABLED_OVERRIDE=$(_get '.["onelens-agent"].gpu.enabled')
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
@@ -1324,6 +1325,7 @@ else
   REGISTRATION_ID="${REGISTRATION_ID:-}"
   DEFAULT_CLUSTER_ID=""
   REGISTRY_URL=""
+  GPU_ENABLED_OVERRIDE=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   CUSTOMER_VALUES_FILE=""
@@ -1791,6 +1793,26 @@ if [ "$GPU_NODE_COUNT" -gt 0 ] && [ "$DCGM_PODS_TOTAL" -gt 0 ] 2>/dev/null && [ 
 fi
 if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
+fi
+
+# --- GPU Phase 2: resolve gpu.enabled for helm upgrade ---
+# Decides whether to deploy the DCGM exporter DaemonSet via the chart.
+# - Customer explicitly set "true" or "false" → respect it
+# - GPU nodes + customer-managed DCGM (outside onelens-agent ns) → false (don't conflict)
+# - GPU nodes + no customer DCGM → true (deploy ours)
+# - No GPU nodes → false
+GPU_ENABLED="false"
+if [ -n "${GPU_ENABLED_OVERRIDE:-}" ] && [ "$GPU_ENABLED_OVERRIDE" != "auto" ]; then
+    GPU_ENABLED="$GPU_ENABLED_OVERRIDE"
+    echo "GPU helm value: gpu.enabled=$GPU_ENABLED (customer override)"
+elif [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
+        GPU_ENABLED="false"
+        echo "GPU helm value: gpu.enabled=false (customer-managed DCGM detected)"
+    else
+        GPU_ENABLED="true"
+        echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+    fi
 fi
 
 # --- Agent OOM pre-helm detection ---
@@ -2440,6 +2462,9 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
+# GPU monitoring (Phase 2: conditional DCGM exporter DaemonSet)
+HELM_CMD="$HELM_CMD --set-string onelens-agent.gpu.enabled=\"$GPU_ENABLED\""
+
 # Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
 # Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
 # Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
@@ -2457,6 +2482,7 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
+      --set onelens-agent.gpu.dcgmExporter.image=$REGISTRY_URL/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04 \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
 fi
 

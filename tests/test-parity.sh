@@ -364,5 +364,47 @@ assert_eq "$install_prof_check" "0" "install.sh does NOT have Prometheus PROF ch
 patching_prom_guard=$(grep 'DCGM_PODS_TOTAL' "$ROOT/src/patching.sh" | grep -c 'PROM_QUERY_URL' || true)
 assert_gt "$patching_prom_guard" "0" "patching.sh Stage 2 guards on PROM_QUERY_URL availability"
 
+# ---------------------------------------------------------------------------
+# GPU Phase 2: conditional DCGM DaemonSet — parity tests
+# ---------------------------------------------------------------------------
+
+# Test 42: Both scripts initialize GPU_ENABLED variable
+install_gpu_enabled_init=$(grep -c '^GPU_ENABLED="false"' "$ROOT/install.sh" || true)
+patching_gpu_enabled_init=$(grep -c '^GPU_ENABLED="false"' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_gpu_enabled_init" "0" "install.sh initializes GPU_ENABLED"
+assert_gt "$patching_gpu_enabled_init" "0" "patching.sh initializes GPU_ENABLED"
+
+# Test 43: Both scripts pass --set-string gpu.enabled to helm
+install_gpu_set=$(grep -c '\-\-set-string onelens-agent.gpu.enabled' "$ROOT/install.sh" || true)
+patching_gpu_set=$(grep -c '\-\-set-string onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_gpu_set" "0" "install.sh passes --set-string gpu.enabled to helm"
+assert_gt "$patching_gpu_set" "0" "patching.sh passes --set-string gpu.enabled to helm"
+
+# Test 44: Both scripts use --set-string (not --set) for gpu.enabled
+# Using --set would convert "false" to Go boolean, breaking the template ne comparison
+install_gpu_plain_set=$(grep 'onelens-agent.gpu.enabled' "$ROOT/install.sh" | grep -cv '\-\-set-string' || true)
+patching_gpu_plain_set=$(grep 'onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" | grep -cv '\-\-set-string' || true)
+assert_eq "$install_gpu_plain_set" "0" "install.sh does not use --set (plain) for gpu.enabled"
+assert_eq "$patching_gpu_plain_set" "0" "patching.sh does not use --set (plain) for gpu.enabled"
+
+# Test 45: Both scripts have DCGM image override in air-gapped section
+install_dcgm_airgap=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/install.sh" | grep -c 'dcgm-exporter' || true)
+patching_dcgm_airgap=$(sed -n '/Air-gapped: override all image/,/^fi$/p' "$ROOT/src/patching.sh" | grep -c 'dcgm-exporter' || true)
+assert_gt "$install_dcgm_airgap" "0" "install.sh has DCGM image override in air-gapped section"
+assert_gt "$patching_dcgm_airgap" "0" "patching.sh has DCGM image override in air-gapped section"
+
+# Test 46: Both scripts check DCGM_PODS_OTHER in the GPU_ENABLED resolution block
+install_pods_other_check=$(sed -n '/GPU Phase 2: resolve gpu.enabled/,/^$/p' "$ROOT/install.sh" | grep -c 'DCGM_PODS_OTHER' || true)
+patching_pods_other_check=$(sed -n '/GPU Phase 2: resolve gpu.enabled/,/^$/p' "$ROOT/src/patching.sh" | grep -c 'DCGM_PODS_OTHER' || true)
+assert_gt "$install_pods_other_check" "0" "install.sh checks DCGM_PODS_OTHER for GPU_ENABLED resolution"
+assert_gt "$patching_pods_other_check" "0" "patching.sh checks DCGM_PODS_OTHER for GPU_ENABLED resolution"
+
+# Test 47: Only patching.sh reads GPU_ENABLED_OVERRIDE from existing release
+# install.sh is a fresh install — no existing release to read from
+patching_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/src/patching.sh" || true)
+install_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/install.sh" || true)
+assert_gt "$patching_gpu_override" "0" "patching.sh reads GPU_ENABLED_OVERRIDE from existing release"
+assert_eq "$install_gpu_override" "0" "install.sh does NOT read GPU_ENABLED_OVERRIDE (fresh install)"
+
 test_summary
 exit $?
