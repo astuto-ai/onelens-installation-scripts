@@ -372,8 +372,14 @@ LABEL_MULTIPLIER=$(get_label_multiplier "$AVG_LABELS")
 echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 
 # --- GPU node detection ---
+# No Prometheus at install time (it's deployed as part of this install).
+# First patching run (5 min after install) performs the Prometheus PROF metric check.
 GPU_NODE_COUNT=0
 TOTAL_GPU_COUNT=0
+GPU_MONITORING_STATUS="not_applicable"
+DCGM_PODS_OURS=0
+DCGM_PODS_OTHER=0
+DCGM_PODS_TOTAL=0
 gpu_capacities=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
 if [ -n "$gpu_capacities" ]; then
     GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
@@ -381,12 +387,20 @@ if [ -n "$gpu_capacities" ]; then
 fi
 if [ "$GPU_NODE_COUNT" -gt 0 ]; then
     echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
-    dcgm_pods=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-    if [ "$dcgm_pods" -eq 0 ] 2>/dev/null; then
+    GPU_MONITORING_STATUS="cost_only"
+    DCGM_PODS_OURS=$(kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    DCGM_PODS_OTHER=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+    DCGM_PODS_TOTAL=$((DCGM_PODS_OURS + DCGM_PODS_OTHER))
+    if [ "$DCGM_PODS_TOTAL" -eq 0 ] 2>/dev/null; then
         echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
+        echo "  GPU cost (gpuCount, gpuHours, gpuCost) works without DCGM."
+        echo "  GPU utilization (gpuUsageAverage, gpuUsageMax, gpuEfficiency) requires DCGM exporter."
+    elif [ "$DCGM_PODS_OTHER" -gt 0 ]; then
+        echo "DCGM exporter: $DCGM_PODS_OTHER pods (customer-managed, outside onelens-agent namespace)"
     else
-        echo "NVIDIA DCGM exporter running ($dcgm_pods pods)"
+        echo "DCGM exporter: $DCGM_PODS_OURS pods (in onelens-agent namespace)"
     fi
+    echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
 fi
 
 # --- Air-gapped self-detection ---
