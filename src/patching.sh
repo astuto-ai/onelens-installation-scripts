@@ -2383,9 +2383,9 @@ spec:
       targetPort: 9400
 DCGM_EOF
     then
-        echo "DCGM exporter deployed successfully"
+        echo "DCGM exporter kubectl apply: OK"
     else
-        echo "WARNING: DCGM exporter deployment failed — GPU utilization monitoring unavailable"
+        echo "WARNING: DCGM exporter kubectl apply failed — GPU utilization monitoring unavailable"
         echo "  This does not affect other OneLens components."
         echo "  Common causes: Pod Security Admission blocking SYS_ADMIN or hostPath mounts."
     fi
@@ -2397,6 +2397,66 @@ elif [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "false" ]; then
         kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
         kubectl delete svc nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
     fi
+fi
+
+# --- DCGM diagnostics (runs on EVERY patching cycle when GPU nodes exist) ---
+# Placed outside the GPU_ENABLED conditional so we get data even when deploy is skipped.
+if [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_NODE_COUNT" -gt 0 ]; then
+    echo "=== DCGM DIAGNOSTICS ==="
+    echo "State: GPU_ENABLED=$GPU_ENABLED GPU_NODE_LABEL_KEY=${GPU_NODE_LABEL_KEY:-empty} GPU_NODE_COUNT=$GPU_NODE_COUNT DCGM_PODS_OTHER=$DCGM_PODS_OTHER"
+    # Namespace PSA labels (top suspect for pod creation failures)
+    _ns_labels=$(kubectl get ns onelens-agent -o jsonpath='{.metadata.labels}' 2>/dev/null || true)
+    _psa=$(echo "$_ns_labels" | jq -r 'to_entries[] | select(.key | startswith("pod-security")) | "\(.key)=\(.value)"' 2>/dev/null || true)
+    echo "Namespace PSA: ${_psa:-none}"
+    # DaemonSet status + affinity key
+    _dcgm_ds=$(kubectl get ds nvidia-dcgm-exporter -n onelens-agent --no-headers 2>/dev/null || true)
+    if [ -n "$_dcgm_ds" ]; then
+        echo "DaemonSet: $_dcgm_ds"
+        _ds_key=$(kubectl get ds nvidia-dcgm-exporter -n onelens-agent -o jsonpath='{.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key}' 2>/dev/null || true)
+        _ds_nodeselector=$(kubectl get ds nvidia-dcgm-exporter -n onelens-agent -o jsonpath='{.spec.template.spec.nodeSelector}' 2>/dev/null || true)
+        echo "Affinity key: ${_ds_key:-none} | NodeSelector: ${_ds_nodeselector:-none}"
+        _matching_nodes=$(kubectl get nodes -l "${_ds_key:-nvidia.com/gpu}" --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+        echo "Nodes matching affinity: $_matching_nodes"
+    else
+        echo "DaemonSet: NOT FOUND"
+    fi
+    # Pod status
+    _dcgm_pods=$(kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter -o wide --no-headers 2>/dev/null || true)
+    if [ -n "$_dcgm_pods" ]; then
+        echo "Pods:"
+        echo "$_dcgm_pods" | while read -r line; do echo "  $line"; done
+    else
+        echo "Pods: NONE"
+    fi
+    # DaemonSet events (catches PSA FailedCreate — events are on the DaemonSet, not Pod)
+    _ds_events=$(kubectl get events -n onelens-agent --field-selector involvedObject.kind=DaemonSet --no-headers 2>/dev/null | grep -i dcgm 2>/dev/null | tail -5 || true)
+    if [ -n "$_ds_events" ]; then
+        echo "DaemonSet events:"
+        echo "$_ds_events" | while read -r line; do echo "  $line"; done
+    fi
+    # Pod events (image pull, scheduling failures)
+    _pod_events=$(kubectl get events -n onelens-agent --field-selector involvedObject.kind=Pod --no-headers 2>/dev/null | grep -i dcgm 2>/dev/null | tail -5 || true)
+    if [ -n "$_pod_events" ]; then
+        echo "Pod events:"
+        echo "$_pod_events" | while read -r line; do echo "  $line"; done
+    fi
+    # Container logs (if any pod exists)
+    _dcgm_logs=$(kubectl logs -n onelens-agent -l app=nvidia-dcgm-exporter --tail=5 2>/dev/null || true)
+    if [ -n "$_dcgm_logs" ]; then
+        echo "Logs: $_dcgm_logs"
+    fi
+    # Registry reachability (from deployer pod — may differ from GPU node)
+    _dcgm_registry="nvcr.io"
+    if [ -n "$REGISTRY_URL" ]; then _dcgm_registry=$(echo "$REGISTRY_URL" | cut -d/ -f1); fi
+    _registry_http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "https://${_dcgm_registry}/v2/" 2>/dev/null || echo "000")
+    echo "Registry ${_dcgm_registry}: HTTP ${_registry_http}"
+    # Prometheus PROF metric
+    if [ -n "${PROM_QUERY_URL:-}" ]; then
+        _prof_raw=$(_prom_query_raw 'count(DCGM_FI_PROF_GR_ENGINE_ACTIVE)' 2>/dev/null || true)
+        _prof_has=$(echo "$_prof_raw" | grep -c '"value"' 2>/dev/null || echo "0")
+        echo "Prometheus PROF metric: $([ "$_prof_has" -gt 0 ] && echo 'PRESENT' || echo 'NOT FOUND')"
+    fi
+    echo "=== END DCGM DIAGNOSTICS ==="
 fi
 
 # Retry loop: if any pod OOMs after upgrade, bump that component and retry immediately
