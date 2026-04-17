@@ -299,19 +299,11 @@ prometheus:
       scrape_timeout: 10s
       metrics_path: /metrics
       scheme: http
-      kubernetes_sd_configs:
-        - role: endpoints
-      relabel_configs:
-        - source_labels: [__meta_kubernetes_service_label_app]
-          regex: nvidia-dcgm-exporter
-          action: keep
-        - source_labels: [__meta_kubernetes_endpoint_port_name]
-          regex: gpu-metrics
-          action: keep
-        - source_labels: [__meta_kubernetes_namespace]
-          target_label: namespace
-        - source_labels: [__meta_kubernetes_pod_name]
-          target_label: pod
+      dns_sd_configs:
+        - names:
+            - nvidia-dcgm-exporter.onelens-agent
+          type: A
+          port: 9400
   serverFiles:
     alerting_rules.yml: {}
     alerts: {}
