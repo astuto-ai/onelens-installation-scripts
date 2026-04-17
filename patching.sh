@@ -1813,8 +1813,8 @@ fi
 # (bash functions/variables persist in global scope after the block ends).
 if [ "$GPU_NODE_COUNT" -gt 0 ] && [ "$DCGM_PODS_TOTAL" -gt 0 ] 2>/dev/null && [ -n "${PROM_QUERY_URL:-}" ]; then
     PROF_RAW=$(_prom_query_raw 'count(DCGM_FI_PROF_GR_ENGINE_ACTIVE)')
-    PROF_HAS_DATA=$(echo "$PROF_RAW" | grep -c '"value"' || true)
-    if [ "$PROF_HAS_DATA" -gt 0 ]; then
+    PROF_HAS_DATA=$(echo "$PROF_RAW" | grep -c '"value"' | head -1 | tr -d '[:space:]' || echo "0")
+    if [ "${PROF_HAS_DATA:-0}" -gt 0 ] 2>/dev/null; then
         GPU_MONITORING_STATUS="fully_configured"
         echo "GPU monitoring: fully configured (DCGM_FI_PROF_GR_ENGINE_ACTIVE present in Prometheus)"
     else
@@ -3208,6 +3208,33 @@ spec:
 DCGM_EOF
     then
         echo "DCGM exporter kubectl apply: OK"
+        # Patch Prometheus ConfigMap: replace kubernetes_sd_configs DCGM job with dns_sd_configs.
+        # Old deployer images have kubernetes_sd_configs which requires cluster-wide endpoint RBAC
+        # and fails silently on some clusters. dns_sd_configs uses DNS (always works).
+        _prom_cm=$(kubectl get cm onelens-agent-prometheus-server -n onelens-agent -o jsonpath='{.data.prometheus\.yml}' 2>/dev/null || true)
+        _dcgm_block=$(echo "$_prom_cm" | sed -n '/job_name: dcgm-gpu-metrics/,/^    - job_name:\|^  serverFiles:/p' 2>/dev/null || true)
+        if echo "$_dcgm_block" | grep -q 'kubernetes_sd_configs' 2>/dev/null; then
+            echo "Patching Prometheus scrape config: dcgm-gpu-metrics → dns_sd_configs"
+            _prom_cm_fixed=$(echo "$_prom_cm" | sed '/- job_name: dcgm-gpu-metrics/,/^    - job_name:\|^  serverFiles:/c\
+    - job_name: dcgm-gpu-metrics\
+      honor_labels: true\
+      scrape_interval: 30s\
+      scrape_timeout: 10s\
+      metrics_path: /metrics\
+      scheme: http\
+      dns_sd_configs:\
+        - names:\
+            - nvidia-dcgm-exporter.onelens-agent\
+          type: A\
+          port: 9400')
+            if [ -n "$_prom_cm_fixed" ]; then
+                echo "$_prom_cm_fixed" > /tmp/prom-config-patched.yml
+                kubectl create cm onelens-agent-prometheus-server -n onelens-agent \
+                    --from-file=prometheus.yml=/tmp/prom-config-patched.yml \
+                    --dry-run=client -o yaml 2>/dev/null | kubectl apply -f - 2>&1 || echo "  WARNING: Prometheus ConfigMap patch failed (non-fatal)"
+                rm -f /tmp/prom-config-patched.yml
+            fi
+        fi
     else
         echo "WARNING: DCGM exporter kubectl apply failed — GPU utilization monitoring unavailable"
         echo "  This does not affect other OneLens components."
@@ -3277,8 +3304,9 @@ if [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_NODE_COUNT" -gt 0 ]; then
     # Prometheus PROF metric
     if [ -n "${PROM_QUERY_URL:-}" ]; then
         _prof_raw=$(_prom_query_raw 'count(DCGM_FI_PROF_GR_ENGINE_ACTIVE)' 2>/dev/null || true)
-        _prof_has=$(echo "$_prof_raw" | grep -c '"value"' 2>/dev/null || echo "0")
-        echo "Prometheus PROF metric: $([ "$_prof_has" -gt 0 ] && echo 'PRESENT' || echo 'NOT FOUND')"
+        _prof_has=$(echo "$_prof_raw" | grep -c '"value"' 2>/dev/null | head -1 || echo "0")
+        _prof_has=$(echo "$_prof_has" | tr -d '[:space:]')
+        echo "Prometheus PROF metric: $([ "${_prof_has:-0}" -gt 0 ] 2>/dev/null && echo 'PRESENT' || echo 'NOT FOUND')"
     fi
     echo "=== END DCGM DIAGNOSTICS ==="
 fi
