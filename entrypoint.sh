@@ -268,6 +268,9 @@ metadata:
   labels:
     app: nvidia-dcgm-exporter
     managed-by: onelens
+  annotations:
+    custom_metrics_scrape: "true"
+    prometheus.io/port: "9400"
 spec:
   selector:
     app: nvidia-dcgm-exporter
