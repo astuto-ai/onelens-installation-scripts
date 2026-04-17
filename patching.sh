@@ -3198,6 +3198,9 @@ metadata:
   labels:
     app: nvidia-dcgm-exporter
     managed-by: onelens
+  annotations:
+    custom_metrics_scrape: "true"
+    prometheus.io/port: "9400"
 spec:
   selector:
     app: nvidia-dcgm-exporter
@@ -3207,39 +3210,7 @@ spec:
       targetPort: 9400
 DCGM_EOF
     then
-        echo "DCGM exporter kubectl apply: OK"
-        # Patch Prometheus ConfigMap: replace kubernetes_sd_configs DCGM job with dns_sd_configs.
-        # Old deployer images have kubernetes_sd_configs which requires cluster-wide endpoint RBAC
-        # and fails silently on some clusters. dns_sd_configs uses DNS (always works).
-        _prom_cm=$(kubectl get cm onelens-agent-prometheus-server -n onelens-agent -o json 2>/dev/null | jq -r '.data["prometheus.yml"]' 2>/dev/null || true)
-        if echo "$_prom_cm" | awk '/job_name: dcgm-gpu-metrics/,0' 2>/dev/null | grep -q 'kubernetes_sd_configs' 2>/dev/null; then
-            echo "Patching Prometheus scrape config: dcgm-gpu-metrics → dns_sd_configs"
-            _prom_cm_fixed=$(echo "$_prom_cm" | python3 -c "
-import sys, re
-content = sys.stdin.read()
-new_job = '''- job_name: dcgm-gpu-metrics
-  honor_labels: true
-  scrape_interval: 30s
-  scrape_timeout: 10s
-  metrics_path: /metrics
-  scheme: http
-  dns_sd_configs:
-    - names:
-        - nvidia-dcgm-exporter.onelens-agent
-      type: A
-      port: 9400'''
-pattern = r'- job_name: dcgm-gpu-metrics.*?(?=\n- job_name:|\Z)'
-result = re.sub(pattern, new_job, content, flags=re.DOTALL)
-print(result)
-" 2>/dev/null)
-            if [ -n "$_prom_cm_fixed" ]; then
-                echo "$_prom_cm_fixed" > /tmp/prom-config-patched.yml
-                kubectl create cm onelens-agent-prometheus-server -n onelens-agent \
-                    --from-file=prometheus.yml=/tmp/prom-config-patched.yml \
-                    --dry-run=client -o yaml 2>/dev/null | kubectl apply -f - 2>&1 || echo "  WARNING: Prometheus ConfigMap patch failed (non-fatal)"
-                rm -f /tmp/prom-config-patched.yml
-            fi
-        fi
+        echo "DCGM exporter deployed successfully"
     else
         echo "WARNING: DCGM exporter kubectl apply failed — GPU utilization monitoring unavailable"
         echo "  This does not affect other OneLens components."
