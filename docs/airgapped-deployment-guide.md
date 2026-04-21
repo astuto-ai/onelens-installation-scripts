@@ -79,11 +79,12 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 | URL | Used in | Purpose |
 |-----|---------|---------|
 | `https://api-in.onelens.cloud` | Pre-check | Validate connectivity to OneLens API |
-| `https://astuto-ai.github.io` | Migration | Download Helm charts and version config from the OneLens public GitHub repository |
+| `https://astuto-ai.github.io` | Migration | Download Helm charts, migration script, and version config from the OneLens public GitHub repository |
 | `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images |
 | `https://quay.io` | Migration | Pull `prometheus`, `config-reloader`, `pushgateway`, `kube-rbac-proxy` images |
 | `https://registry.k8s.io` | Migration | Pull `kube-state-metrics` image |
 | `https://ghcr.io` | Migration | Pull `opencost` image |
+| `https://nvcr.io` | Migration | Pull `dcgm-exporter` image (GPU monitoring — only needed for GPU clusters) |
 
 **Cluster nodes** (air-gapped — no general internet access):
 
@@ -170,6 +171,14 @@ The script tests:
 ## Step 2: Mirror Images and Set Up Cluster Resources
 
 This step runs **once per OneLens version** on a machine with internet access AND `kubectl` access to the target cluster.
+
+First, download the migration script:
+
+```bash
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh -o airgapped_migrate_images.sh
+```
+
+Then run it:
 
 ```bash
 bash airgapped_migrate_images.sh --registry <your-registry-url>/<prefix>
@@ -265,7 +274,10 @@ All pods should be in `Running` state:
 
 ### Step 1: Re-run the migration script (once per version, on your setup machine)
 
+Download the latest migration script and run it:
+
 ```bash
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_migrate_images.sh -o airgapped_migrate_images.sh
 bash airgapped_migrate_images.sh --registry <your-registry-url>
 ```
 
@@ -370,6 +382,7 @@ The following images are mirrored by `airgapped_migrate_images.sh`. The list is 
 | `kube-state-metrics` | `registry.k8s.io` | Kubernetes state metrics |
 | `pushgateway` | `quay.io` | Prometheus push gateway |
 | `kube-rbac-proxy` | `quay.io` | RBAC proxy for kube-state-metrics |
+| `dcgm-exporter` | `nvcr.io` | NVIDIA GPU metrics (only for GPU clusters) |
 
 > Exact tags depend on the version you deploy. The migration script handles this automatically.
 
