@@ -78,7 +78,6 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 
 | URL | Used in | Purpose |
 |-----|---------|---------|
-| `https://api-in.onelens.cloud` | Pre-check | Validate connectivity to OneLens API |
 | `https://astuto-ai.github.io` | Migration | Download Helm charts, migration script, and version config from the OneLens public GitHub repository |
 | `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images |
 | `https://quay.io` | Migration | Pull `prometheus`, `config-reloader`, `pushgateway`, `kube-rbac-proxy` images |
@@ -153,18 +152,21 @@ Your EKS **node IAM role** needs read access to the private ECR repositories. Th
 
 ---
 
-## Step 1: Validate Connectivity (Optional)
+## Step 1: Verify Bastion Prerequisites (Recommended)
 
-Run the accessibility check to verify your environment can reach the required services. No parameters needed.
+Run the bastion pre-check to verify your machine has all required tools and network access before starting the migration.
 
 ```bash
-curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh | bash
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_bastion_precheck.sh | bash
 ```
 
-The script tests:
-- **OneLens API** — reachability (`api-in.onelens.cloud`)
-- **Upload gateway** — data upload endpoint reachability (`api-in-fileupload.onelens.cloud`)
-- **DNS resolution** — that cluster nodes can resolve the required domains
+The script validates:
+- **Tools** — aws, docker (with buildx), helm, jq, kubectl
+- **Container registries** — network access to public.ecr.aws, quay.io, ghcr.io, registry.k8s.io, nvcr.io
+- **GitHub Pages** — access to astuto-ai.github.io (Helm charts, scripts, config)
+- **Docker daemon** — running and responsive
+- **AWS credentials** — valid credentials for ECR operations
+- **Cluster access** — kubectl connectivity to the target cluster
 
 ---
 
@@ -212,7 +214,19 @@ kubectl get configmap onelens-agent-chart -n onelens-agent
 
 ---
 
-## Step 3: Deploy OneLens on Each Cluster
+## Step 3: Verify Cluster-to-API Connectivity
+
+Before installing, verify that the cluster nodes can reach the OneLens API. This is the only external endpoint the air-gapped cluster needs — everything else comes from your private registry.
+
+```bash
+curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airgapped/airgapped_accessibility_check.sh | bash
+```
+
+The script tests connectivity to `api-in.onelens.cloud` and `api-in-fileupload.onelens.cloud`. If these fail, the agent will install but won't be able to register or upload data.
+
+---
+
+## Step 4: Deploy OneLens on Each Cluster
 
 Run the standard OneLens install command, pointing to your private registry instead of the public one.
 
@@ -256,6 +270,8 @@ The deployer automatically detects that it's running from a private registry and
 6. Cluster status is updated to `CONNECTED`
 
 ### Verify
+
+Check pod status:
 
 ```bash
 kubectl get pods -n onelens-agent

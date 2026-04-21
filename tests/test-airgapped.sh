@@ -216,5 +216,42 @@ assert_eq "$install_image_bad_index" "0" "install.sh MY_IMAGE read does not use 
 install_image_fallback=$(grep -c "grep 'onelens-deployer'" "$ROOT/install.sh" || true)
 assert_gt "$install_image_fallback" "0" "install.sh has substring fallback for MY_IMAGE when name-selector fails"
 
+# ---------------------------------------------------------------------------
+# Test 29: Bastion precheck script exists and has valid syntax
+# ---------------------------------------------------------------------------
+BASTION="$ROOT/scripts/airgapped/airgapped_bastion_precheck.sh"
+assert_file_exists "$BASTION" "airgapped_bastion_precheck.sh exists"
+
+bastion_syntax=$(bash -n "$BASTION" 2>&1); bastion_rc=$?
+assert_eq "$bastion_rc" "0" "airgapped_bastion_precheck.sh has valid bash syntax"
+
+# ---------------------------------------------------------------------------
+# Test 30: Bastion precheck validates all required tools
+# ---------------------------------------------------------------------------
+for tool in curl aws docker helm jq kubectl; do
+    bastion_tool=$(grep -c "$tool" "$BASTION" || true)
+    assert_gt "$bastion_tool" "0" "bastion precheck validates $tool"
+done
+
+# ---------------------------------------------------------------------------
+# Test 31: Bastion precheck validates docker buildx
+# ---------------------------------------------------------------------------
+bastion_buildx=$(grep -c 'buildx' "$BASTION" || true)
+assert_gt "$bastion_buildx" "0" "bastion precheck validates docker buildx"
+
+# ---------------------------------------------------------------------------
+# Test 32: Bastion precheck tests all required registries
+# ---------------------------------------------------------------------------
+for registry in public.ecr.aws quay.io ghcr.io registry.k8s.io nvcr.io; do
+    bastion_reg=$(grep -c "$registry" "$BASTION" || true)
+    assert_gt "$bastion_reg" "0" "bastion precheck tests $registry"
+done
+
+# ---------------------------------------------------------------------------
+# Test 33: Bastion precheck tests GitHub Pages access
+# ---------------------------------------------------------------------------
+bastion_ghpages=$(grep -c 'astuto-ai.github.io' "$BASTION" || true)
+assert_gt "$bastion_ghpages" "0" "bastion precheck tests GitHub Pages access"
+
 test_summary
 exit $?
