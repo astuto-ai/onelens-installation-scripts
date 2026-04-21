@@ -180,6 +180,12 @@ jobs:
           echo "Air-gapped scripts in gh-pages:"
           ls -la gh-pages-repo/scripts/airgapped/
 
+      - name: Copy versioned globalvalues.yaml to gh-pages
+        run: |
+          TAG_VERSION="${{ needs.validate-and-determine-version.outputs.tag_version }}"
+          cp globalvalues.yaml "gh-pages-repo/globalvalues-v${TAG_VERSION}.yaml"
+          echo "Published globalvalues-v${TAG_VERSION}.yaml to gh-pages"
+
       - name: Update Helm repository index
         run: |
           cd gh-pages-repo

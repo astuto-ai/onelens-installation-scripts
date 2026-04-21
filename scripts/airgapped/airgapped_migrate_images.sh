@@ -106,10 +106,8 @@ echo "Fetching image list for version $VERSION..."
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# Download globalvalues.yaml from the tagged release on GitHub.
-# This is more reliable than helm show values — the chart's packaged values have different
-# YAML structure (nested sub-chart keys) that makes grep-based parsing fragile.
-_GV_URL="https://raw.githubusercontent.com/astuto-ai/onelens-installation-scripts/v${VERSION}/globalvalues.yaml"
+# Download globalvalues.yaml from GitHub Pages (published per-version by the release CI).
+_GV_URL="https://astuto-ai.github.io/onelens-installation-scripts/globalvalues-v${VERSION}.yaml"
 curl -fsSL "$_GV_URL" -o "$TMPDIR/values.yaml"
 
 if [ ! -s "$TMPDIR/values.yaml" ]; then

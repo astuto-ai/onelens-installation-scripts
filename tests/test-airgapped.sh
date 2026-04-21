@@ -144,10 +144,10 @@ assert_gt "$check_api" "0" "accessibility check tests OneLens API endpoint"
 assert_gt "$check_upload" "0" "accessibility check tests upload gateway endpoint"
 
 # ---------------------------------------------------------------------------
-# Test 19: Migration script fetches globalvalues.yaml from raw GitHub
+# Test 19: Migration script fetches globalvalues.yaml from GitHub Pages
 # ---------------------------------------------------------------------------
-migrate_dynamic=$(grep -c 'raw.githubusercontent.com' "$MIGRATE" || true)
-assert_gt "$migrate_dynamic" "0" "migration script fetches globalvalues.yaml from raw GitHub"
+migrate_dynamic=$(grep -c 'astuto-ai.github.io.*globalvalues' "$MIGRATE" || true)
+assert_gt "$migrate_dynamic" "0" "migration script fetches globalvalues.yaml from GitHub Pages"
 
 # ---------------------------------------------------------------------------
 # Test 20: patching.sh helm upgrade line uses $CHART_SOURCE (not hardcoded)
