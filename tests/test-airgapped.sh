@@ -253,5 +253,19 @@ done
 bastion_ghpages=$(grep -c 'astuto-ai.github.io' "$BASTION" || true)
 assert_gt "$bastion_ghpages" "0" "bastion precheck tests GitHub Pages access"
 
+# ---------------------------------------------------------------------------
+# Test 34: Migration script includes onelens-network-costs image
+# ---------------------------------------------------------------------------
+migrate_nc=$(grep -c 'onelens-network-costs' "$MIGRATE" || true)
+assert_gt "$migrate_nc" "0" "migration script includes onelens-network-costs image"
+
+# ---------------------------------------------------------------------------
+# Test 35: Both scripts have network-costs air-gapped image overrides
+# ---------------------------------------------------------------------------
+install_nc_override=$(grep -c 'networkCosts.image.registry=\$REGISTRY_URL' "$ROOT/install.sh" || true)
+patching_nc_override=$(grep -c 'networkCosts.image.registry=\$REGISTRY_URL' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_override" "0" "install.sh has network-costs air-gapped image override"
+assert_gt "$patching_nc_override" "0" "patching.sh has network-costs air-gapped image override"
+
 test_summary
 exit $?

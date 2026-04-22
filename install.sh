@@ -567,6 +567,9 @@ export AZURE_DISK_ENCRYPTION_ENABLED="${AZURE_DISK_ENCRYPTION_ENABLED:=false}"
 export AZURE_DISK_ENCRYPTION_SET_ID="${AZURE_DISK_ENCRYPTION_SET_ID:=}"
 export AZURE_DISK_CACHING_MODE="${AZURE_DISK_CACHING_MODE:=ReadOnly}"
 
+## Network cost attribution (opt-in)
+export NETWORK_COSTS_ENABLED="${NETWORK_COSTS_ENABLED:=}"
+
 FILE="globalvalues.yaml"
 
 echo "using $FILE"
@@ -674,6 +677,23 @@ if [ "$CLOUD_PROVIDER" = "AWS" ]; then
     CMD+=" --set onelens-agent.storageClass.volumeType=\"$STORAGE_CLASS_VOLUME_TYPE\""
 elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     CMD+=" --set onelens-agent.storageClass.azure.skuName=\"$STORAGE_CLASS_SKU\""
+fi
+
+# Network costs (opt-in)
+if [ "${NETWORK_COSTS_ENABLED:-}" = "true" ]; then
+    echo "Network costs: enabled (NETWORK_COSTS_ENABLED=true)"
+    CMD+=" --set onelens-agent.networkCosts.enabled=true"
+    if [ "$CLOUD_PROVIDER" = "AWS" ]; then
+        CMD+=" --set onelens-agent.networkCosts.cloudProvider.aws=true"
+        echo "Network costs: cloudProvider=aws"
+    elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
+        CMD+=" --set onelens-agent.networkCosts.cloudProvider.azure=true"
+        echo "Network costs: cloudProvider=azure"
+    fi
+    if [ -n "$REGISTRY_URL" ]; then
+        CMD+=" --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL"
+        CMD+=" --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
+    fi
 fi
 
 # Multi-AZ storage overrides (EFS for AWS, Azure Files for Azure)

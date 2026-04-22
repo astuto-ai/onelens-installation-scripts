@@ -128,6 +128,13 @@ rbac:
         resources:
           - storageclasses
         verbs: ["get", "list", "watch"]
+      # Leader election for network costs DaemonSet (coordination API)
+      # Required by RBAC escalation protection: deployer must hold these
+      # permissions to grant them to the agent's workload-reader ClusterRole.
+      - apiGroups: ["coordination.k8s.io"]
+        resources:
+          - leases
+        verbs: ["get", "list", "watch", "create", "update"]
       # Non-resource URL permissions for Prometheus metrics scraping
       - nonResourceURLs:
           - /metrics
@@ -188,6 +195,7 @@ job:
   labels: {}
   env:
     deployment_type: job
+    NETWORK_COSTS_ENABLED: ""
   resources:
     requests:
       cpu: 200m
@@ -224,6 +232,7 @@ cronjob:
   labels: {}
   env:
     deployment_type: cronjob
+    NETWORK_COSTS_ENABLED: ""
   resources:
     requests:
       cpu: 200m

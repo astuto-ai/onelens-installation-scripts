@@ -442,5 +442,29 @@ patching_prefix=$(grep -c 'startswith("nvidia.com/gpu")' "$ROOT/src/patching.sh"
 assert_gt "$install_prefix" "0" "install.sh uses prefix search for nvidia.com/gpu labels"
 assert_gt "$patching_prefix" "0" "patching.sh uses prefix search for nvidia.com/gpu labels"
 
+# ---------------------------------------------------------------------------
+# Test 54: Both scripts pass networkCosts.enabled to helm
+# ---------------------------------------------------------------------------
+install_nc_enabled=$(grep -c 'networkCosts.enabled' "$ROOT/install.sh" || true)
+patching_nc_enabled=$(grep -c 'networkCosts.enabled' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_enabled" "0" "install.sh passes networkCosts.enabled to helm"
+assert_gt "$patching_nc_enabled" "0" "patching.sh passes networkCosts.enabled to helm"
+
+# ---------------------------------------------------------------------------
+# Test 55: Both scripts pass networkCosts.cloudProvider to helm
+# ---------------------------------------------------------------------------
+install_nc_cloud=$(grep -c 'networkCosts.cloudProvider' "$ROOT/install.sh" || true)
+patching_nc_cloud=$(grep -c 'networkCosts.cloudProvider' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_cloud" "0" "install.sh passes networkCosts.cloudProvider to helm"
+assert_gt "$patching_nc_cloud" "0" "patching.sh passes networkCosts.cloudProvider to helm"
+
+# ---------------------------------------------------------------------------
+# Test 56: Both scripts have air-gapped network-costs image overrides
+# ---------------------------------------------------------------------------
+install_nc_airgap=$(grep -c 'networkCosts.image.registry' "$ROOT/install.sh" || true)
+patching_nc_airgap=$(grep -c 'networkCosts.image.registry' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_nc_airgap" "0" "install.sh has air-gapped network-costs image override"
+assert_gt "$patching_nc_airgap" "0" "patching.sh has air-gapped network-costs image override"
+
 test_summary
 exit $?

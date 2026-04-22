@@ -285,6 +285,53 @@ else
 fi
 
 ###############################################################################
+# globalvalues.yaml validation
+###############################################################################
+
+GV="$ROOT/globalvalues.yaml"
+
+# globalvalues.yaml must be valid YAML
+gv_yaml_check=$(python3 -c "import yaml; yaml.safe_load(open('$GV'))" 2>&1); gv_rc=$?
+if [ $gv_rc -eq 0 ]; then
+    assert_eq "0" "0" "globalvalues.yaml is valid YAML"
+else
+    assert_eq "$gv_rc" "0" "globalvalues.yaml is valid YAML: $gv_yaml_check"
+fi
+
+# extraScrapeConfigs contains network-costs job
+gv_nc_job=$(grep -c 'job_name: network-costs' "$GV" || true)
+assert_gt "$gv_nc_job" "0" "globalvalues.yaml has network-costs scrape job"
+
+# network-costs job targets port 3001
+gv_nc_port=$(grep -A12 'job_name: network-costs' "$GV" | grep -c '3001' || true)
+assert_gt "$gv_nc_port" "0" "network-costs scrape job targets port 3001"
+
+# network-costs job uses correct service name
+gv_nc_svc=$(grep -A8 'job_name: network-costs' "$GV" | grep -c 'opencost-network-costs.onelens-agent' || true)
+assert_gt "$gv_nc_svc" "0" "network-costs scrape job targets opencost-network-costs.onelens-agent"
+
+###############################################################################
+# Deployer chart validation
+###############################################################################
+
+DV="$ROOT/charts/onelensdeployer/values.yaml"
+
+# Deployer ClusterRole has coordination.k8s.io/leases
+dv_leases=$(grep -c 'coordination.k8s.io' "$DV" || true)
+assert_gt "$dv_leases" "0" "deployer ClusterRole includes coordination.k8s.io"
+
+dv_leases_resource=$(grep -A2 'coordination.k8s.io' "$DV" | grep -c 'leases' || true)
+assert_gt "$dv_leases_resource" "0" "deployer ClusterRole has leases resource"
+
+# Deployer job.env has NETWORK_COSTS_ENABLED
+dv_job_nc=$(sed -n '/^job:/,/^cronjob:/p' "$DV" | grep -c 'NETWORK_COSTS_ENABLED' || true)
+assert_gt "$dv_job_nc" "0" "deployer job.env has NETWORK_COSTS_ENABLED"
+
+# Deployer cronjob.env has NETWORK_COSTS_ENABLED
+dv_cron_nc=$(sed -n '/^cronjob:/,/^$/p' "$DV" | grep -c 'NETWORK_COSTS_ENABLED' || true)
+assert_gt "$dv_cron_nc" "0" "deployer cronjob.env has NETWORK_COSTS_ENABLED"
+
+###############################################################################
 # Summary
 ###############################################################################
 test_summary

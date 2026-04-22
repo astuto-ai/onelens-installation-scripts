@@ -468,6 +468,12 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   # Read gpu.enabled WITHOUT -a flag — only user-supplied values, not chart defaults.
   # The chart default is "false" which would be mistaken for a customer override with -a.
   GPU_ENABLED_OVERRIDE=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.["onelens-agent"].gpu.enabled // empty' 2>/dev/null || true)
+  # Read networkCosts values WITHOUT -a flag — only user-supplied values, not chart defaults.
+  _nc_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
+  NC_ENABLED_OVERRIDE=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.enabled // empty' 2>/dev/null || true)
+  NC_CLOUD_AWS=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.aws // empty' 2>/dev/null || true)
+  NC_CLOUD_GCP=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.gcp // empty' 2>/dev/null || true)
+  NC_CLOUD_AZURE=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.azure // empty' 2>/dev/null || true)
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
@@ -535,6 +541,10 @@ else
   DEFAULT_CLUSTER_ID=""
   REGISTRY_URL=""
   GPU_ENABLED_OVERRIDE=""
+  NC_ENABLED_OVERRIDE=""
+  NC_CLOUD_AWS=""
+  NC_CLOUD_GCP=""
+  NC_CLOUD_AZURE=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   CUSTOMER_VALUES_FILE=""
@@ -1021,6 +1031,46 @@ elif [ "$GPU_NODE_COUNT" -gt 0 ]; then
     else
         GPU_ENABLED="true"
         echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+    fi
+fi
+
+# --- Network Costs: resolve enabled + cloud provider for helm upgrade ---
+# Unlike GPU (kubectl apply, decoupled from helm), network costs uses helm chart
+# templates — so we must pass --set flags to helm upgrade.
+NC_ENABLED="false"
+if [ "$NC_ENABLED_OVERRIDE" = "true" ]; then
+    NC_ENABLED="true"
+    echo "Network costs: enabled=true (from existing helm release)"
+elif [ "${NETWORK_COSTS_ENABLED:-}" = "true" ]; then
+    NC_ENABLED="true"
+    echo "Network costs: enabled=true (from deployer env var)"
+else
+    echo "Network costs: disabled"
+fi
+
+NC_CLOUD_FLAG=""
+if [ "$NC_ENABLED" = "true" ]; then
+    if [ "$NC_CLOUD_AWS" = "true" ]; then
+        NC_CLOUD_FLAG="aws"
+        echo "Network costs: cloudProvider=aws (from existing helm values)"
+    elif [ "$NC_CLOUD_GCP" = "true" ]; then
+        NC_CLOUD_FLAG="gcp"
+        echo "Network costs: cloudProvider=gcp (from existing helm values)"
+    elif [ "$NC_CLOUD_AZURE" = "true" ]; then
+        NC_CLOUD_FLAG="azure"
+        echo "Network costs: cloudProvider=azure (from existing helm values)"
+    elif echo "$SC_PROVISIONER" | grep -q "ebs.csi.aws.com"; then
+        NC_CLOUD_FLAG="aws"
+        echo "Network costs: cloudProvider=aws (auto-detected from SC provisioner)"
+    elif echo "$SC_PROVISIONER" | grep -q "pd.csi.storage.gke.io"; then
+        NC_CLOUD_FLAG="gcp"
+        echo "Network costs: cloudProvider=gcp (auto-detected from SC provisioner)"
+    elif echo "$SC_PROVISIONER" | grep -q "disk.csi.azure.com"; then
+        NC_CLOUD_FLAG="azure"
+        echo "Network costs: cloudProvider=azure (auto-detected from SC provisioner)"
+    else
+        NC_CLOUD_FLAG="aws"
+        echo "Network costs: cloudProvider=aws (default — unknown provisioner: ${SC_PROVISIONER:-empty})"
     fi
 fi
 
@@ -1689,6 +1739,17 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
+
+# Network costs settings (opt-in, preserved from existing release)
+HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.enabled=$NC_ENABLED"
+if [ "$NC_ENABLED" = "true" ] && [ -n "$NC_CLOUD_FLAG" ]; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.cloudProvider.${NC_CLOUD_FLAG}=true"
+fi
+if [ -n "$REGISTRY_URL" ] && [ "$NC_ENABLED" = "true" ]; then
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
+      --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
 fi
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
