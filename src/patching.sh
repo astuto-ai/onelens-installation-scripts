@@ -465,15 +465,14 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
   REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
-  # Read gpu.enabled WITHOUT -a flag — only user-supplied values, not chart defaults.
-  # The chart default is "false" which would be mistaken for a customer override with -a.
-  GPU_ENABLED_OVERRIDE=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null | jq -r '.["onelens-agent"].gpu.enabled // empty' 2>/dev/null || true)
-  # Read networkCosts values WITHOUT -a flag — only user-supplied values, not chart defaults.
-  _nc_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
-  NC_ENABLED_OVERRIDE=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.enabled // empty' 2>/dev/null || true)
-  NC_CLOUD_AWS=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.aws // empty' 2>/dev/null || true)
-  NC_CLOUD_GCP=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.gcp // empty' 2>/dev/null || true)
-  NC_CLOUD_AZURE=$(echo "$_nc_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.azure // empty' 2>/dev/null || true)
+  # Read user-supplied values WITHOUT -a flag — chart defaults like "false" would
+  # be mistaken for customer overrides with -a. Single call for GPU + NC fields.
+  _user_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
+  GPU_ENABLED_OVERRIDE=$(echo "$_user_vals" | jq -r '.["onelens-agent"].gpu.enabled // empty' 2>/dev/null || true)
+  NC_ENABLED_OVERRIDE=$(echo "$_user_vals" | jq -r '.["onelens-agent"].networkCosts.enabled // empty' 2>/dev/null || true)
+  NC_CLOUD_AWS=$(echo "$_user_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.aws // empty' 2>/dev/null || true)
+  NC_CLOUD_GCP=$(echo "$_user_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.gcp // empty' 2>/dev/null || true)
+  NC_CLOUD_AZURE=$(echo "$_user_vals" | jq -r '.["onelens-agent"].networkCosts.cloudProvider.azure // empty' 2>/dev/null || true)
   # Note: Can't use _get for booleans — jq's `false // empty` returns empty since false is falsy
   PVC_ENABLED=$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.persistentVolume.enabled // "true"')
 
