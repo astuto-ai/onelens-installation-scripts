@@ -226,6 +226,16 @@ IMAGES="${IMAGES}
 ${_repo}:${_tag} dcgm-exporter:${_tag}"
 echo "  dcgm-exporter: ${_repo}:${_tag}"
 
+# onelens-network-costs (network cost attribution — only deployed on enabled clusters)
+_repo="public.ecr.aws/w7k6q5m9/onelens-network-costs"
+_tag=$(grep -A5 'networkCosts:' "$_V" | grep -A3 'image:' | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"' || true)
+if [ -z "$_tag" ]; then
+    _tag="0.1.1"
+fi
+IMAGES="${IMAGES}
+${_repo}:${_tag} onelens-network-costs:${_tag}"
+echo "  onelens-network-costs: ${_repo}:${_tag}"
+
 # --- Mirror images ---
 echo ""
 echo "=== Mirroring images ==="

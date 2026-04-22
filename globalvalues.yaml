@@ -304,6 +304,17 @@ prometheus:
             - nvidia-dcgm-exporter.onelens-agent
           type: A
           port: 9400
+    - job_name: network-costs
+      honor_labels: true
+      scrape_interval: 1m
+      scrape_timeout: 10s
+      metrics_path: /metrics
+      scheme: http
+      dns_sd_configs:
+        - names:
+            - opencost-network-costs.onelens-agent
+          type: A
+          port: 3001
   serverFiles:
     alerting_rules.yml: {}
     alerts: {}
