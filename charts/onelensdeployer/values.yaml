@@ -130,11 +130,11 @@ rbac:
         verbs: ["get", "list", "watch"]
       # Leader election for network costs DaemonSet (coordination API)
       # Required by RBAC escalation protection: deployer must hold these
-      # permissions to grant them to the agent's workload-reader ClusterRole.
+      # permissions to grant them to the agent's network-costs-leader-election Role.
       - apiGroups: ["coordination.k8s.io"]
         resources:
           - leases
-        verbs: ["get", "list", "watch", "create", "update"]
+        verbs: ["get", "list", "watch", "create", "update", "patch"]
       # Non-resource URL permissions for Prometheus metrics scraping
       - nonResourceURLs:
           - /metrics
