@@ -421,5 +421,21 @@ else
     echo "  SKIP: onelens-agent repo not adjacent — skipping chart template tests"
 fi
 
+# ---------------------------------------------------------------------------
+# OpenCost Prometheus 3.x compatibility env vars in globalvalues.yaml
+# ---------------------------------------------------------------------------
+
+gv_resolution=$(grep 'PROMETHEUS_QUERY_RESOLUTION_SECONDS' "$ROOT/globalvalues.yaml" | grep -v '#' | head -1)
+assert_ne "$gv_resolution" "" "globalvalues.yaml has PROMETHEUS_QUERY_RESOLUTION_SECONDS in OpenCost extraEnv"
+
+gv_resolution_val=$(echo "$gv_resolution" | awk -F'"' '{print $2}')
+assert_eq "$gv_resolution_val" "60" "PROMETHEUS_QUERY_RESOLUTION_SECONDS is 60"
+
+gv_cluster_label=$(grep 'PROM_CLUSTER_ID_LABEL' "$ROOT/globalvalues.yaml" | grep -v '#' | head -1)
+assert_ne "$gv_cluster_label" "" "globalvalues.yaml has PROM_CLUSTER_ID_LABEL in OpenCost extraEnv"
+
+gv_cluster_label_val=$(echo "$gv_cluster_label" | awk -F'"' '{print $2}')
+assert_eq "$gv_cluster_label_val" "__disabled__" "PROM_CLUSTER_ID_LABEL is __disabled__"
+
 test_summary
 exit $?

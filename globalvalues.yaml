@@ -851,7 +851,9 @@ prometheus-opencost-exporter:
         access_key_id: ""
       extraVolumeMounts: []
       env: []
-      extraEnv: {}
+      extraEnv:
+        PROMETHEUS_QUERY_RESOLUTION_SECONDS: "60"
+        PROM_CLUSTER_ID_LABEL: "__disabled__"
     customPricing:
       enabled: false
       configmapName: custom-pricing-model
