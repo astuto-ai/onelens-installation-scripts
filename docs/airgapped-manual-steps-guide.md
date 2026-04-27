@@ -36,8 +36,6 @@ Then add entries depending on what your bastion can reach **directly** (without 
 | If your bastion can directly reach... | Add to `NO_PROXY` | Why |
 |---|---|---|
 | AWS APIs (bastion is an EC2 instance in the VPC) | `.amazonaws.com` | AWS CLI and Docker ECR calls go direct via VPC networking |
-| Your private ECR registry | `<your-ecr-domain>` (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com`) | Docker push/pull to ECR goes direct. Already covered if `.amazonaws.com` is added |
-| Kubernetes API server | `<k8s-api-endpoint>` | kubectl calls go direct |
 
 > **Key point:** Only add an entry to `NO_PROXY` if the bastion has a **direct network path** to that destination. If your bastion can **only** reach AWS and your ECR through the proxy, do **not** add `.amazonaws.com` to `NO_PROXY` — let those calls go through the proxy.
 
@@ -111,15 +109,6 @@ sudo systemctl restart docker
 ```
 
 Contact your network/security team to obtain the proxy's CA certificate.
-
-### AWS CLI (Alternative)
-
-The AWS CLI respects `HTTP_PROXY` / `HTTPS_PROXY` environment variables. If you need a permanent config instead, add to `~/.aws/config`:
-
-```ini
-[default]
-proxy = http://<proxy-host>:<proxy-port>
-```
 
 ---
 
@@ -468,12 +457,3 @@ docker buildx inspect --bootstrap
 
 If it still fails, the fallback (`docker pull` + `docker tag` + `docker push`) mirrors single-arch images, which works for most deployments.
 
----
-
-## Support
-
-For issues, contact your OneLens account team with:
-- Output of each step's verification commands
-- Cluster name and version being deployed
-- `kubectl get pods -n onelens-agent -o wide`
-- `helm list -n onelens-agent`
