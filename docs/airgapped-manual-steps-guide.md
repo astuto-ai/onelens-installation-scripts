@@ -410,7 +410,7 @@ After all three steps pass, proceed to [Step 4: Deploy OneLens](./airgapped-depl
 
 ```bash
 helm upgrade --install onelensdeployer \
-  oci://<your-registry>/charts/onelensdeployer \
+  oci://<your-registry>/<prefix>/charts/onelensdeployer \
   -n onelens-agent --create-namespace \
   --set job.env.CLUSTER_NAME=<cluster-name> \
   --set job.env.REGION=<region> \
