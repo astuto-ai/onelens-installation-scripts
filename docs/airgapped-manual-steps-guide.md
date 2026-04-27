@@ -17,6 +17,7 @@ export NO_PROXY="localhost,127.0.0.1,169.254.169.254"
 ```
 
 > **Note:** If your proxy does not support HTTPS on its listening port (common with many corporate proxies), use `http://` for both:
+>
 > ```bash
 > export HTTPS_PROXY="http://<proxy-host>:<proxy-port>"
 > ```
@@ -25,19 +26,17 @@ export NO_PROXY="localhost,127.0.0.1,169.254.169.254"
 
 The `NO_PROXY` variable tells tools which destinations should bypass the proxy and connect directly. Start with these baseline entries:
 
-| Entry | Why it's needed |
-|-------|----------------|
-| `localhost` | Prevents local connections from being sent to the proxy |
-| `127.0.0.1` | Same as above (numeric form — some tools only check one) |
+| Entry             | Why it's needed                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `localhost`       | Prevents local connections from being sent to the proxy                                                                                                                                    |
+| `127.0.0.1`       | Same as above (numeric form — some tools only check one)                                                                                                                                   |
 | `169.254.169.254` | AWS EC2 Instance Metadata Service (IMDS). The `aws` CLI calls this to fetch IAM credentials from the instance. Only reachable directly from within the EC2 instance, never through a proxy |
 
 Then add entries depending on what your bastion can reach **directly** (without the proxy):
 
-| If your bastion can directly reach... | Add to `NO_PROXY` | Why |
-|---|---|---|
-| AWS APIs (bastion is an EC2 instance in the VPC) | `.amazonaws.com` | AWS CLI and Docker ECR calls go direct via VPC networking |
-| Your private ECR registry | `<your-ecr-domain>` (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com`) | Docker push/pull to ECR goes direct. Already covered if `.amazonaws.com` is added |
-| Kubernetes API server | `<k8s-api-endpoint>` | kubectl calls go direct |
+| If your bastion can directly reach...            | Add to `NO_PROXY` | Why                                                       |
+| ------------------------------------------------ | ----------------- | --------------------------------------------------------- |
+| AWS APIs (bastion is an EC2 instance in the VPC) | `.amazonaws.com`  | AWS CLI and Docker ECR calls go direct via VPC networking |
 
 > **Key point:** Only add an entry to `NO_PROXY` if the bastion has a **direct network path** to that destination. If your bastion can **only** reach AWS and your ECR through the proxy, do **not** add `.amazonaws.com` to `NO_PROXY` — let those calls go through the proxy.
 
@@ -111,15 +110,6 @@ sudo systemctl restart docker
 ```
 
 Contact your network/security team to obtain the proxy's CA certificate.
-
-### AWS CLI (Alternative)
-
-The AWS CLI respects `HTTP_PROXY` / `HTTPS_PROXY` environment variables. If you need a permanent config instead, add to `~/.aws/config`:
-
-```ini
-[default]
-proxy = http://<proxy-host>:<proxy-port>
-```
 
 ---
 
@@ -253,6 +243,7 @@ The goal of this step is to copy all OneLens container images from public regist
 1. Decide your private registry URL with a path prefix to namespace OneLens repos, e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensk8sagent`. You can choose any prefix — `onelensk8sagent` is recommended.
 
 2. Authenticate Docker to your ECR:
+
    ```bash
    aws ecr get-login-password --region <your-region> | docker login --username AWS --password-stdin <your-ecr-domain>
    ```
@@ -266,51 +257,54 @@ The goal of this step is to copy all OneLens container images from public regist
 #### B. Find the image tags for your version
 
 1. Identify the version you want to deploy. To find the latest:
+
    ```bash
    helm search repo onelens/onelens-agent -o json | jq -r '.[0].version'
    ```
 
 2. Download the global values file for that version — this contains all the image repositories and tags:
+
    ```bash
    curl -fsSL "https://astuto-ai.github.io/onelens-installation-scripts/globalvalues-v<VERSION>.yaml" -o globalvalues.yaml
    ```
 
 3. Also pull and extract the agent chart — two sub-charts (kube-state-metrics, pushgateway) have empty tags in globalvalues; their actual tags are in the sub-chart's `Chart.yaml` under `appVersion`:
+
    ```bash
    helm pull onelens/onelens-agent --version <VERSION> --untar
    ```
 
 4. Open `globalvalues.yaml` and note down the image repository and tag for each component. The table below shows where to find each one:
 
-   | Component | Where to find the tag |
-   |---|---|
-   | onelens-agent | `globalvalues.yaml` — look for `repository: public.ecr.aws/w7k6q5m9/onelens-agent`, tag is on the next line |
-   | onelens-deployer | Always `v<VERSION>` (e.g. `v2.1.81`) |
-   | prometheus | `globalvalues.yaml` — `repository: quay.io/prometheus/prometheus` |
-   | prometheus-config-reloader | `globalvalues.yaml` — `repository: quay.io/prometheus-operator/prometheus-config-reloader` |
-   | opencost | `globalvalues.yaml` — `repository: opencost/opencost` (source registry is `ghcr.io`) |
-   | kube-state-metrics | Tag is empty in globalvalues. Use `appVersion` from `onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml`, prefixed with `v` |
-   | kube-rbac-proxy | `globalvalues.yaml` — `repository: brancz/kube-rbac-proxy` (source registry is `quay.io`) |
-   | pushgateway | Tag is empty in globalvalues. Use `appVersion` from `onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml` |
-   | dcgm-exporter | `globalvalues.yaml` — under `gpu.dcgmExporter.image`. Only needed for GPU clusters |
-   | onelens-network-costs | `globalvalues.yaml` — under `networkCosts.image`. Only needed if network costs is enabled |
+   | Component                  | Where to find the tag                                                                                                                         |
+   | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+   | onelens-agent              | `globalvalues.yaml` — look for `repository: public.ecr.aws/w7k6q5m9/onelens-agent`, tag is on the next line                                   |
+   | onelens-deployer           | Always `v<VERSION>` (e.g. `v2.1.81`)                                                                                                          |
+   | prometheus                 | `globalvalues.yaml` — `repository: quay.io/prometheus/prometheus`                                                                             |
+   | prometheus-config-reloader | `globalvalues.yaml` — `repository: quay.io/prometheus-operator/prometheus-config-reloader`                                                    |
+   | opencost                   | `globalvalues.yaml` — `repository: opencost/opencost` (source registry is `ghcr.io`)                                                          |
+   | kube-state-metrics         | Tag is empty in globalvalues. Use `appVersion` from `onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml`, prefixed with `v` |
+   | kube-rbac-proxy            | `globalvalues.yaml` — `repository: brancz/kube-rbac-proxy` (source registry is `quay.io`)                                                     |
+   | pushgateway                | Tag is empty in globalvalues. Use `appVersion` from `onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml`                |
+   | dcgm-exporter              | `globalvalues.yaml` — under `gpu.dcgmExporter.image`. Only needed for GPU clusters                                                            |
+   | onelens-network-costs      | `globalvalues.yaml` — under `networkCosts.image`. Only needed if network costs is enabled                                                     |
 
 #### C. Create ECR repositories and mirror the images
 
 For each image in the table below, create an ECR repository under your prefix (if it doesn't exist) and mirror the image using `docker buildx imagetools create` for multi-arch support. If `buildx` fails, fall back to `docker pull` / `docker tag` / `docker push`.
 
-| # | Source (pull from) | ECR repo name to create under your prefix |
-|---|---|---|
-| 1 | `public.ecr.aws/w7k6q5m9/onelens-agent:<tag>` | `onelens-agent` |
-| 2 | `public.ecr.aws/w7k6q5m9/onelens-deployer:v<VERSION>` | `onelens-deployer` |
-| 3 | `quay.io/prometheus/prometheus:<tag>` | `prometheus` |
-| 4 | `quay.io/prometheus-operator/prometheus-config-reloader:<tag>` | `prometheus-config-reloader` |
-| 5 | `ghcr.io/opencost/opencost:<tag>` | `opencost` |
-| 6 | `registry.k8s.io/kube-state-metrics/kube-state-metrics:<tag>` | `kube-state-metrics` |
-| 7 | `quay.io/brancz/kube-rbac-proxy:<tag>` | `kube-rbac-proxy` |
-| 8 | `quay.io/prometheus/pushgateway:<tag>` | `pushgateway` |
-| 9 | `nvcr.io/nvidia/k8s/dcgm-exporter:<tag>` | `dcgm-exporter` (GPU only) |
-| 10 | `public.ecr.aws/w7k6q5m9/onelens-network-costs:<tag>` | `onelens-network-costs` (network costs only) |
+| #   | Source (pull from)                                             | ECR repo name to create under your prefix    |
+| --- | -------------------------------------------------------------- | -------------------------------------------- |
+| 1   | `public.ecr.aws/w7k6q5m9/onelens-agent:<tag>`                  | `onelens-agent`                              |
+| 2   | `public.ecr.aws/w7k6q5m9/onelens-deployer:v<VERSION>`          | `onelens-deployer`                           |
+| 3   | `quay.io/prometheus/prometheus:<tag>`                          | `prometheus`                                 |
+| 4   | `quay.io/prometheus-operator/prometheus-config-reloader:<tag>` | `prometheus-config-reloader`                 |
+| 5   | `ghcr.io/opencost/opencost:<tag>`                              | `opencost`                                   |
+| 6   | `registry.k8s.io/kube-state-metrics/kube-state-metrics:<tag>`  | `kube-state-metrics`                         |
+| 7   | `quay.io/brancz/kube-rbac-proxy:<tag>`                         | `kube-rbac-proxy`                            |
+| 8   | `quay.io/prometheus/pushgateway:<tag>`                         | `pushgateway`                                |
+| 9   | `nvcr.io/nvidia/k8s/dcgm-exporter:<tag>`                       | `dcgm-exporter` (GPU only)                   |
+| 10  | `public.ecr.aws/w7k6q5m9/onelens-network-costs:<tag>`          | `onelens-network-costs` (network costs only) |
 
 For example, to mirror the onelens-agent image:
 
@@ -334,6 +328,7 @@ Repeat for all images in the table.
 #### D. Mirror the deployer Helm chart
 
 1. Pull and extract the `onelensdeployer` chart:
+
    ```bash
    helm pull onelens/onelensdeployer --version <VERSION> --untar
    ```
@@ -341,6 +336,7 @@ Repeat for all images in the table.
 2. Open `onelensdeployer/values.yaml` and replace the deployer image reference `public.ecr.aws/w7k6q5m9/onelens-deployer` with your private registry path (e.g. `123456789.dkr.ecr.ap-south-1.amazonaws.com/onelensk8sagent/onelens-deployer`).
 
 3. Create an ECR repository for the chart:
+
    ```bash
    aws ecr create-repository --repository-name <prefix>/charts/onelensdeployer --region <region>
    ```
@@ -356,11 +352,13 @@ Repeat for all images in the table.
 The deployer pod needs the agent chart available as a ConfigMap (so it can install without needing registry access from inside the pod).
 
 1. Pull the agent chart tarball (if you haven't already):
+
    ```bash
    helm pull onelens/onelens-agent --version <VERSION>
    ```
 
 2. Create the namespace and ConfigMap:
+
    ```bash
    kubectl create namespace onelens-agent --dry-run=client -o yaml | kubectl apply -f -
 
@@ -372,6 +370,7 @@ The deployer pod needs the agent chart available as a ConfigMap (so it can insta
 #### F. Verify
 
 - Check that all ECR repositories were created:
+
   ```bash
   aws ecr describe-repositories --region <region> --query 'repositories[].repositoryName' --output table
   ```
@@ -467,13 +466,3 @@ docker buildx inspect --bootstrap
 ```
 
 If it still fails, the fallback (`docker pull` + `docker tag` + `docker push`) mirrors single-arch images, which works for most deployments.
-
----
-
-## Support
-
-For issues, contact your OneLens account team with:
-- Output of each step's verification commands
-- Cluster name and version being deployed
-- `kubectl get pods -n onelens-agent -o wide`
-- `helm list -n onelens-agent`
