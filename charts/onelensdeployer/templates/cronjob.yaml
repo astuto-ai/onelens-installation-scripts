@@ -55,6 +55,7 @@ spec:
                 - name: {{ $key }}
                   value: {{ $value | quote }}
                 {{- end }}
+                {{- include "onelensdeployer.proxyEnv" . | nindent 16 }}
                 {{- if .Values.podCountOverride }}
                 - name: POD_COUNT_OVERRIDE
                   value: {{ .Values.podCountOverride | quote }}
