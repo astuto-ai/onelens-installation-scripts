@@ -7,7 +7,7 @@ API_ENDPOINT="https://api-in.onelens.cloud"
 # If proxy env vars are set (injected by the deployer Helm chart), augment NO_PROXY
 # with K8s internal addresses that must bypass the proxy.
 # Guard: skip if already augmented (entrypoint.sh runs before install.sh/patching.sh).
-if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
+if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ] || [ -n "${NO_PROXY:-}" ]; then
     if [[ "${NO_PROXY:-}" != *".svc.cluster.local"* ]]; then
         echo "Proxy configuration detected."
         _K8S_NO_PROXY="localhost,127.0.0.1,.svc,.svc.cluster.local,${KUBERNETES_SERVICE_HOST:-},169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -18,8 +18,8 @@ if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
         fi
         export no_proxy="$NO_PROXY"
     fi
-    echo "  HTTP_PROXY=$HTTP_PROXY"
-    echo "  HTTPS_PROXY=$HTTPS_PROXY"
+    echo "  HTTP_PROXY=${HTTP_PROXY:-}"
+    echo "  HTTPS_PROXY=${HTTPS_PROXY:-}"
     echo "  NO_PROXY=$NO_PROXY"
 fi
 

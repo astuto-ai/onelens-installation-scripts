@@ -1310,7 +1310,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   if [ -n "$REGISTRY_URL" ]; then
       echo "  Air-gapped mode: REGISTRY_URL=$REGISTRY_URL"
   fi
-  if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ]; then
+  if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ] || [ -n "$PROXY_NO" ]; then
       echo "  Proxy: HTTP=$PROXY_HTTP HTTPS=$PROXY_HTTPS NO=$PROXY_NO"
   elif [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
       echo "  WARNING: Deployer has proxy env vars but no proxy config found in Helm release values."
@@ -2580,16 +2580,16 @@ fi
 # Commas in --set values are interpreted as list separators by Helm,
 # so we must escape them with backslashes for NO_PROXY.
 # Double-escape because HELM_CMD is executed via eval (line ~3207).
-if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ]; then
+if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ] || [ -n "$PROXY_NO" ]; then
     echo "Preserving proxy configuration across upgrade"
     _PROXY_NO_ESCAPED="${PROXY_NO//,/\\\\,}"
     HELM_CMD="$HELM_CMD \
-      --set onelens-agent.env.HTTP_PROXY=$PROXY_HTTP \
-      --set onelens-agent.env.http_proxy=$PROXY_HTTP \
-      --set onelens-agent.env.HTTPS_PROXY=$PROXY_HTTPS \
-      --set onelens-agent.env.https_proxy=$PROXY_HTTPS \
-      --set onelens-agent.env.NO_PROXY=$_PROXY_NO_ESCAPED \
-      --set onelens-agent.env.no_proxy=$_PROXY_NO_ESCAPED"
+      --set onelens-agent.env.HTTP_PROXY=\"$PROXY_HTTP\" \
+      --set onelens-agent.env.http_proxy=\"$PROXY_HTTP\" \
+      --set onelens-agent.env.HTTPS_PROXY=\"$PROXY_HTTPS\" \
+      --set onelens-agent.env.https_proxy=\"$PROXY_HTTPS\" \
+      --set onelens-agent.env.NO_PROXY=\"$_PROXY_NO_ESCAPED\" \
+      --set onelens-agent.env.no_proxy=\"$_PROXY_NO_ESCAPED\""
 fi
 
 # Network costs settings (opt-in, preserved from existing release)
