@@ -48,6 +48,26 @@ trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 # Export the variables so they are available in the environment
 export RELEASE_VERSION IMAGE_TAG API_BASE_URL TOKEN PVC_ENABLED
 
+# Phase 2.5: Proxy Configuration
+# If proxy env vars are set (injected by the deployer Helm chart), augment NO_PROXY
+# with K8s internal addresses that must bypass the proxy.
+# Guard: skip if already augmented (entrypoint.sh may have done this already).
+if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
+    if [[ "${NO_PROXY:-}" != *".svc.cluster.local"* ]]; then
+        echo "Proxy configuration detected."
+        _K8S_NO_PROXY="localhost,127.0.0.1,.svc,.svc.cluster.local,${KUBERNETES_SERVICE_HOST:-},169.254.169.254,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+        if [ -n "${NO_PROXY:-}" ]; then
+            export NO_PROXY="${NO_PROXY},${_K8S_NO_PROXY}"
+        else
+            export NO_PROXY="$_K8S_NO_PROXY"
+        fi
+        export no_proxy="$NO_PROXY"
+    fi
+    echo "  HTTP_PROXY=$HTTP_PROXY"
+    echo "  HTTPS_PROXY=$HTTPS_PROXY"
+    echo "  NO_PROXY=$NO_PROXY"
+fi
+
 # Phase 3: Prerequisite Checks (moved before registration — needed for upgrade detection)
 echo "Step 0: Checking prerequisites..."
 
@@ -670,6 +690,21 @@ if [ -n "$REGISTRY_URL" ]; then
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL"
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy"
     CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
+
+# Proxy: pass effective proxy env vars to onelens-agent sub-chart
+# Commas in --set values are interpreted as list separators by Helm,
+# so we must escape them with backslashes for NO_PROXY.
+# Double-escape because CMD is executed via eval.
+if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
+    echo "Passing proxy configuration to onelens-agent sub-chart"
+    _NO_PROXY_ESCAPED="${NO_PROXY//,/\\\\,}"
+    CMD+=" --set onelens-agent.env.HTTP_PROXY=\"$HTTP_PROXY\""
+    CMD+=" --set onelens-agent.env.http_proxy=\"$http_proxy\""
+    CMD+=" --set onelens-agent.env.HTTPS_PROXY=\"$HTTPS_PROXY\""
+    CMD+=" --set onelens-agent.env.https_proxy=\"$https_proxy\""
+    CMD+=" --set onelens-agent.env.NO_PROXY=\"$_NO_PROXY_ESCAPED\""
+    CMD+=" --set onelens-agent.env.no_proxy=\"$_NO_PROXY_ESCAPED\""
 fi
 
 # Add cloud-specific storage class parameters

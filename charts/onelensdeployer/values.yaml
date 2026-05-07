@@ -171,6 +171,21 @@ rbac:
 globals:
   labels: {}
 # ==================================================================================
+# PROXY CONFIGURATION (optional)
+# ==================================================================================
+# Configure HTTP/HTTPS proxy for clusters behind corporate proxies.
+# These apply to both the installation job and updater cronjob.
+# K8s internal addresses are automatically added to noProxy by install.sh.
+#
+# Example:
+#   --set proxy.httpProxy="http://proxy.corp:8080"
+#   --set proxy.httpsProxy="http://proxy.corp:8080"
+#   --set proxy.noProxy=".corp.internal\,.custom.domain"
+proxy:
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""
+# ==================================================================================
 # POD COUNT OVERRIDE (optional)
 # ==================================================================================
 # Set this to bypass kubectl pod counting on very large clusters (4000+ deployments)

@@ -1289,6 +1289,9 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   REGISTRATION_ID=$(_get '.["onelens-agent"].secrets.REGISTRATION_ID')
   DEFAULT_CLUSTER_ID=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.defaultClusterId')
   REGISTRY_URL=$(_get '.["onelens-agent"].env.REGISTRY_URL')
+  PROXY_HTTP=$(_get '.["onelens-agent"].env.HTTP_PROXY')
+  PROXY_HTTPS=$(_get '.["onelens-agent"].env.HTTPS_PROXY')
+  PROXY_NO=$(_get '.["onelens-agent"].env.NO_PROXY')
   # Read user-supplied values WITHOUT -a flag — chart defaults like "false" would
   # be mistaken for customer overrides with -a. Single call for GPU + NC fields.
   _user_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
@@ -1306,6 +1309,12 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   echo "  Cluster: $CLUSTER_NAME | Cloud: $SC_PROVISIONER | PVC: $PVC_ENABLED"
   if [ -n "$REGISTRY_URL" ]; then
       echo "  Air-gapped mode: REGISTRY_URL=$REGISTRY_URL"
+  fi
+  if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ]; then
+      echo "  Proxy: HTTP=$PROXY_HTTP HTTPS=$PROXY_HTTPS NO=$PROXY_NO"
+  elif [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ]; then
+      echo "  WARNING: Deployer has proxy env vars but no proxy config found in Helm release values."
+      echo "  Proxy may have been removed manually. The upgrade will proceed without proxy settings."
   fi
 
   # Extract complex customer values (tolerations, nodeSelector, podLabels) into temp file
@@ -1363,6 +1372,9 @@ else
   REGISTRATION_ID="${REGISTRATION_ID:-}"
   DEFAULT_CLUSTER_ID=""
   REGISTRY_URL=""
+  PROXY_HTTP=""
+  PROXY_HTTPS=""
+  PROXY_NO=""
   GPU_ENABLED_OVERRIDE=""
   NC_ENABLED_OVERRIDE=""
   NC_CLOUD_AWS=""
@@ -2562,6 +2574,22 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
+
+# Proxy: preserve proxy env vars across upgrades
+# Commas in --set values are interpreted as list separators by Helm,
+# so we must escape them with backslashes for NO_PROXY.
+# Double-escape because HELM_CMD is executed via eval (line ~3207).
+if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ]; then
+    echo "Preserving proxy configuration across upgrade"
+    _PROXY_NO_ESCAPED="${PROXY_NO//,/\\\\,}"
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.env.HTTP_PROXY=$PROXY_HTTP \
+      --set onelens-agent.env.http_proxy=$PROXY_HTTP \
+      --set onelens-agent.env.HTTPS_PROXY=$PROXY_HTTPS \
+      --set onelens-agent.env.https_proxy=$PROXY_HTTPS \
+      --set onelens-agent.env.NO_PROXY=$_PROXY_NO_ESCAPED \
+      --set onelens-agent.env.no_proxy=$_PROXY_NO_ESCAPED"
 fi
 
 # Network costs settings (opt-in, preserved from existing release)
