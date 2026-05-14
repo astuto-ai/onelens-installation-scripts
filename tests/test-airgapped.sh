@@ -36,12 +36,16 @@ patching_registry_default=$(grep -c 'REGISTRY_URL=""' "$ROOT/src/patching.sh" ||
 assert_gt "$patching_registry_default" "0" "patching.sh defaults REGISTRY_URL to empty"
 
 # ---------------------------------------------------------------------------
-# Test 6: Both scripts read chart from ConfigMap when air-gapped
+# Test 6: Air-gapped chart source
+# install.sh uses bundled chart from /charts/ (no ConfigMap).
+# patching.sh has backward-compat ConfigMap fallback for old deployer images.
 # ---------------------------------------------------------------------------
-install_cm=$(grep -c 'onelens-agent-chart' "$ROOT/install.sh" || true)
+install_bundled=$(grep -c '/charts/onelens-agent' "$ROOT/install.sh" || true)
+patching_bundled=$(grep -c '/charts/onelens-agent' "$ROOT/src/patching.sh" || true)
 patching_cm=$(grep -c 'onelens-agent-chart' "$ROOT/src/patching.sh" || true)
-assert_gt "$install_cm" "0" "install.sh reads chart from ConfigMap when air-gapped"
-assert_gt "$patching_cm" "0" "patching.sh reads chart from ConfigMap when air-gapped"
+assert_gt "$install_bundled" "0" "install.sh uses bundled chart from /charts/ when air-gapped"
+assert_gt "$patching_bundled" "0" "patching.sh uses bundled chart from /charts/ when air-gapped"
+assert_gt "$patching_cm" "0" "patching.sh has ConfigMap fallback for backward compat"
 
 # ---------------------------------------------------------------------------
 # Test 7: Both scripts persist REGISTRY_URL in helm values
@@ -194,10 +198,11 @@ assert_eq "$install_ips" "0" "install.sh does not set imagePullSecrets"
 assert_eq "$patching_ips" "0" "patching.sh does not set imagePullSecrets"
 
 # ---------------------------------------------------------------------------
-# Test 27: Migration script creates ConfigMap for chart delivery
+# Test 27: Migration script pushes deployer chart to OCI
+# (ConfigMap creation removed — deployer image now bundles the chart)
 # ---------------------------------------------------------------------------
-migrate_configmap=$(grep -c 'configmap onelens-agent-chart' "$MIGRATE" || true)
-assert_gt "$migrate_configmap" "0" "migration script creates ConfigMap onelens-agent-chart"
+migrate_deployer_push=$(grep -c 'helm push.*onelensdeployer' "$MIGRATE" || true)
+assert_gt "$migrate_deployer_push" "0" "migration script pushes deployer chart to OCI"
 
 # ---------------------------------------------------------------------------
 # Test 28: install.sh MY_IMAGE read uses name-selector, not containers[0]

@@ -1540,7 +1540,7 @@ if [ -n "$REGISTRY_URL" ]; then
         if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_EMBEDDED_VERSION" ]; then
             echo "Skipping helm upgrade — bundled chart is v$_CHART_EMBEDDED_VERSION but target is $CHART_VERSION"
             echo "  To upgrade: re-run the migration script with --version $CHART_VERSION,"
-            echo "  then run: helm upgrade onelensdeployer oci://<registry>/charts/onelensdeployer"
+            echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
             echo "  All other remediation (pod health, OOM recovery, resource sizing) will still run."
             SKIP_HELM_UPGRADE=true
         fi
@@ -1565,7 +1565,7 @@ if [ -n "$REGISTRY_URL" ]; then
         echo "ERROR: No chart available in air-gapped mode."
         echo "  No bundled chart in /charts/ and no ConfigMap onelens-agent-chart."
         echo "  Fix: Upgrade the deployer image by re-running the migration script,"
-        echo "  then run: helm upgrade onelensdeployer oci://<registry>/charts/onelensdeployer"
+        echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
         exit 1
     fi
 else
