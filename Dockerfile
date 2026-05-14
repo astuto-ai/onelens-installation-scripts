@@ -28,6 +28,15 @@ RUN ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/') && \
     mv /tmp/linux-${ARCH}/helm /usr/local/bin/helm && \
     rm -rf /tmp/linux-${ARCH} /tmp/helm.tar.gz
 
+# Bundle the onelens-agent Helm chart for airgapped environments.
+# In airgapped mode, install.sh and patching.sh use this local chart
+# instead of pulling from a Helm repo or OCI registry.
+ARG CHART_VERSION=2.1.83
+RUN helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
+    helm repo update && \
+    mkdir -p /charts && \
+    helm pull onelens/onelens-agent --version "$CHART_VERSION" -d /charts/
+
 # CACHE_BUST changes on every CI build (set to git SHA), ensuring
 # install.sh and other scripts are never served from stale Docker cache.
 ARG CACHE_BUST=unknown

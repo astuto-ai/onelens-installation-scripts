@@ -43,7 +43,7 @@ fi
 REGISTRY=$(echo "$REGISTRY" | sed 's|/$||')
 
 # --- Prerequisite checks ---
-for tool in aws docker helm jq kubectl; do
+for tool in aws docker helm jq; do
     if ! command -v "$tool" &>/dev/null; then
         echo "ERROR: $tool is required but not found in PATH."
         exit 1
@@ -281,9 +281,6 @@ done
 echo ""
 echo "=== Mirroring Helm charts ==="
 
-# Pull onelens-agent chart (used for ConfigMap, not pushed to registry)
-helm pull onelens/onelens-agent --version "$VERSION" -d "$TMPDIR"
-
 # onelensdeployer chart — rewrite deployer image, then push
 echo ""
 echo "--- onelensdeployer chart (version $VERSION) ---"
@@ -309,33 +306,6 @@ aws ecr describe-repositories --repository-names "$_ecr_charts_deployer" --regio
 helm push "$TMPDIR/onelensdeployer-${VERSION}.tgz" "oci://$REGISTRY/charts/"
 echo "OK: charts/onelensdeployer:$VERSION"
 
-# --- Kubernetes setup ---
-# Create resources in the target cluster that the deployer pod will need.
-# The migration script runs on a machine with both internet and kubectl access.
-echo ""
-echo "=== Setting up Kubernetes resources ==="
-echo "Pre-loading the agent Helm chart into the cluster as a ConfigMap."
-echo "This lets the deployer pod install the chart without needing registry auth."
-echo ""
-
-# Ensure namespace exists (apply is idempotent — succeeds if already exists)
-echo "Ensuring namespace onelens-agent exists..."
-if ! kubectl create namespace onelens-agent --dry-run=client -o yaml | kubectl apply -f -; then
-    echo "ERROR: Failed to create namespace onelens-agent."
-    echo "  Cause: kubectl cannot reach the cluster, or lacks permission to create/update namespaces."
-    echo "  Fix:   Ensure your kubeconfig points to the target cluster and has namespace create permissions."
-    echo "         Verify with: kubectl get nodes"
-    exit 1
-fi
-
-# Store the onelens-agent chart as a ConfigMap so install.sh/patching.sh can read it
-# without needing registry auth from inside the pod.
-echo "Creating ConfigMap onelens-agent-chart (chart tarball: $(du -h "$TMPDIR/onelens-agent-${VERSION}.tgz" | awk '{print $1}'))..."
-kubectl create configmap onelens-agent-chart -n onelens-agent \
-    --from-file=chart.tgz="$TMPDIR/onelens-agent-${VERSION}.tgz" \
-    --dry-run=client -o yaml | kubectl apply -f -
-echo "OK: ConfigMap onelens-agent-chart"
-
 # --- Summary ---
 echo ""
 echo "=== Migration complete ==="
@@ -350,9 +320,6 @@ done
 echo ""
 echo "Deployer chart pushed:"
 echo "  oci://$REGISTRY/charts/onelensdeployer:$VERSION"
-echo ""
-echo "Kubernetes resources created:"
-echo "  ConfigMap onelens-agent-chart (agent chart v$VERSION)"
 echo ""
 echo "Next step: Install OneLens on each cluster:"
 echo "  helm upgrade --install onelensdeployer oci://$REGISTRY/charts/onelensdeployer \\"

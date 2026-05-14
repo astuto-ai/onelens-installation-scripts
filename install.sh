@@ -495,35 +495,18 @@ fi
 
 # --- Chart source ---
 if [ -n "$REGISTRY_URL" ]; then
-    # Air-gapped: chart is pre-loaded as a ConfigMap by the migration script.
-    # No registry auth needed — the ConfigMap was created on a machine with access.
-    echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
-    _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1) || {
-        if echo "$_cm_err" | grep -qi "forbidden\|unauthorized"; then
-            echo "ERROR: Permission denied reading ConfigMap onelens-agent-chart."
-            echo "  Cause: The deployer pod's service account cannot read configmaps in namespace onelens-agent."
-            echo "  Fix:   Ensure the onelensdeployer Role grants get/list on configmaps (this is included by default)."
-            echo "         If you customized RBAC, add: resources: [\"configmaps\"] verbs: [\"get\",\"list\"]"
-            echo "  Detail: $_cm_err"
-        else
-            echo "ERROR: ConfigMap onelens-agent-chart not found in namespace onelens-agent."
-            echo "  Cause: The migration script was not run, or was run against a different cluster."
-            echo "  Fix:   Run the migration script with kubectl access to this cluster:"
-            echo "         bash airgapped_migrate_images.sh --registry <your-registry-url>"
-        fi
-        exit 1
-    }
-    kubectl get configmap onelens-agent-chart -n onelens-agent \
-        -o go-template='{{index .binaryData "chart.tgz"}}' | base64 -d > /tmp/onelens-agent-chart.tgz
-    if [ ! -s /tmp/onelens-agent-chart.tgz ]; then
-        echo "ERROR: Failed to extract chart from ConfigMap onelens-agent-chart."
-        echo "  The ConfigMap exists but extraction produced an empty file."
-        echo "  Fix: Re-run the migration script to recreate the ConfigMap."
+    # Air-gapped: use the onelens-agent chart bundled in the deployer image.
+    # The chart is baked into /charts/ at image build time (see Dockerfile).
+    _CHART_FILE=$(ls /charts/onelens-agent-*.tgz 2>/dev/null | head -1)
+    if [ -z "$_CHART_FILE" ]; then
+        echo "ERROR: No onelens-agent chart found in /charts/."
+        echo "  The deployer image does not contain a bundled chart."
+        echo "  Fix: Rebuild the deployer image with --build-arg CHART_VERSION=<version>"
         exit 1
     fi
-    _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
-    echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
-    CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
+    _CHART_EMBEDDED_VERSION=$(tar xzf "$_CHART_FILE" -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
+    echo "Air-gapped mode: using bundled chart v$_CHART_EMBEDDED_VERSION ($(du -h "$_CHART_FILE" | awk '{print $1}'))"
+    CHART_SOURCE="$_CHART_FILE"
 else
     helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts && helm repo update
     CHART_SOURCE="onelens/onelens-agent"
