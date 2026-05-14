@@ -88,14 +88,22 @@ fi
 
 # Phase 2: Install Helm and kubectl (quiet)
 echo "Installing helm ${HELM_VERSION} and kubectl ${KUBECTL_VERSION} (${ARCH_TYPE})..."
-curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
-    tar -xzf helm.tar.gz && \
-    mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
-    rm -rf linux-${ARCH_TYPE} helm.tar.gz
+if command -v helm &>/dev/null; then
+    echo "Helm already installed, skipping download."
+else
+    curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
+        tar -xzf helm.tar.gz && \
+        mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
+        rm -rf linux-${ARCH_TYPE} helm.tar.gz
+fi
 
-curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" -o kubectl && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+if command -v kubectl &>/dev/null; then
+    echo "kubectl already installed, skipping download."
+else
+    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" -o kubectl && \
+        chmod +x kubectl && \
+        mv kubectl /usr/local/bin/kubectl
+fi
 
 if ! command -v helm &>/dev/null || ! command -v kubectl &>/dev/null; then
     echo "Error: helm or kubectl installation failed."
