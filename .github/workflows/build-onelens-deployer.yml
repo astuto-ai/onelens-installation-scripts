@@ -75,6 +75,13 @@ jobs:
         with:
           registry-type: public
 
+      - name: Extract chart version from tag
+        id: chart_version
+        run: |
+          TAG="${{ needs.determine-tag.outputs.image_tag }}"
+          # Strip v prefix: v2.1.83 -> 2.1.83
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
       - name: Build Docker Image for Scanning (single platform)
         id: build
         uses: docker/build-push-action@v5
@@ -89,6 +96,7 @@ jobs:
           load: true
           build-args: |
             CACHE_BUST=${{ github.sha }}
+            CHART_VERSION=${{ steps.chart_version.outputs.version }}
 
       - name: Save Docker image for scanning
         run: |
@@ -170,6 +178,13 @@ jobs:
         with:
           registry-type: public
 
+      - name: Extract chart version from tag
+        id: chart_version
+        run: |
+          TAG="${{ needs.determine-tag.outputs.image_tag }}"
+          # Strip v prefix: v2.1.83 -> 2.1.83
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
       - name: Build and push multi-arch Docker image
         uses: docker/build-push-action@v5
         with:
@@ -183,6 +198,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             CACHE_BUST=${{ github.sha }}
+            CHART_VERSION=${{ steps.chart_version.outputs.version }}
 
       - name: Image build summary
         run: |
