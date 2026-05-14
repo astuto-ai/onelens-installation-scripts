@@ -2355,10 +2355,38 @@ fi
 
 # --- Chart source ---
 if [ -n "$REGISTRY_URL" ]; then
-    # Air-gapped: chart is pre-loaded as a ConfigMap by the migration script.
-    # No registry auth needed — the ConfigMap was created on a machine with access.
-    echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
-    _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1) || {
+    # Air-gapped: try the chart bundled in the deployer image first (new images),
+    # then fall back to ConfigMap (old images that pre-date the bundled chart).
+    _CHART_FILE=$(ls /charts/onelens-agent-*.tgz 2>/dev/null | head -1)
+    if [ -n "$_CHART_FILE" ]; then
+        _CHART_EMBEDDED_VERSION=$(tar xzf "$_CHART_FILE" -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
+        echo "Air-gapped mode: using bundled chart v$_CHART_EMBEDDED_VERSION ($(du -h "$_CHART_FILE" | awk '{print $1}'))"
+        if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_EMBEDDED_VERSION" ]; then
+            echo "Skipping helm upgrade — bundled chart is v$_CHART_EMBEDDED_VERSION but target is $CHART_VERSION"
+            echo "  To upgrade: re-run the migration script with --version $CHART_VERSION,"
+            echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
+            echo "  All other remediation (pod health, OOM recovery, resource sizing) will still run."
+            SKIP_HELM_UPGRADE=true
+        fi
+        CHART_SOURCE="$_CHART_FILE"
+    elif _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1); then
+        # Backward compat: older deployer images don't have /charts/ but may have a ConfigMap.
+        echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
+        kubectl get configmap onelens-agent-chart -n onelens-agent \
+            -o go-template='{{index .binaryData "chart.tgz"}}' | base64 -d > /tmp/onelens-agent-chart.tgz
+        if [ ! -s /tmp/onelens-agent-chart.tgz ]; then
+            echo "ERROR: Failed to extract chart from ConfigMap onelens-agent-chart."
+            exit 1
+        fi
+        _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
+        echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
+        if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_CM_VERSION" ]; then
+            echo "Skipping helm upgrade — ConfigMap has chart version $_CHART_CM_VERSION but target is $CHART_VERSION"
+            SKIP_HELM_UPGRADE=true
+        fi
+        CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
+    else
+        # Distinguish RBAC errors from "not found" to give actionable guidance.
         if echo "$_cm_err" | grep -qi "forbidden\|unauthorized"; then
             echo "ERROR: Permission denied reading ConfigMap onelens-agent-chart."
             echo "  Cause: The deployer pod's service account cannot read configmaps in namespace onelens-agent."
@@ -2366,32 +2394,13 @@ if [ -n "$REGISTRY_URL" ]; then
             echo "         If you customized RBAC, add: resources: [\"configmaps\"] verbs: [\"get\",\"list\"]"
             echo "  Detail: $_cm_err"
         else
-            echo "ERROR: ConfigMap onelens-agent-chart not found in namespace onelens-agent."
-            echo "  Cause: The migration script was not run, or was run against a different cluster."
-            echo "  Fix:   Run the migration script with kubectl access to this cluster:"
-            echo "         bash airgapped_migrate_images.sh --registry <your-registry-url>"
+            echo "ERROR: No chart available in air-gapped mode."
+            echo "  No bundled chart in /charts/ and no ConfigMap onelens-agent-chart."
+            echo "  Fix: Upgrade the deployer image by re-running the migration script,"
+            echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
         fi
         exit 1
-    }
-    kubectl get configmap onelens-agent-chart -n onelens-agent \
-        -o go-template='{{index .binaryData "chart.tgz"}}' | base64 -d > /tmp/onelens-agent-chart.tgz
-    if [ ! -s /tmp/onelens-agent-chart.tgz ]; then
-        echo "ERROR: Failed to extract chart from ConfigMap onelens-agent-chart."
-        echo "  The ConfigMap exists but extraction produced an empty file."
-        echo "  Fix: Re-run the migration script to recreate the ConfigMap."
-        exit 1
     fi
-    _CHART_CM_VERSION=$(tar xzf /tmp/onelens-agent-chart.tgz -O onelens-agent/Chart.yaml 2>/dev/null | grep '^version:' | awk '{print $2}')
-    echo "Chart from ConfigMap: version $_CHART_CM_VERSION ($(du -h /tmp/onelens-agent-chart.tgz | awk '{print $1}'))"
-    if [ -n "$CHART_VERSION" ] && [ "$CHART_VERSION" != "$_CHART_CM_VERSION" ]; then
-        echo "Skipping helm upgrade — ConfigMap has chart version $_CHART_CM_VERSION but target is $CHART_VERSION"
-        echo "  The target version is not available in the cluster. To upgrade:"
-        echo "  1. Re-run the migration script with --version $CHART_VERSION (or latest)"
-        echo "  2. The next patching run will pick up the new chart automatically"
-        echo "  All other remediation (pod health, OOM recovery, resource sizing) will still run."
-        SKIP_HELM_UPGRADE=true
-    fi
-    CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
 else
     helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts >/dev/null 2>&1
     helm repo update >/dev/null 2>&1
