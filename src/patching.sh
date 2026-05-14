@@ -1545,7 +1545,7 @@ if [ -n "$REGISTRY_URL" ]; then
             SKIP_HELM_UPGRADE=true
         fi
         CHART_SOURCE="$_CHART_FILE"
-    elif kubectl get configmap onelens-agent-chart -n onelens-agent -o name >/dev/null 2>&1; then
+    elif _cm_err=$(kubectl get configmap onelens-agent-chart -n onelens-agent -o name 2>&1); then
         # Backward compat: older deployer images don't have /charts/ but may have a ConfigMap.
         echo "Air-gapped mode: reading chart from ConfigMap onelens-agent-chart"
         kubectl get configmap onelens-agent-chart -n onelens-agent \
@@ -1562,10 +1562,19 @@ if [ -n "$REGISTRY_URL" ]; then
         fi
         CHART_SOURCE="/tmp/onelens-agent-chart.tgz"
     else
-        echo "ERROR: No chart available in air-gapped mode."
-        echo "  No bundled chart in /charts/ and no ConfigMap onelens-agent-chart."
-        echo "  Fix: Upgrade the deployer image by re-running the migration script,"
-        echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
+        # Distinguish RBAC errors from "not found" to give actionable guidance.
+        if echo "$_cm_err" | grep -qi "forbidden\|unauthorized"; then
+            echo "ERROR: Permission denied reading ConfigMap onelens-agent-chart."
+            echo "  Cause: The deployer pod's service account cannot read configmaps in namespace onelens-agent."
+            echo "  Fix:   Ensure the onelensdeployer Role grants get/list on configmaps (this is included by default)."
+            echo "         If you customized RBAC, add: resources: [\"configmaps\"] verbs: [\"get\",\"list\"]"
+            echo "  Detail: $_cm_err"
+        else
+            echo "ERROR: No chart available in air-gapped mode."
+            echo "  No bundled chart in /charts/ and no ConfigMap onelens-agent-chart."
+            echo "  Fix: Upgrade the deployer image by re-running the migration script,"
+            echo "  then update the deployer: helm upgrade <deployer-release> oci://<registry>/charts/onelensdeployer"
+        fi
         exit 1
     fi
 else
