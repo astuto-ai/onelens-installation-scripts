@@ -89,18 +89,26 @@ fi
 
 echo "Detected architecture: $ARCH_TYPE"
 
-echo "Installing Helm for $ARCH_TYPE..."
-curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
-    tar -xzvf helm.tar.gz && \
-    mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
-    rm -rf linux-${ARCH_TYPE} helm.tar.gz
+if command -v helm &> /dev/null; then
+    echo "Helm already installed, skipping download."
+else
+    echo "Installing Helm for $ARCH_TYPE..."
+    curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH_TYPE}.tar.gz" -o helm.tar.gz && \
+        tar -xzvf helm.tar.gz && \
+        mv linux-${ARCH_TYPE}/helm /usr/local/bin/helm && \
+        rm -rf linux-${ARCH_TYPE} helm.tar.gz
+fi
 
 helm version
 
-echo "Installing kubectl for $ARCH_TYPE..."
-curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/kubectl
+if command -v kubectl &> /dev/null; then
+    echo "kubectl already installed, skipping download."
+else
+    echo "Installing kubectl for $ARCH_TYPE..."
+    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_TYPE}/kubectl" && \
+        chmod +x kubectl && \
+        mv kubectl /usr/local/bin/kubectl
+fi
 
 kubectl version --client
 
