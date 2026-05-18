@@ -7,7 +7,6 @@
 #   - charts/onelensdeployer/Chart.yaml (version, appVersion)
 #   - globalvalues.yaml (onelens-agent.image.tag)
 #   - install.sh (RELEASE_VERSION defaults)
-#   - Dockerfile (CHART_VERSION default for bundled airgapped chart)
 #
 # Usage: ./scripts/sync-version.sh
 # ==================================================================================
@@ -70,13 +69,6 @@ INSTALL_SH="${REPO_ROOT}/install.sh"
 if [[ -f "$INSTALL_SH" ]]; then
     sedi "s/\${RELEASE_VERSION:=[0-9][0-9.]*}/\${RELEASE_VERSION:=${VERSION}}/g" "$INSTALL_SH"
     echo "  Updated $INSTALL_SH"
-fi
-
-# --- Dockerfile (CHART_VERSION default for bundled airgapped chart) ---
-DOCKERFILE="${REPO_ROOT}/Dockerfile"
-if [[ -f "$DOCKERFILE" ]]; then
-    sedi "s/^ARG CHART_VERSION=.*/ARG CHART_VERSION=${VERSION}/" "$DOCKERFILE"
-    echo "  Updated $DOCKERFILE"
 fi
 
 echo "Version sync complete: $VERSION"
