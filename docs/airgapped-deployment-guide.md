@@ -1,6 +1,9 @@
 # OneLens Air-Gapped Deployment Guide
 
-Deploy OneLens on Kubernetes clusters that have restricted or no internet access. This guide walks you through mirroring container images to your private registry and deploying using the standard Helm command.
+Deploy OneLens on Kubernetes clusters that have restricted or no internet access. This guide covers two approaches:
+
+- **[Option 1: URL Whitelisting](#option-1-url-whitelisting-recommended)** — If your network team can whitelist specific URLs, use the standard install with no extra setup.
+- **[Option 2: Private Registry](#option-2-private-registry-full-air-gap)** — If your organization requires all container images to be hosted in your own private registry and does not allow pulling from public registries.
 
 ---
 
@@ -53,6 +56,71 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
                 │   └──────────────────────────────────────────┘   │
                 └──────────────────────────────────────────────────┘
 ```
+
+---
+
+## Option 1: URL Whitelisting (Recommended)
+
+If your cluster does not have general internet access but your network team can whitelist specific URLs, you can skip the entire image mirroring process and use the **standard install flow** directly. This is the simplest path.
+
+### URLs to Whitelist
+
+Ask your network team to allow outbound HTTPS (port 443) access to the following URLs. All URLs are needed from **both** the setup machine and the cluster nodes unless noted otherwise.
+
+**OneLens services** (API and data upload):
+
+| URL | Purpose |
+|-----|---------|
+| `https://*.onelens.cloud` | API registration, heartbeats, and upload gateway |
+| `https://storage.googleapis.com` | Agent data upload — the agent receives GCS signed URLs from the API and uploads collected metrics directly |
+
+**Container registries** (image pulls):
+
+| URL | Purpose |
+|-----|---------|
+| `https://public.ecr.aws` | OneLens Agent and Deployer images |
+| `https://quay.io` | Prometheus, config-reloader, pushgateway, kube-rbac-proxy images |
+| `https://registry.k8s.io` | kube-state-metrics image |
+| `https://ghcr.io` | OpenCost image |
+| `https://nvcr.io` | DCGM Exporter image (only needed for GPU clusters) |
+
+**Helm charts and scripts** (install, upgrade, and auto-update):
+
+| URL | Purpose |
+|-----|---------|
+| `https://astuto-ai.github.io` | Helm chart repository — used during install and by the in-cluster updater for auto-upgrades |
+
+**Tool downloads** (fallback — used by the deployer pod if binaries are missing from the image):
+
+| URL | Purpose |
+|-----|---------|
+| `https://get.helm.sh` | Helm binary download |
+| `https://dl.k8s.io` | kubectl binary download |
+
+### Install
+
+Once the URLs are whitelisted, follow the standard install — no migration scripts, no private registry setup:
+
+```bash
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
+helm repo update onelens && \
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
+```
+
+Upgrades also work the same way as a standard cluster — no re-running migration scripts.
+
+> **If URL whitelisting is not possible**, continue with Option 2 below to mirror all images into your own private registry.
+
+---
+
+## Option 2: Private Registry (Full Air-Gap)
+
+If your organization requires all container images to be hosted in your own private registry and does not allow pulling from public registries, use this approach to mirror all images and Helm charts into your registry.
 
 ---
 
