@@ -138,7 +138,7 @@ If your organization requires all container images to be hosted in your own priv
 
 > **Note:** This guide assumes AWS ECR as the private registry. If you use a different registry (Harbor, Artifactory, GCR, etc.), adapt the registry authentication and image push commands accordingly — the Helm install command remains the same.
 >
-> **Note:** The migration script requires `kubectl` access to the target cluster to create a ConfigMap containing the agent chart. Ensure your kubeconfig is configured for the target cluster before running.
+> **Note:** The deployer image bundles the agent chart internally — no ConfigMap or direct cluster access is required during migration. The migration script only mirrors images and the deployer chart to your private registry.
 
 ### Network Access
 
@@ -264,7 +264,6 @@ The script will:
 3. Create ECR repositories if they don't exist (under your prefix if specified)
 4. Pull each image from its public registry and push to your ECR (multi-arch: amd64 + arm64)
 5. Pull the `onelensdeployer` Helm chart, rewrite its image reference, and push to your registry
-6. Create a ConfigMap in the target cluster containing the `onelens-agent` chart (used by the deployer pod to install without needing registry access)
 
 ### Verify
 
@@ -273,12 +272,6 @@ aws ecr describe-repositories --region <region> --query 'repositories[].reposito
 ```
 
 You should see repositories for: `<prefix>/onelens-agent`, `<prefix>/onelens-deployer`, `<prefix>/prometheus`, `<prefix>/opencost`, `<prefix>/prometheus-config-reloader`, `<prefix>/kube-state-metrics`, `<prefix>/pushgateway`, `<prefix>/kube-rbac-proxy`, and `<prefix>/charts/onelensdeployer`.
-
-Also verify the chart ConfigMap was created:
-
-```bash
-kubectl get configmap onelens-agent-chart -n onelens-agent
-```
 
 ---
 
@@ -332,7 +325,7 @@ The deployer automatically detects that it's running from a private registry and
 
 1. Helm deploys the `onelensdeployer` chart (deployer image pulled from your private registry by the node IAM role)
 2. The deployer Job registers the cluster with the OneLens API
-3. `install.sh` detects the private registry, reads the `onelens-agent` chart from the ConfigMap (created by the migration script)
+3. `install.sh` detects the private registry and uses the agent chart bundled in the deployer image
 4. All component images (agent, Prometheus, OpenCost, KSM, etc.) are pulled from your private registry by the node IAM role
 5. The `onelensupdater` CronJob is created for automated health checks and upgrades
 6. Cluster status is updated to `CONNECTED`
@@ -369,7 +362,7 @@ This mirrors the new version's images, updates the deployer chart in your regist
 
 ### Step 2: Clusters upgrade automatically
 
-The `onelensupdater` CronJob runs every 5 minutes. When it detects a version mismatch, it reads the chart from the ConfigMap (updated in Step 1) and runs a helm upgrade with the new version.
+The `onelensupdater` CronJob runs every 5 minutes. When it detects a version mismatch, it uses the agent chart bundled in the deployer image and runs a helm upgrade with the new version.
 
 **You control the timing** — clusters only upgrade after you re-run the migration script. No coordination with OneLens needed.
 
