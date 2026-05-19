@@ -7,7 +7,91 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
 
 ---
 
-## How It Works
+## Option 1: URL Whitelisting (Recommended)
+
+If your cluster does not have general internet access but your network team can whitelist specific URLs, this is the simplest path. You whitelist a set of URLs and then use the exact same install and upgrade process as a standard internet-connected cluster. No additional tooling, scripts, or private registry setup is needed.
+
+### URLs to Whitelist
+
+Ask your network team to allow outbound HTTPS (port 443) access to the following URLs. All URLs are needed from **both** the setup machine and the cluster nodes unless noted otherwise.
+
+**OneLens services** (API and data upload):
+
+| URL | Purpose |
+|-----|---------|
+| `https://*.onelens.cloud` | API registration, heartbeats, and upload gateway |
+| `https://storage.googleapis.com` | Agent data upload — the agent receives GCS signed URLs from the API and uploads collected metrics directly |
+
+**Container registries** (image pulls):
+
+| URL | Purpose |
+|-----|---------|
+| `https://public.ecr.aws` | OneLens Agent and Deployer images |
+| `https://quay.io` | Prometheus, config-reloader, pushgateway, kube-rbac-proxy images |
+| `https://registry.k8s.io` | kube-state-metrics image |
+| `https://ghcr.io` | OpenCost image |
+| `https://nvcr.io` | DCGM Exporter image (only needed for GPU clusters) |
+
+**Helm charts and scripts** (install, upgrade, and auto-update):
+
+| URL | Purpose |
+|-----|---------|
+| `https://astuto-ai.github.io` | Helm chart repository — used during install and by the in-cluster updater for auto-upgrades |
+
+**Tool downloads** (fallback — used by the deployer pod if binaries are missing from the image):
+
+| URL | Purpose |
+|-----|---------|
+| `https://get.helm.sh` | Helm binary download |
+| `https://dl.k8s.io` | kubectl binary download |
+
+### Install
+
+Once the URLs are whitelisted, run the standard install command:
+
+```bash
+helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
+helm repo update onelens && \
+helm upgrade --install onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token>
+```
+
+### Verify
+
+```bash
+kubectl get pods -n onelens-agent
+```
+
+All pods should be in `Running` state:
+- `onelens-agent-*`
+- `onelens-agent-prometheus-server-*`
+- `onelens-agent-prometheus-opencost-exporter-*`
+- `onelens-agent-prometheus-kube-state-metrics-*`
+- `onelens-agent-prometheus-pushgateway-*`
+
+### Upgrade
+
+Upgrades work the same way as a standard cluster:
+
+```bash
+helm repo update onelens
+helm upgrade onelensdeployer onelens/onelensdeployer \
+  -n onelens-agent --reuse-values
+```
+
+The in-cluster updater CronJob also handles automatic upgrades, so manual upgrades are typically not needed.
+
+---
+
+## Option 2: Private Registry (Full Air-Gap)
+
+If your organization requires all container images to be hosted in your own private registry and does not allow pulling from public registries, use this approach to mirror all images and Helm charts into your registry.
+
+### How It Works
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -57,76 +141,9 @@ Deploy OneLens on Kubernetes clusters that have restricted or no internet access
                 └──────────────────────────────────────────────────┘
 ```
 
----
+### Prerequisites
 
-## Option 1: URL Whitelisting (Recommended)
-
-If your cluster does not have general internet access but your network team can whitelist specific URLs, you can skip the entire image mirroring process and use the **standard install flow** directly. This is the simplest path.
-
-### URLs to Whitelist
-
-Ask your network team to allow outbound HTTPS (port 443) access to the following URLs. All URLs are needed from **both** the setup machine and the cluster nodes unless noted otherwise.
-
-**OneLens services** (API and data upload):
-
-| URL | Purpose |
-|-----|---------|
-| `https://*.onelens.cloud` | API registration, heartbeats, and upload gateway |
-| `https://storage.googleapis.com` | Agent data upload — the agent receives GCS signed URLs from the API and uploads collected metrics directly |
-
-**Container registries** (image pulls):
-
-| URL | Purpose |
-|-----|---------|
-| `https://public.ecr.aws` | OneLens Agent and Deployer images |
-| `https://quay.io` | Prometheus, config-reloader, pushgateway, kube-rbac-proxy images |
-| `https://registry.k8s.io` | kube-state-metrics image |
-| `https://ghcr.io` | OpenCost image |
-| `https://nvcr.io` | DCGM Exporter image (only needed for GPU clusters) |
-
-**Helm charts and scripts** (install, upgrade, and auto-update):
-
-| URL | Purpose |
-|-----|---------|
-| `https://astuto-ai.github.io` | Helm chart repository — used during install and by the in-cluster updater for auto-upgrades |
-
-**Tool downloads** (fallback — used by the deployer pod if binaries are missing from the image):
-
-| URL | Purpose |
-|-----|---------|
-| `https://get.helm.sh` | Helm binary download |
-| `https://dl.k8s.io` | kubectl binary download |
-
-### Install
-
-Once the URLs are whitelisted, follow the standard install — no migration scripts, no private registry setup:
-
-```bash
-helm repo add onelens https://astuto-ai.github.io/onelens-installation-scripts/ && \
-helm repo update onelens && \
-helm upgrade --install onelensdeployer onelens/onelensdeployer \
-  -n onelens-agent --create-namespace \
-  --set job.env.CLUSTER_NAME=<cluster-name> \
-  --set job.env.REGION=<region> \
-  --set-string job.env.ACCOUNT=<account-id> \
-  --set job.env.REGISTRATION_TOKEN=<token>
-```
-
-Upgrades also work the same way as a standard cluster — no re-running migration scripts.
-
-> **If URL whitelisting is not possible**, continue with Option 2 below to mirror all images into your own private registry.
-
----
-
-## Option 2: Private Registry (Full Air-Gap)
-
-If your organization requires all container images to be hosted in your own private registry and does not allow pulling from public registries, use this approach to mirror all images and Helm charts into your registry.
-
----
-
-## Prerequisites
-
-### Tools (on the machine with internet access)
+#### Tools (on the machine with internet access)
 
 | Tool | Purpose |
 |------|---------|
@@ -137,10 +154,8 @@ If your organization requires all container images to be hosted in your own priv
 | kubectl | Access to the target Kubernetes cluster (for chart setup) |
 
 > **Note:** This guide assumes AWS ECR as the private registry. If you use a different registry (Harbor, Artifactory, GCR, etc.), adapt the registry authentication and image push commands accordingly — the Helm install command remains the same.
->
-> **Note:** The deployer image bundles the agent chart internally — no ConfigMap or direct cluster access is required during migration. The migration script only mirrors images and the deployer chart to your private registry.
 
-### Network Access
+#### Network Access
 
 **Setup machine** (internet-connected):
 
@@ -162,7 +177,7 @@ If your organization requires all container images to be hosted in your own priv
 
 > **Note:** The OneLens agent receives upload URLs from the API at runtime. For air-gapped environments, data upload is routed through `api-in-fileupload.onelens.cloud` (an OneLens-hosted upload gateway), so no direct access to cloud storage endpoints (GCS/S3) is required. The `*.onelens.cloud` wildcard covers both the API and the upload gateway.
 
-### AWS Permissions
+#### AWS Permissions
 
 The IAM role or user running the migration script needs:
 
@@ -220,7 +235,7 @@ Your EKS **node IAM role** needs read access to the private ECR repositories. Th
 
 ---
 
-## Step 1: Verify Bastion Prerequisites (Recommended)
+### Step 1: Verify Bastion Prerequisites (Recommended)
 
 Run the bastion pre-check to verify your machine has all required tools and network access before starting the migration.
 
@@ -238,7 +253,7 @@ The script validates:
 
 ---
 
-## Step 2: Mirror Images and Set Up Cluster Resources
+### Step 2: Mirror Images to Your Private Registry
 
 This step runs **once per OneLens version** on a machine with internet access AND `kubectl` access to the target cluster.
 
@@ -265,7 +280,7 @@ The script will:
 4. Pull each image from its public registry and push to your ECR (multi-arch: amd64 + arm64)
 5. Pull the `onelensdeployer` Helm chart, rewrite its image reference, and push to your registry
 
-### Verify
+#### Verify
 
 ```bash
 aws ecr describe-repositories --region <region> --query 'repositories[].repositoryName' --output table
@@ -275,7 +290,7 @@ You should see repositories for: `<prefix>/onelens-agent`, `<prefix>/onelens-dep
 
 ---
 
-## Step 3: Verify Cluster-to-API Connectivity
+### Step 3: Verify Cluster-to-API Connectivity
 
 Before installing, verify that the cluster nodes can reach the OneLens API. This is the only external endpoint the air-gapped cluster needs — everything else comes from your private registry.
 
@@ -287,7 +302,7 @@ The script tests connectivity to `api-in.onelens.cloud` and `api-in-fileupload.o
 
 ---
 
-## Step 4: Deploy OneLens on Each Cluster
+### Step 4: Deploy OneLens on Each Cluster
 
 Run the standard OneLens install command, pointing to your private registry instead of the public one.
 
@@ -321,7 +336,7 @@ helm upgrade --install onelensdeployer \
 
 The deployer automatically detects that it's running from a private registry and configures all OneLens components to pull images from the same registry.
 
-### What happens after you run this
+#### What happens after you run this
 
 1. Helm deploys the `onelensdeployer` chart (deployer image pulled from your private registry by the node IAM role)
 2. The deployer Job registers the cluster with the OneLens API
@@ -330,7 +345,7 @@ The deployer automatically detects that it's running from a private registry and
 5. The `onelensupdater` CronJob is created for automated health checks and upgrades
 6. Cluster status is updated to `CONNECTED`
 
-### Verify
+#### Verify
 
 Check pod status:
 
@@ -347,9 +362,9 @@ All pods should be in `Running` state:
 
 ---
 
-## Upgrading to a New Version
+### Upgrading to a New Version
 
-### Step 1: Re-run the migration script (once per version, on your setup machine)
+#### Step 1: Re-run the migration script (once per version, on your setup machine)
 
 Download the latest migration script and run it:
 
@@ -358,15 +373,15 @@ curl -fsSL https://astuto-ai.github.io/onelens-installation-scripts/scripts/airg
 bash airgapped_migrate_images.sh --registry <your-registry-url>
 ```
 
-This mirrors the new version's images, updates the deployer chart in your registry, and updates the ConfigMap in the cluster with the new agent chart.
+This mirrors the new version's images and updates the deployer chart in your registry.
 
-### Step 2: Clusters upgrade automatically
+#### Step 2: Clusters upgrade automatically
 
 The `onelensupdater` CronJob runs every 5 minutes. When it detects a version mismatch, it uses the agent chart bundled in the deployer image and runs a helm upgrade with the new version.
 
 **You control the timing** — clusters only upgrade after you re-run the migration script. No coordination with OneLens needed.
 
-### Manual upgrade (optional)
+#### Manual upgrade (optional)
 
 To upgrade the deployer chart itself on a specific cluster:
 
@@ -378,9 +393,9 @@ helm upgrade onelensdeployer \
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
-### Image pull errors
+#### Image pull errors
 
 ```
 ErrImagePull or ImagePullBackOff
@@ -393,7 +408,7 @@ ErrImagePull or ImagePullBackOff
 2. Check node IAM role has ECR read permissions (see [Prerequisites](#aws-permissions))
 3. Check the image tag matches the deployed version: `kubectl describe pod <pod-name> -n onelens-agent | grep Image`
 
-### Images reset to public registries after patching
+#### Images reset to public registries after patching
 
 ```
 ErrImagePull for quay.io/... or public.ecr.aws/...
@@ -405,7 +420,7 @@ ErrImagePull for quay.io/... or public.ecr.aws/...
 1. Check current image sources: `helm get values onelens-agent -n onelens-agent -o json | jq`
 2. Re-run the migration and upgrade: `bash airgapped_migrate_images.sh --version <version> --registry <url>`
 
-### Helm timeout
+#### Helm timeout
 
 ```
 Error: timed out waiting for the condition
@@ -418,7 +433,7 @@ Error: timed out waiting for the condition
 2. Check pod logs: `kubectl logs <pod-name> -n onelens-agent`
 3. Common causes: image pull failure, insufficient resources, PVC binding issues
 
-### API registration failure
+#### API registration failure
 
 ```
 API registration failed. REGISTRATION_ID or CLUSTER_TOKEN are empty or null.
@@ -431,7 +446,7 @@ API registration failed. REGISTRATION_ID or CLUSTER_TOKEN are empty or null.
 2. Verify connectivity: `curl -s https://api-in.onelens.cloud/health`
 3. Confirm registration token with your OneLens account team
 
-### PVC not binding
+#### PVC not binding
 
 ```
 pod has unbound immediate PersistentVolumeClaims
@@ -445,7 +460,7 @@ pod has unbound immediate PersistentVolumeClaims
 
 ---
 
-## Container Images Reference
+### Container Images Reference
 
 The following images are mirrored by `airgapped_migrate_images.sh`. The list is fetched dynamically per version — you don't need to track it manually.
 
