@@ -1,0 +1,99 @@
+{{- if and .Values.networkCosts .Values.networkCosts.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: opencost-network-costs
+  labels:
+    app: opencost-network-costs
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: opencost-network-costs
+  template:
+    metadata:
+      labels:
+        app: opencost-network-costs
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: {{ include "onelens-agent.serviceAccountName" . }}
+      {{- with .Values.networkCosts.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: enable-conntrack-acct
+          image: "{{ ((.Values.networkCosts.initImage).repository) | default "busybox" }}:{{ ((.Values.networkCosts.initImage).tag) | default "1.36" }}"
+          command: ["sh", "-c", "echo 1 > /host-proc/sys/net/netfilter/nf_conntrack_acct || true"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: proc-sys
+              mountPath: /host-proc/sys
+      containers:
+        - name: network-costs
+          image: "{{ ((.Values.networkCosts.image).registry) | default "public.ecr.aws" }}/{{ ((.Values.networkCosts.image).repository) | default "w7k6q5m9/onelens-network-costs" }}:{{ ((.Values.networkCosts.image).tag) | default "0.1.3" }}"
+          imagePullPolicy: {{ ((.Values.networkCosts.image).pullPolicy) | default "IfNotPresent" }}
+          ports:
+            - containerPort: 3001
+              hostPort: 3001
+              name: metrics
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: HOST_PORT
+              value: "3001"
+            - name: HOST_PROC
+              value: "/host-proc"
+            - name: RUST_LOG
+              value: "{{ ((.Values.networkCosts).logLevel) | default "info" }}"
+            - name: USE_LEADER
+              value: "true"
+            - name: ELECTION_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CLOUD_PROVIDER
+              value: "{{- if and .Values.networkCosts.cloudProvider .Values.networkCosts.cloudProvider.gcp }}gcp{{- else if and .Values.networkCosts.cloudProvider .Values.networkCosts.cloudProvider.azure }}azure{{- else }}aws{{- end }}"
+          {{- with .Values.networkCosts.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - name: nf-conntrack
+              mountPath: /net
+              readOnly: true
+            - name: netfilter
+              mountPath: /netfilter
+              readOnly: true
+            - name: host-proc
+              mountPath: /host-proc
+              readOnly: true
+            - name: config
+              mountPath: /network-costs/config
+      volumes:
+        - name: nf-conntrack
+          hostPath:
+            path: /proc/net
+        - name: netfilter
+          hostPath:
+            path: /proc/sys/net/netfilter
+        - name: host-proc
+          hostPath:
+            path: /proc
+        - name: config
+          configMap:
+            name: opencost-network-costs-config
+        - name: proc-sys
+          hostPath:
+            path: /proc/sys
+{{- end }}

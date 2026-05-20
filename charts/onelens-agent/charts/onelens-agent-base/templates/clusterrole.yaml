@@ -1,0 +1,30 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "onelens-agent.fullname" . }}-workload-reader
+  labels:
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+rules:
+# Core API resources
+- apiGroups: [""]
+  resources: ["nodes", "pods", "namespaces", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+
+# Apps API resources
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "statefulsets"]
+  verbs: ["get", "list"]
+
+# Batch API resources
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list"]
+
+# Autoscaling API resources
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list"]
+
+# Allow API discovery for DynamicClient to work properly
+- nonResourceURLs: ["/api", "/api/*", "/apis", "/apis/*"]
+  verbs: ["get"]

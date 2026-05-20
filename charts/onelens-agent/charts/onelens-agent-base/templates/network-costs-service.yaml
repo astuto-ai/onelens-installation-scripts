@@ -1,0 +1,20 @@
+{{- if and .Values.networkCosts .Values.networkCosts.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: opencost-network-costs
+  labels:
+    app: opencost-network-costs
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3001"
+spec:
+  clusterIP: None
+  selector:
+    app: opencost-network-costs
+  ports:
+    - port: 3001
+      targetPort: 3001
+      name: metrics
+{{- end }}

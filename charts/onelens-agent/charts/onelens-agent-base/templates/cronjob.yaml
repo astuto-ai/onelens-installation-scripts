@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "onelens-agent.fullname" . }}
+  labels:
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronJob.cronSchedule }}
+  concurrencyPolicy: {{ .Values.cronJob.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.cronJob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronJob.failedJobsHistoryLimit }}
+  suspend: {{ .Values.cronJob.suspend }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.cronJob.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.cronJob.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            app: {{ include "onelens-agent.fullname" . }}
+        spec:
+          serviceAccountName: {{ include "onelens-agent.serviceAccountName" . }}
+          {{- with .Values.cronJob.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.cronJob.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          {{- end }}
+          containers:
+          - name: {{ include "onelens-agent.fullname" . }}
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            envFrom:
+              - configMapRef:
+                  name: {{ include "onelens-agent.fullname" . }}-env
+              - secretRef:
+                  name: {{ include "onelens-agent.fullname" . }}-secrets
+            resources:
+              {{- toYaml .Values.resources | nindent 14 }}
+            {{- if .Values.cronJob.healthCheck }}
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: {{ .Values.env.HEALTH_CHECKER_PORT }}
+              initialDelaySeconds: 60
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 20
+            {{- end }}
+          restartPolicy: {{ .Values.cronJob.restartPolicy }}

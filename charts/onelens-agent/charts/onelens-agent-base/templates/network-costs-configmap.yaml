@@ -1,0 +1,18 @@
+{{- if and .Values.networkCosts .Values.networkCosts.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opencost-network-costs-config
+  labels:
+    app: opencost-network-costs
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    amazon_web_services: {{ if and .Values.networkCosts.cloudProvider .Values.networkCosts.cloudProvider.aws }}true{{ else }}false{{ end }}
+    google_cloud_services: {{ if and .Values.networkCosts.cloudProvider .Values.networkCosts.cloudProvider.gcp }}true{{ else }}false{{ end }}
+    azure_cloud_services: {{ if and .Values.networkCosts.cloudProvider .Values.networkCosts.cloudProvider.azure }}true{{ else }}false{{ end }}
+    {{- if and .Values.networkCosts.destinations (ne (len .Values.networkCosts.destinations) 0) }}
+    destinations:
+      {{- toYaml .Values.networkCosts.destinations | nindent 6 }}
+    {{- end }}
+{{- end }}
