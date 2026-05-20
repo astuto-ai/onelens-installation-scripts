@@ -142,6 +142,10 @@ assert_gt "$efs_install" "0" "install.sh accepts EFS_FILESYSTEM_ID env var"
 efs_provisioner=$(grep -c 'efs.csi.aws.com' "$ROOT/install.sh" || true)
 assert_gt "$efs_provisioner" "0" "install.sh sets efs.csi.aws.com provisioner"
 
+# install.sh must skip EBS driver check when EFS_FILESYSTEM_ID is set
+efs_skip_ebs=$(grep -A2 'EFS_FILESYSTEM_ID' "$ROOT/install.sh" | grep -c 'Skipping EBS CSI driver check' || true)
+assert_gt "$efs_skip_ebs" "0" "install.sh skips EBS check when EFS is configured"
+
 ###############################################################################
 # Test 9: Azure Files support in values and install.sh
 ###############################################################################
@@ -173,6 +177,24 @@ RENDERED_RET=$(helm template test-release onelens/onelens-agent \
 ret_args=$(echo "$RENDERED_RET" | grep 'storage.tsdb.retention' || true)
 assert_contains "$ret_args" "retention.time=$PROMETHEUS_RETENTION" "retention duration in prometheus args"
 assert_contains "$ret_args" "retention.size=$PROMETHEUS_RETENTION_SIZE" "retention size in prometheus args"
+
+###############################################################################
+# Test 11: EFS StorageClass renders correctly with helm template
+###############################################################################
+RENDERED_EFS=$(helm template test-release onelens/onelens-agent \
+    --version "$CHART_VERSION" \
+    --set onelens-agent.storageClass.provisioner="efs.csi.aws.com" \
+    --set onelens-agent.storageClass.efs.fileSystemId="fs-083aae90016d5d7bb" \
+    2>/dev/null)
+
+if echo "$RENDERED_EFS" | grep -q 'provisioningMode'; then
+    assert_contains "$RENDERED_EFS" "efs.csi.aws.com" "EFS: provisioner is efs.csi.aws.com"
+    assert_contains "$RENDERED_EFS" "provisioningMode: efs-ap" "EFS: provisioningMode is efs-ap"
+    assert_contains "$RENDERED_EFS" "fileSystemId: fs-083aae90016d5d7bb" "EFS: fileSystemId is rendered"
+    assert_contains "$RENDERED_EFS" 'directoryPerms: "700"' "EFS: directoryPerms is 700"
+else
+    echo "  SKIP: EFS StorageClass rendering (chart $CHART_VERSION does not include EFS branch)"
+fi
 
 test_summary
 exit $?
