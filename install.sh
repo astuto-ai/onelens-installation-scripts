@@ -323,8 +323,12 @@ check_azure_disk_driver() {
 
 # Run appropriate CSI driver check based on cloud provider
 if [ "$CLOUD_PROVIDER" = "AWS" ]; then
-    echo "Running AWS EBS CSI driver check..."
-    check_ebs_driver
+    if [ -n "${EFS_FILESYSTEM_ID:-}" ]; then
+        echo "EFS storage configured. Skipping EBS CSI driver check."
+    else
+        echo "Running AWS EBS CSI driver check..."
+        check_ebs_driver
+    fi
 elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     echo "Running Azure Disk CSI driver check..."
     check_azure_disk_driver
