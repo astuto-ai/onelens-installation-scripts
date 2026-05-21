@@ -196,5 +196,28 @@ else
     echo "  SKIP: EFS StorageClass rendering (chart $CHART_VERSION does not include EFS branch)"
 fi
 
+###############################################################################
+# Test 12: patching.sh keeps SC enabled for EFS, disabled for non-EFS
+###############################################################################
+sc_enabled_true=$(grep -c 'storageClass\.enabled=true' "$ROOT/patching.sh" || true)
+sc_enabled_false=$(grep -c 'storageClass\.enabled=false' "$ROOT/patching.sh" || true)
+assert_gt "$sc_enabled_true" "0" "patching.sh sets storageClass.enabled=true (EFS path)"
+assert_gt "$sc_enabled_false" "0" "patching.sh sets storageClass.enabled=false (non-EFS path)"
+
+###############################################################################
+# Test 13: patching.sh re-passes EFS provisioner and fileSystemId
+###############################################################################
+sc_efs_provisioner=$(grep -c 'storageClass\.provisioner=efs\.csi\.aws\.com' "$ROOT/patching.sh" || true)
+assert_gt "$sc_efs_provisioner" "0" "patching.sh sets efs.csi.aws.com provisioner for EFS"
+
+sc_efs_repass=$(grep -c 'storageClass\.efs\.fileSystemId=.*SC_EFS_FSID' "$ROOT/patching.sh" || true)
+assert_gt "$sc_efs_repass" "0" "patching.sh re-passes storageClass.efs.fileSystemId"
+
+###############################################################################
+# Test 14: patching.sh extracts SC_EFS_FSID from existing release values
+###############################################################################
+sc_efs_extract=$(grep -c 'SC_EFS_FSID=.*storageClass\.efs\.fileSystemId' "$ROOT/patching.sh" || true)
+assert_gt "$sc_efs_extract" "0" "patching.sh extracts SC_EFS_FSID from existing values"
+
 test_summary
 exit $?
