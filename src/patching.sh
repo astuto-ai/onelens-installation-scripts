@@ -489,6 +489,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
 
   # Detect cloud provider from existing StorageClass provisioner
   SC_PROVISIONER=$(_get '.["onelens-agent"].storageClass.provisioner')
+  SC_EFS_FSID=$(_get '.["onelens-agent"].storageClass.efs.fileSystemId')
 
   echo "  Cluster: $CLUSTER_NAME | Cloud: $SC_PROVISIONER | PVC: $PVC_ENABLED"
   if [ -n "$REGISTRY_URL" ]; then
@@ -566,6 +567,7 @@ else
   NC_CLOUD_AZURE=""
   PVC_ENABLED="true"
   SC_PROVISIONER=""
+  SC_EFS_FSID=""
   CUSTOMER_VALUES_FILE=""
   EXISTING_PVC_SIZE=""
 fi
@@ -1712,10 +1714,23 @@ HELM_CMD="$HELM_CMD \
   $EXISTING_CLAIM_FLAG \
   --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
 
-# StorageClass: disable on upgrade. The SC was created at install time and must not
-# be touched — provisioner is immutable in K8s, and there's no reason to change
-# volume type, size, encryption, or labels on an upgrade.
-HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
+# StorageClass: EFS requires the SC to stay in the helm manifest because the
+# EFS CSI driver dynamically provisions access points via the SC parameters.
+# Deleting the SC (enabled=false) makes new PVCs Pending. For EBS/Azure/GKE
+# the SC can safely be omitted — existing bound PVs don't need it.
+#
+# NOTE: There is a theoretical race for EBS/Azure/GKE too — if patching runs
+# before the first PVC binds on a fresh install (PVC is WaitForFirstConsumer),
+# deleting the SC would leave the PVC Pending. In practice EBS binds within
+# 1-2 minutes so the 5-minute CronJob window is rarely hit. If this becomes
+# an issue, re-pass SC values for all provisioners (not just EFS).
+if [ -n "$SC_EFS_FSID" ]; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.efs.fileSystemId=\"$SC_EFS_FSID\""
+else
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
+fi
 
 # Retention settings
 HELM_CMD="$HELM_CMD \
