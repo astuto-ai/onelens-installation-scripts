@@ -1915,20 +1915,26 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
 
         pod_status=$(kubectl get pod "$pod_name" -n onelens-agent \
             -o jsonpath='{.status.phase}' 2>/dev/null || true)
-        # Read by container name = component — sidecar injectors (Dynatrace, Istio)
-        # may insert containers at index 0. Fall back to $component if name-selector
-        # returns empty (chart default: container name matches component name).
+        # Resolve container name — sidecar injectors (Dynatrace, Istio) may insert
+        # containers, so we match by name. Try the short component name first (chart
+        # default), then the full deployment name (onelens-agent-<component>).
         container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
             -o jsonpath="{.spec.containers[?(@.name==\"$component\")].name}" 2>/dev/null || true)
+        if [ -z "$container_name" ]; then
+            local deploy_name
+            deploy_name=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+            container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+                -o jsonpath="{.spec.containers[?(@.name==\"$deploy_name\")].name}" 2>/dev/null || true)
+        fi
         : "${container_name:=$component}"
         restart_count=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].restartCount}" 2>/dev/null || true)
+            -o jsonpath="{.status.containerStatuses[?(@.name==\"$container_name\")].restartCount}" 2>/dev/null || true)
         : "${restart_count:=0}"
         term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].state.terminated.reason}" 2>/dev/null || true)
+            -o jsonpath="{.status.containerStatuses[?(@.name==\"$container_name\")].state.terminated.reason}" 2>/dev/null || true)
         if [ -z "$term_reason" ]; then
             term_reason=$(kubectl get pod "$pod_name" -n onelens-agent \
-                -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].lastState.terminated.reason}" 2>/dev/null || true)
+                -o jsonpath="{.status.containerStatuses[?(@.name==\"$container_name\")].lastState.terminated.reason}" 2>/dev/null || true)
         fi
 
         # Skip pods that are Running with low restarts — but only if fully Ready.

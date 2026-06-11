@@ -323,10 +323,10 @@ updater_oom_name_selector=$(grep -c 'containerStatuses\[?(@.name=="onelensupdate
 assert_ge "$updater_oom_name_selector" "1" "src/patching.sh updater self-OOM check uses name-selector"
 
 # Positive: component remediation loop uses name-selector for container_name, restart_count, term_reason
-component_restart_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$component\\")\].restartCount' "$SRC_FILE" || true)
+component_restart_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$container_name\\")\].restartCount' "$SRC_FILE" || true)
 assert_ge "$component_restart_name_selector" "1" "src/patching.sh component loop reads restartCount via name-selector"
 
-component_term_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$component\\")\].state.terminated.reason' "$SRC_FILE" || true)
+component_term_name_selector=$(grep -c 'containerStatuses\[?(@.name==\\"\$container_name\\")\].state.terminated.reason' "$SRC_FILE" || true)
 assert_ge "$component_term_name_selector" "1" "src/patching.sh component loop reads terminated.reason via name-selector"
 
 # Positive: post-helm agent CronJob health reads terminated.reason/exitCode via AGENT_CONTAINER_NAME
