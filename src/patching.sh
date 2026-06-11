@@ -850,6 +850,7 @@ if [ -n "$PROM_SVC" ]; then
         _evaluate_and_log() {
             local label="$1" container="$2" cur_mem="$3" cur_cpu="$4"
             local mem_floor="$5" mem_cap="$6" oom_state_var="$7"
+            local cpu_floor="${8:-$_USAGE_FLOOR_CPU}"
 
             local mem_bytes cpu_cores oom_now oom_recent
             mem_bytes=$(_get_container_val "$MEM_72H" "$container")
@@ -876,7 +877,7 @@ if [ -n "$PROM_SVC" ]; then
             result=$(evaluate_container_sizing "$container" \
                 "$cur_mem" "$cur_cpu" "$mem_bytes" "$cpu_cores" \
                 "$oom_now" "$oom_recent" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
-                1.35 1.25 "$mem_floor" "$mem_cap" "$_USAGE_FLOOR_CPU" "$_USAGE_CAP_CPU")
+                1.35 1.25 "$mem_floor" "$mem_cap" "$cpu_floor" "$_USAGE_CAP_CPU")
             new_mem=$(echo "$result" | grep '^MEM=' | cut -d= -f2)
             new_cpu=$(echo "$result" | grep '^CPU=' | cut -d= -f2)
 
@@ -960,9 +961,21 @@ if [ -n "$PROM_SVC" ]; then
         KSM_CPU_REQUEST="$_OUT_CPU"; KSM_CPU_LIMIT="$_OUT_CPU"
 
         # Evaluate: OpenCost
+        _pre_cpu="$OPENCOST_CPU_LIMIT"
         _evaluate_and_log "opencost" "onelens-agent-prometheus-opencost-exporter" \
             "$OPENCOST_MEMORY_LIMIT" "$OPENCOST_CPU_LIMIT" \
-            "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "NEW_OC_OOM"
+            "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "NEW_OC_OOM" \
+            "$_USAGE_FLOOR_OPENCOST_CPU"
+        # OpenCost needs ≥100m CPU for startup burst (readiness probe).
+        # If pod is Running+NotReady, hold CPU at pre-evaluation value to prevent
+        # the vicious cycle where near-zero usage from a starved pod reinforces low CPU.
+        if _is_pod_not_ready "prometheus-opencost-exporter"; then
+            _held_cpu=$(_max_cpu "$_pre_cpu" "$_OUT_CPU")
+            if [ "$_held_cpu" != "$_OUT_CPU" ]; then
+                echo "  opencost: Running+NotReady — holding CPU at $_held_cpu (was $_OUT_CPU)"
+            fi
+            _OUT_CPU="$_held_cpu"
+        fi
         OPENCOST_MEMORY_REQUEST="$_OUT_MEM"; OPENCOST_MEMORY_LIMIT="$_OUT_MEM"
         OPENCOST_CPU_REQUEST="$_OUT_CPU"; OPENCOST_CPU_LIMIT="$_OUT_CPU"
 
@@ -1839,9 +1852,26 @@ fi
 # If any pod OOMs after upgrade, bump that component's memory and retry
 # immediately instead of waiting for the next 5-min CronJob cycle.
 
+# _is_pod_not_ready "$pod_pattern"
+# Returns 0 (true) if a pod matching $pod_pattern is Running but not fully Ready
+# (ready_count < total_count). Detects CPU-starved pods that can't pass readiness probes.
+_is_pod_not_ready() {
+    local pattern="$1"
+    local pod_line
+    pod_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+        | awk -v p="$pattern" '$1 ~ p && $3 == "Running" {print; exit}' || true)
+    [ -z "$pod_line" ] && return 1
+    local ready_col
+    ready_col=$(echo "$pod_line" | awk '{print $2}')
+    local ready_count total_count
+    ready_count=$(echo "$ready_col" | cut -d/ -f1)
+    total_count=$(echo "$ready_col" | cut -d/ -f2)
+    [ "$ready_count" -lt "$total_count" ] 2>/dev/null
+}
+
 # _detect_pod_failure — check if any onelens pod is failing after upgrade.
 # Scans all pods. Returns 0 (true) if a failing pod is found.
-# Sets: _FAIL_POD, _FAIL_COMPONENT, _FAIL_REASON ("oom" or "other"), _FAIL_DIAG
+# Sets: _FAIL_POD, _FAIL_COMPONENT, _FAIL_REASON ("oom", "cpu_starved", or "other"), _FAIL_DIAG
 _detect_pod_failure() {
     _FAIL_POD=""
     _FAIL_COMPONENT=""
@@ -1851,12 +1881,13 @@ _detect_pod_failure() {
     local pods_raw
     pods_raw=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
         | grep -vE 'Completed|Running' || true)
-    # Also check Running pods with high restart count that are NOT fully Ready.
-    # A Running+Ready pod with restarts has recovered from a transient issue — skip it.
-    # A Running but not Ready pod with restarts is still crash-looping.
+    # Also check Running pods that are NOT fully Ready.
+    # A Running+Ready pod has recovered from any transient issue — skip it.
+    # A Running but not Ready pod may be crash-looping (restarts >= 2) or
+    # CPU-starved (restarts < 2, can't pass readiness probe).
     pods_raw="$pods_raw
 $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | awk '$4+0 >= 2 {split($2,a,"/"); if(a[1]!=a[2]) print}' || true)"
+    | awk '$3 == "Running" {split($2,a,"/"); if(a[1]!=a[2]) print}' || true)"
 
     if [ -z "$(echo "$pods_raw" | tr -d '[:space:]')" ]; then return 1; fi
 
@@ -1900,8 +1931,25 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
                 -o jsonpath="{.status.containerStatuses[?(@.name==\"$component\")].lastState.terminated.reason}" 2>/dev/null || true)
         fi
 
-        # Skip pods that are Running with low restarts (healthy)
-        if [ "$pod_status" = "Running" ] && [ "$restart_count" -lt 2 ] 2>/dev/null; then continue; fi
+        # Skip pods that are Running with low restarts — but only if fully Ready.
+        # OpenCost specifically needs ≥100m CPU for startup; if downsized below that it
+        # becomes Running+NotReady and can't self-heal (near-zero usage reinforces low CPU).
+        if [ "$pod_status" = "Running" ] && [ "$restart_count" -lt 2 ] 2>/dev/null; then
+            if [ "$component" = "prometheus-opencost-exporter" ] && _is_pod_not_ready "$component"; then
+                local oc_cpu
+                oc_cpu=$(kubectl get pod "$pod_name" -n onelens-agent \
+                    -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.cpu}" 2>/dev/null || true)
+                local oc_mc=$(_cpu_to_millicores "$oc_cpu")
+                if [ "$oc_mc" -lt 100 ] 2>/dev/null; then
+                    _FAIL_POD="$pod_name"
+                    _FAIL_COMPONENT="$component"
+                    _FAIL_REASON="cpu_starved"
+                    _FAIL_DIAG="pod=$pod_name component=$component cpu=$oc_cpu restarts=$restart_count reason=Running+NotReady (OpenCost CPU < 100m)"
+                    return 0
+                fi
+            fi
+            continue
+        fi
 
         events=$(kubectl get events -n onelens-agent --field-selector "involvedObject.name=$pod_name" --no-headers 2>/dev/null | tail -5 || true)
         pod_logs=$(kubectl logs "$pod_name" -n onelens-agent -c "$container_name" --previous --tail=30 2>/dev/null || \
@@ -1976,6 +2024,24 @@ _bump_component_memory() {
     esac
 
     echo "$old_mem $new_mem $set_flags"
+}
+
+# _bump_component_cpu — restore OpenCost CPU to 100m (startup minimum).
+# Only handles prometheus-opencost-exporter. Returns "old_cpu new_cpu --set flags" for helm retry.
+_bump_component_cpu() {
+    local component="$1"
+    local old_cpu new_cpu="100m" set_flags=""
+
+    if [ "$component" != "prometheus-opencost-exporter" ]; then
+        echo ""
+        return
+    fi
+
+    old_cpu="$OPENCOST_CPU_LIMIT"
+    OPENCOST_CPU_REQUEST="$new_cpu"; OPENCOST_CPU_LIMIT="$new_cpu"
+    set_flags="--set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$new_cpu\" --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$new_cpu\""
+
+    echo "$old_cpu $new_cpu $set_flags"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2125,6 +2191,53 @@ _remediate_oomkilled_pod() {
     fi
 }
 
+_remediate_cpu_starved_pod() {
+    local pod_name="$1"
+    local component="$2"
+    local current_cpu
+
+    echo ""
+    echo "🔧 Attempting remediation: CPU-starved OpenCost pod $pod_name (Running+NotReady)"
+
+    # Get current CPU limit — read by container name to avoid picking up a sidecar.
+    current_cpu=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.cpu}" 2>/dev/null)
+
+    if [ -z "$current_cpu" ]; then
+        echo "  ⚠️  Cannot determine current CPU limit for $pod_name"
+        return 1
+    fi
+
+    local current_mc=$(_cpu_to_millicores "$current_cpu")
+    if [ "$current_mc" -ge 100 ] 2>/dev/null; then
+        echo "  CPU is already ≥100m ($current_cpu). Not a CPU starvation issue."
+        return 1
+    fi
+
+    local new_cpu="100m"
+    echo "  Current CPU: $current_cpu → Restoring to $new_cpu (OpenCost startup minimum)"
+
+    # Update deployment resource limits and requests
+    if kubectl set resources deployment "$component" -n onelens-agent \
+        --limits=cpu="$new_cpu" --requests=cpu="$new_cpu" 2>/dev/null; then
+
+        echo "  ✅ CPU restored to $new_cpu"
+        echo "  Deleting $pod_name to restart with new limits..."
+
+        if kubectl delete pod "$pod_name" -n onelens-agent --grace-period=5 2>/dev/null; then
+            echo "  ✅ Pod deleted, will restart with restored CPU"
+            _set_remediation_state "$pod_name"
+            return 0
+        else
+            echo "  ❌ Failed to delete pod $pod_name"
+            return 1
+        fi
+    else
+        echo "  ❌ Failed to update CPU limit for $component"
+        return 1
+    fi
+}
+
 _remediate_transient_crash() {
     local pod_name="$1"
     local reason="$2"
@@ -2257,9 +2370,12 @@ _remediate_stuck_pods() {
     echo ""
     echo "=== POD HEALTH CHECK & REMEDIATION (v2.1.33+) ==="
 
-    # Get all unhealthy pods in onelens-agent namespace
+    # Get all unhealthy pods: non-Running/non-Completed AND Running+NotReady (CPU starvation)
     stuck_pods=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | \
-        awk '$3 !~ /^Running$|^Completed$/ {print $1}' | head -20)
+        awk '{
+            if ($3 !~ /^Running$|^Completed$/) print $1
+            else if ($3 == "Running") { split($2,a,"/"); if(a[1]!=a[2]) print $1 }
+        }' | sort -u | head -20)
 
     if [ -z "$stuck_pods" ]; then
         echo "✅ All OneLens pods are healthy"
@@ -2283,6 +2399,21 @@ _remediate_stuck_pods() {
 
         echo ""
         echo "Pod: $pod_name | Status: $pod_status | Reason: $failure_reason"
+
+        # Running+NotReady OpenCost pod: CPU starvation — restore to 100m
+        # OpenCost needs ≥100m CPU for startup burst; other components survive at 50m.
+        if [ "$pod_status" = "Running" ] && echo "$pod_name" | grep -q "prometheus-opencost-exporter"; then
+            local ready_info
+            ready_info=$(kubectl get pod "$pod_name" -n onelens-agent --no-headers 2>/dev/null | awk '{print $2}')
+            local rc tc
+            rc=$(echo "$ready_info" | cut -d/ -f1)
+            tc=$(echo "$ready_info" | cut -d/ -f2)
+            if [ "$rc" -lt "$tc" ] 2>/dev/null; then
+                echo "  Running+NotReady ($ready_info) — OpenCost CPU starvation suspected"
+                _remediate_cpu_starved_pod "$pod_name" "prometheus-opencost-exporter"
+                continue
+            fi
+        fi
 
         # Route to appropriate handler
         case "$failure_reason" in
@@ -2641,9 +2772,9 @@ while true; do
         echo "Pod failure detected: $_FAIL_DIAG"
     fi
 
-    # Only retry for OOM failures
-    if [ "$_FAIL_REASON" != "oom" ]; then
-        echo "Failure is not memory-related (reason=$_FAIL_REASON). Not retrying."
+    # Only retry for OOM and CPU starvation failures
+    if [ "$_FAIL_REASON" != "oom" ] && [ "$_FAIL_REASON" != "cpu_starved" ]; then
+        echo "Failure is not resource-related (reason=$_FAIL_REASON). Not retrying."
         if [ -n "$_FAIL_POD" ]; then
             echo "--- Pod logs ---"
             kubectl logs "$_FAIL_POD" -n onelens-agent --previous --tail=20 2>/dev/null || \
@@ -2657,27 +2788,33 @@ while true; do
 
     # Check retry limit
     if [ "$_UPGRADE_RETRIES" -ge "$_MAX_UPGRADE_RETRIES" ]; then
-        echo "OOM: exhausted $_MAX_UPGRADE_RETRIES retries. Component=$_FAIL_COMPONENT"
+        echo "${_FAIL_REASON}: exhausted $_MAX_UPGRADE_RETRIES retries. Component=$_FAIL_COMPONENT"
         echo "--- Final pod status ---"
         kubectl get pods -n onelens-agent --no-headers 2>/dev/null || true
         UPGRADE_FAILED=true
         break
     fi
 
-    # Bump the failing component's memory
-    _bump_result=$(_bump_component_memory "$_FAIL_COMPONENT")
-    _old_mem=$(echo "$_bump_result" | awk '{print $1}')
-    _new_mem=$(echo "$_bump_result" | awk '{print $2}')
+    # Bump the failing component's resource (CPU for starvation, memory for OOM)
+    if [ "$_FAIL_REASON" = "cpu_starved" ]; then
+        _bump_result=$(_bump_component_cpu "$_FAIL_COMPONENT")
+        _resource_type="CPU"
+    else
+        _bump_result=$(_bump_component_memory "$_FAIL_COMPONENT")
+        _resource_type="memory"
+    fi
+    _old_val=$(echo "$_bump_result" | awk '{print $1}')
+    _new_val=$(echo "$_bump_result" | awk '{print $2}')
     _set_flags=$(echo "$_bump_result" | cut -d' ' -f3-)
 
-    if [ "$_new_mem" = "$_old_mem" ]; then
-        echo "$_FAIL_COMPONENT OOM: at memory cap ($_old_mem). Cannot bump further."
+    if [ "$_new_val" = "$_old_val" ]; then
+        echo "$_FAIL_COMPONENT ${_FAIL_REASON}: at ${_resource_type} cap ($_old_val). Cannot bump further."
         UPGRADE_FAILED=true
         break
     fi
 
     _UPGRADE_RETRIES=$((_UPGRADE_RETRIES + 1))
-    echo "OOM recovery (retry $_UPGRADE_RETRIES/$_MAX_UPGRADE_RETRIES): $_FAIL_COMPONENT memory $_old_mem -> $_new_mem"
+    echo "${_FAIL_REASON} recovery (retry $_UPGRADE_RETRIES/$_MAX_UPGRADE_RETRIES): $_FAIL_COMPONENT ${_resource_type} $_old_val -> $_new_val"
     WAL_OOM_APPLIED=true
 
     RETRY_CMD="$HELM_CMD --timeout=3m $_set_flags"
