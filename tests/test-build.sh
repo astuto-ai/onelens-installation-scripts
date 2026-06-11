@@ -272,7 +272,7 @@ assert_eq "$agent_path_bad_reads" "0" "src/patching.sh agent CPU limit read does
 # _remediate_oomkilled_pod feeds into kubectl set resources — wrong read would
 # cause silent mis-sizing of Prometheus/KSM/OpenCost deployments.
 ###############################################################################
-oom_remediate_name_selector=$(grep -c 'containers\[?(@.name==\\"\$component\\")\].resources.limits.memory' "$SRC_FILE" || true)
+oom_remediate_name_selector=$(grep -c 'containers\[?(@.name==\\"\$container_name\\")\].resources.limits.memory' "$SRC_FILE" || true)
 assert_ge "$oom_remediate_name_selector" "1" "src/patching.sh _remediate_oomkilled_pod reads memory via name-selector"
 
 ###############################################################################
