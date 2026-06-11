@@ -1938,7 +1938,7 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
             if [ "$component" = "prometheus-opencost-exporter" ] && _is_pod_not_ready "$component"; then
                 local oc_cpu
                 oc_cpu=$(kubectl get pod "$pod_name" -n onelens-agent \
-                    -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.cpu}" 2>/dev/null || true)
+                    -o jsonpath="{.spec.containers[?(@.name==\"$container_name\")].resources.limits.cpu}" 2>/dev/null || true)
                 local oc_mc=$(_cpu_to_millicores "$oc_cpu")
                 if [ "$oc_mc" -lt 100 ] 2>/dev/null; then
                     _FAIL_POD="$pod_name"
@@ -2193,15 +2193,29 @@ _remediate_oomkilled_pod() {
 
 _remediate_cpu_starved_pod() {
     local pod_name="$1"
-    local component="$2"
     local current_cpu
 
     echo ""
     echo "🔧 Attempting remediation: CPU-starved OpenCost pod $pod_name (Running+NotReady)"
 
-    # Get current CPU limit — read by container name to avoid picking up a sidecar.
+    # Resolve deployment name from pod (strip pod-template hash + random suffix)
+    local deploy_name
+    deploy_name=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+
+    # Resolve container name from pod spec — sidecar injectors may insert containers.
+    # Try the short chart name first, then the full deployment name.
+    local container_name
+    container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath='{.spec.containers[?(@.name=="prometheus-opencost-exporter")].name}' 2>/dev/null || true)
+    if [ -z "$container_name" ]; then
+        container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath="{.spec.containers[?(@.name==\"$deploy_name\")].name}" 2>/dev/null || true)
+    fi
+    : "${container_name:=prometheus-opencost-exporter}"
+
+    # Get current CPU limit
     current_cpu=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.cpu}" 2>/dev/null)
+        -o jsonpath="{.spec.containers[?(@.name==\"$container_name\")].resources.limits.cpu}" 2>/dev/null)
 
     if [ -z "$current_cpu" ]; then
         echo "  ⚠️  Cannot determine current CPU limit for $pod_name"
@@ -2218,7 +2232,7 @@ _remediate_cpu_starved_pod() {
     echo "  Current CPU: $current_cpu → Restoring to $new_cpu (OpenCost startup minimum)"
 
     # Update deployment resource limits and requests
-    if kubectl set resources deployment "$component" -n onelens-agent \
+    if kubectl set resources deployment "$deploy_name" -n onelens-agent \
         --limits=cpu="$new_cpu" --requests=cpu="$new_cpu" 2>/dev/null; then
 
         echo "  ✅ CPU restored to $new_cpu"
@@ -2233,7 +2247,7 @@ _remediate_cpu_starved_pod() {
             return 1
         fi
     else
-        echo "  ❌ Failed to update CPU limit for $component"
+        echo "  ❌ Failed to update CPU limit for $deploy_name"
         return 1
     fi
 }
@@ -2410,7 +2424,7 @@ _remediate_stuck_pods() {
             tc=$(echo "$ready_info" | cut -d/ -f2)
             if [ "$rc" -lt "$tc" ] 2>/dev/null; then
                 echo "  Running+NotReady ($ready_info) — OpenCost CPU starvation suspected"
-                _remediate_cpu_starved_pod "$pod_name" "prometheus-opencost-exporter"
+                _remediate_cpu_starved_pod "$pod_name"
                 continue
             fi
         fi
