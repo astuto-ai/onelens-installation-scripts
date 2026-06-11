@@ -2138,17 +2138,35 @@ _get_pod_failure_reason() {
 
 _remediate_oomkilled_pod() {
     local pod_name="$1"
-    local component="$2"
+    local component="$2"   # deployment name, e.g. onelens-agent-prometheus-server
     local current_memory
 
     echo ""
     echo "🔧 Attempting remediation: OOMKilled pod $pod_name"
 
+    # Resolve container name from pod spec — sidecar injectors may insert
+    # containers, so we cannot assume containers[0] is the app container.
+    # The component arg is the deployment name (e.g. onelens-agent-prometheus-server)
+    # but the container name may differ (e.g. prometheus-server). Try the deployment
+    # name first, then strip the "onelens-agent-" prefix as a fallback.
+    local container_name
+    container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+        -o jsonpath="{.spec.containers[?(@.name==\"$component\")].name}" 2>/dev/null || true)
+    if [ -z "$container_name" ]; then
+        local short_name="${component#onelens-agent-}"
+        container_name=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath="{.spec.containers[?(@.name==\"$short_name\")].name}" 2>/dev/null || true)
+    fi
+    if [ -z "$container_name" ]; then
+        echo "⚠️  Cannot determine container name for $pod_name"
+        return 1
+    fi
+
     # Get current memory limit — read by container name to avoid picking up a
     # sidecar at containers[0]. A wrong read would feed into kubectl set resources
     # below and silently mis-size the deployment.
     current_memory=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath="{.spec.containers[?(@.name==\"$component\")].resources.limits.memory}" 2>/dev/null)
+        -o jsonpath="{.spec.containers[?(@.name==\"$container_name\")].resources.limits.memory}" 2>/dev/null)
 
     if [ -z "$current_memory" ]; then
         echo "⚠️  Cannot determine current memory limit for $pod_name"
@@ -2169,8 +2187,10 @@ _remediate_oomkilled_pod() {
 
     echo "  Current memory: $current_memory → Increasing to ${new_memory_mi}Mi (1.5x)"
 
-    # Update deployment resource limit
+    # Update deployment resource limit — target specific container to avoid
+    # silently mis-sizing sidecar containers.
     if kubectl set resources deployment "$component" -n onelens-agent \
+        -c "$container_name" \
         --limits=memory="${new_memory_mi}Mi" 2>/dev/null; then
 
         echo "  ✅ Memory limit increased to ${new_memory_mi}Mi"
@@ -2233,6 +2253,7 @@ _remediate_cpu_starved_pod() {
 
     # Update deployment resource limits and requests
     if kubectl set resources deployment "$deploy_name" -n onelens-agent \
+        -c "$container_name" \
         --limits=cpu="$new_cpu" --requests=cpu="$new_cpu" 2>/dev/null; then
 
         echo "  ✅ CPU restored to $new_cpu"
