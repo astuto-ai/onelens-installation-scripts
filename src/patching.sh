@@ -1656,7 +1656,15 @@ if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-r
     fi
 fi
 
-# Skip helm upgrade if RBAC is broken — apply resources via kubectl instead
+WAL_OOM_APPLIED=false
+UPGRADE_FAILED=false
+_UPGRADE_RETRIES=0
+_MAX_UPGRADE_RETRIES=3
+
+# Skip helm upgrade if blocked — apply resources via kubectl instead.
+# kubectl patch runs FIRST (tier-based sizing), then pod remediation runs
+# and overrides specific deployments where OOM/CPU starvation is detected.
+# This ordering ensures remediation bumps are not overwritten by tier values.
 if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
     echo "Helm blocked — applying resource right-sizing via kubectl patch..."
     _kubectl_set_resources() {
@@ -1696,7 +1704,15 @@ if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
     echo "kubectl resource patching complete."
     UPGRADE_FAILED=true
     WAL_OOM_APPLIED=false
+
+    # Run pod remediation AFTER kubectl patch — so OOM/CPU starvation bumps
+    # override the tier-based values applied above.
+    _remediate_stuck_pods || true
 else
+
+# Run pod remediation before helm upgrade (auto-fix stuck pods)
+_remediate_stuck_pods || true  # Don't fail patching if remediation fails
+
 # Build helm upgrade command
 # Key design: NO --reuse-values
 #   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
@@ -2555,14 +2571,6 @@ _remediate_stuck_pods() {
 
     echo ""
 }
-
-WAL_OOM_APPLIED=false
-UPGRADE_FAILED=false
-_UPGRADE_RETRIES=0
-_MAX_UPGRADE_RETRIES=3
-
-# Run pod remediation before helm upgrade (auto-fix stuck pods)
-_remediate_stuck_pods || true  # Don't fail patching if remediation fails
 
 # Prune stale helm release secrets to prevent ResourceQuota deadlocks.
 # Helm stores each revision as a secret. With 5-min healthcheck upgrades, secrets
