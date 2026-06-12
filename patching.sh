@@ -2481,218 +2481,17 @@ if [ "$RELEASE_STATUS" = "pending-upgrade" ] || [ "$RELEASE_STATUS" = "pending-r
     fi
 fi
 
-# Skip helm upgrade if RBAC is broken — apply resources via kubectl instead
-if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
-    echo "Helm blocked — applying resource right-sizing via kubectl patch..."
-    _kubectl_set_resources() {
-        local deploy="$1" container="$2" cpu_req="$3" mem_req="$4" cpu_lim="$5" mem_lim="$6"
-        if ! kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
-            return
-        fi
-        # Discover actual container name — chart versions use different naming conventions.
-        local actual_container="$container"
-        local containers
-        containers=$(kubectl get deployment "$deploy" -n onelens-agent \
-            -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || true)
-        if [ -n "$containers" ] && ! echo " $containers " | grep -q " $container "; then
-            for c in $containers; do
-                case "$c" in
-                    *configmap-reload*|*sidecar*) continue ;;
-                    *) actual_container="$c"; break ;;
-                esac
-            done
-            echo "  Container '$container' not found in $deploy, using '$actual_container'"
-        fi
-        kubectl set resources deployment "$deploy" -n onelens-agent \
-            -c "$actual_container" \
-            --requests="cpu=${cpu_req},memory=${mem_req}" \
-            --limits="cpu=${cpu_lim},memory=${mem_lim}" \
-            2>&1 || echo "  WARNING: failed to patch $deploy"
-    }
-    _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
-        "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
-    _kubectl_set_resources "onelens-agent-kube-state-metrics" "kube-state-metrics" \
-        "$KSM_CPU_REQUEST" "$KSM_MEMORY_REQUEST" "$KSM_CPU_LIMIT" "$KSM_MEMORY_LIMIT"
-    _kubectl_set_resources "onelens-agent-prometheus-opencost-exporter" "opencost" \
-        "$OPENCOST_CPU_REQUEST" "$OPENCOST_MEMORY_REQUEST" "$OPENCOST_CPU_LIMIT" "$OPENCOST_MEMORY_LIMIT"
-    _kubectl_set_resources "onelens-agent-prometheus-pushgateway" "prometheus-pushgateway" \
-        "$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" "$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
-        "$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
-    echo "kubectl resource patching complete."
-    UPGRADE_FAILED=true
-    WAL_OOM_APPLIED=false
-else
-# Build helm upgrade command
-# Key design: NO --reuse-values
-#   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
-#   - Customer values file preserves tolerations, nodeSelector, podLabels
-#   - --set overrides for identity, resources, retention, PVC
-#   - --version pins to the target version from PATCHING_VERSION (set by entrypoint.sh)
-#     Without --version, helm would pick latest from repo — uncontrolled upgrades.
-#     If PATCHING_VERSION is not set (old entrypoint), omit --version (backward compat).
-# Note: CHART_VERSION is computed earlier (before chart source block) so air-gapped
-# helm pull can use --version to pin the correct chart version.
-HELM_CMD="helm upgrade onelens-agent $CHART_SOURCE \
-  -f /globalvalues.yaml \
-  --history-max 5 \
-  --wait \
-  --timeout=10m \
-  --namespace onelens-agent"
-if [ -n "$CHART_VERSION" ]; then
-    HELM_CMD="$HELM_CMD --version $CHART_VERSION"
-    echo "Pinning chart version to $CHART_VERSION (from PATCHING_VERSION=$PATCHING_VERSION)"
-fi
-
-# Apply customer values (tolerations, nodeSelector, podLabels)
-if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
-    HELM_CMD="$HELM_CMD -f $CUSTOMER_VALUES_FILE"
-fi
-
-# Identity values (preserved from existing release)
-HELM_CMD="$HELM_CMD \
-  --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
-  --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT_ID\" \
-  --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
-  --set onelens-agent.secrets.CLUSTER_TOKEN=\"$CLUSTER_TOKEN\" \
-  --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\""
-
-# OpenCost cluster ID — only set if extracted value is non-empty.
-# Empty --set would override the globalvalues.yaml default ('default-cluster'),
-# which breaks OpenCost's idle cost allocation (shareIdle=true → 500 error).
-if [ -n "$DEFAULT_CLUSTER_ID" ]; then
-    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$DEFAULT_CLUSTER_ID\""
-fi
-
-# PVC settings
-HELM_CMD="$HELM_CMD \
-  --set prometheus.server.persistentVolume.enabled=$PVC_ENABLED \
-  $EXISTING_CLAIM_FLAG \
-  --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
-
-# StorageClass: EFS requires the SC to stay in the helm manifest because the
-# EFS CSI driver dynamically provisions access points via the SC parameters.
-# Deleting the SC (enabled=false) makes new PVCs Pending. For EBS/Azure/GKE
-# the SC can safely be omitted — existing bound PVs don't need it.
-#
-# NOTE: There is a theoretical race for EBS/Azure/GKE too — if patching runs
-# before the first PVC binds on a fresh install (PVC is WaitForFirstConsumer),
-# deleting the SC would leave the PVC Pending. In practice EBS binds within
-# 1-2 minutes so the 5-minute CronJob window is rarely hit. If this becomes
-# an issue, re-pass SC values for all provisioners (not just EFS).
-if [ -n "$SC_EFS_FSID" ]; then
-    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
-    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
-    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.efs.fileSystemId=\"$SC_EFS_FSID\""
-else
-    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
-fi
-
-# Retention settings
-HELM_CMD="$HELM_CMD \
-  --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
-  --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\""
-
-# Resource allocations (dynamically calculated based on cluster size)
-HELM_CMD="$HELM_CMD \
-  --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
-  --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
-  --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
-  --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$OPENCOST_CPU_REQUEST\" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$OPENCOST_MEMORY_REQUEST\" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$OPENCOST_CPU_LIMIT\" \
-  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$OPENCOST_MEMORY_LIMIT\" \
-  --set onelens-agent.resources.requests.cpu=\"$ONELENS_CPU_REQUEST\" \
-  --set onelens-agent.resources.requests.memory=\"$ONELENS_MEMORY_REQUEST\" \
-  --set onelens-agent.resources.limits.cpu=\"$ONELENS_CPU_LIMIT\" \
-  --set onelens-agent.resources.limits.memory=\"$ONELENS_MEMORY_LIMIT\" \
-  --set prometheus.prometheus-pushgateway.resources.requests.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST\" \
-  --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST\" \
-  --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT\" \
-  --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT\" \
-  --set prometheus.kube-state-metrics.resources.requests.cpu=\"$KSM_CPU_REQUEST\" \
-  --set prometheus.kube-state-metrics.resources.requests.memory=\"$KSM_MEMORY_REQUEST\" \
-  --set prometheus.kube-state-metrics.resources.limits.cpu=\"$KSM_CPU_LIMIT\" \
-  --set prometheus.kube-state-metrics.resources.limits.memory=\"$KSM_MEMORY_LIMIT\" \
-  --set prometheus.configmapReload.prometheus.resources.requests.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST\" \
-  --set prometheus.configmapReload.prometheus.resources.requests.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST\" \
-  --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
-  --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
-
-# Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
-# Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
-# Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
-# to produce the flat path $REGISTRY_URL/<name>:{tag} matching what the migration script pushes.
-if [ -n "$REGISTRY_URL" ]; then
-    echo "Applying air-gapped image overrides for registry: $REGISTRY_URL"
-    HELM_CMD="$HELM_CMD \
-      --set onelens-agent.image.repository=$REGISTRY_URL/onelens-agent \
-      --set prometheus.server.image.repository=$REGISTRY_URL/prometheus \
-      --set prometheus.configmapReload.prometheus.image.repository=$REGISTRY_URL/prometheus-config-reloader \
-      --set prometheus-opencost-exporter.opencost.exporter.image.registry=$REGISTRY_URL \
-      --set prometheus-opencost-exporter.opencost.exporter.image.repository=opencost \
-      --set prometheus.kube-state-metrics.image.registry=$REGISTRY_URL \
-      --set prometheus.kube-state-metrics.image.repository=kube-state-metrics \
-      --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway \
-      --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
-      --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
-      --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
-fi
-
-# Proxy: preserve proxy env vars across upgrades
-# Commas in --set values are interpreted as list separators by Helm,
-# so we must escape them with backslashes for NO_PROXY.
-# Double-escape because HELM_CMD is executed via eval (line ~3207).
-if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ] || [ -n "$PROXY_NO" ]; then
-    echo "Preserving proxy configuration across upgrade"
-    _PROXY_NO_ESCAPED="${PROXY_NO//,/\\\\,}"
-    HELM_CMD="$HELM_CMD \
-      --set onelens-agent.env.HTTP_PROXY=\"$PROXY_HTTP\" \
-      --set onelens-agent.env.http_proxy=\"$PROXY_HTTP\" \
-      --set onelens-agent.env.HTTPS_PROXY=\"$PROXY_HTTPS\" \
-      --set onelens-agent.env.https_proxy=\"$PROXY_HTTPS\" \
-      --set onelens-agent.env.NO_PROXY=\"$_PROXY_NO_ESCAPED\" \
-      --set onelens-agent.env.no_proxy=\"$_PROXY_NO_ESCAPED\""
-fi
-
-# Network costs settings (opt-in, preserved from existing release)
-HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.enabled=$NC_ENABLED"
-if [ "$NC_ENABLED" = "true" ] && [ -n "$NC_CLOUD_FLAG" ]; then
-    HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.cloudProvider.${NC_CLOUD_FLAG}=true"
-fi
-if [ -n "$REGISTRY_URL" ] && [ "$NC_ENABLED" = "true" ]; then
-    HELM_CMD="$HELM_CMD \
-      --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
-      --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
-fi
-
-# Force-delete pods stuck in Terminating for >10 min before helm upgrade.
-# Pods on dead/unreachable nodes stay Terminating forever because kubelet can't
-# acknowledge the deletion. Helm sees them as part of the release and times out
-# waiting for the rollout. Force-delete clears the API objects so helm proceeds.
-TERMINATING_PODS=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-    | awk '$3 == "Terminating" {print $1}' || true)
-if [ -n "$TERMINATING_PODS" ]; then
-    NOW=$(date +%s)
-    for pod in $TERMINATING_PODS; do
-        DEL_TS=$(kubectl get pod "$pod" -n onelens-agent \
-            -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
-        if [ -n "$DEL_TS" ]; then
-            DEL_EPOCH=$(date -d "$DEL_TS" +%s 2>/dev/null || echo "0")
-            STUCK_SECS=$(( NOW - DEL_EPOCH ))
-            if [ "$STUCK_SECS" -gt 600 ]; then
-                echo "Force-deleting pod stuck Terminating for $((STUCK_SECS / 60))m: $pod"
-                kubectl delete pod "$pod" -n onelens-agent --force --grace-period=0 2>/dev/null || true
-            fi
-        fi
-    done
-fi
+WAL_OOM_APPLIED=false
+UPGRADE_FAILED=false
+_UPGRADE_RETRIES=0
+_MAX_UPGRADE_RETRIES=3
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Helm upgrade with pod failure retry loop
+# Pod failure detection and remediation functions
 # ═══════════════════════════════════════════════════════════════════════════
-# If any pod OOMs after upgrade, bump that component's memory and retry
-# immediately instead of waiting for the next 5-min CronJob cycle.
+# Used by both the helm-upgrade retry loop (normal path) and the kubectl-patch
+# path (air-gapped/RBAC-blocked). Defined here — before the SKIP_HELM_UPGRADE
+# branch — so both paths can call them.
 
 # _detect_pod_failure — check if any onelens pod is failing after upgrade.
 # Scans all pods. Returns 0 (true) if a failing pod is found.
@@ -3381,13 +3180,229 @@ _remediate_stuck_pods() {
     echo ""
 }
 
-WAL_OOM_APPLIED=false
-UPGRADE_FAILED=false
-_UPGRADE_RETRIES=0
-_MAX_UPGRADE_RETRIES=3
+# Skip helm upgrade if blocked — apply resources via kubectl instead.
+# kubectl patch runs FIRST (tier-based sizing), then pod remediation runs
+# and overrides specific deployments where OOM/CPU starvation is detected.
+# This ordering ensures remediation bumps are not overwritten by tier values.
+if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
+    echo "Helm blocked — applying resource right-sizing via kubectl patch..."
+    _kubectl_set_resources() {
+        local deploy="$1" container="$2" cpu_req="$3" mem_req="$4" cpu_lim="$5" mem_lim="$6"
+        if ! kubectl get deployment "$deploy" -n onelens-agent >/dev/null 2>&1; then
+            return
+        fi
+        # Discover actual container name — chart versions use different naming conventions.
+        local actual_container="$container"
+        local containers
+        containers=$(kubectl get deployment "$deploy" -n onelens-agent \
+            -o jsonpath='{.spec.template.spec.containers[*].name}' 2>/dev/null || true)
+        if [ -n "$containers" ] && ! echo " $containers " | grep -q " $container "; then
+            for c in $containers; do
+                case "$c" in
+                    *configmap-reload*|*sidecar*) continue ;;
+                    *) actual_container="$c"; break ;;
+                esac
+            done
+            echo "  Container '$container' not found in $deploy, using '$actual_container'"
+        fi
+        kubectl set resources deployment "$deploy" -n onelens-agent \
+            -c "$actual_container" \
+            --requests="cpu=${cpu_req},memory=${mem_req}" \
+            --limits="cpu=${cpu_lim},memory=${mem_lim}" \
+            2>&1 || echo "  WARNING: failed to patch $deploy"
+    }
+    _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
+        "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-kube-state-metrics" "kube-state-metrics" \
+        "$KSM_CPU_REQUEST" "$KSM_MEMORY_REQUEST" "$KSM_CPU_LIMIT" "$KSM_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-prometheus-opencost-exporter" "opencost" \
+        "$OPENCOST_CPU_REQUEST" "$OPENCOST_MEMORY_REQUEST" "$OPENCOST_CPU_LIMIT" "$OPENCOST_MEMORY_LIMIT"
+    _kubectl_set_resources "onelens-agent-prometheus-pushgateway" "prometheus-pushgateway" \
+        "$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST" "$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST" \
+        "$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT" "$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT"
+    echo "kubectl resource patching complete."
+    UPGRADE_FAILED=true
+    WAL_OOM_APPLIED=false
+
+    # Run pod remediation AFTER kubectl patch — so OOM/CPU starvation bumps
+    # override the tier-based values applied above.
+    _remediate_stuck_pods || true
+else
 
 # Run pod remediation before helm upgrade (auto-fix stuck pods)
 _remediate_stuck_pods || true  # Don't fail patching if remediation fails
+
+# Build helm upgrade command
+# Key design: NO --reuse-values
+#   - globalvalues.yaml provides chart defaults (images, configs, scrape jobs)
+#   - Customer values file preserves tolerations, nodeSelector, podLabels
+#   - --set overrides for identity, resources, retention, PVC
+#   - --version pins to the target version from PATCHING_VERSION (set by entrypoint.sh)
+#     Without --version, helm would pick latest from repo — uncontrolled upgrades.
+#     If PATCHING_VERSION is not set (old entrypoint), omit --version (backward compat).
+# Note: CHART_VERSION is computed earlier (before chart source block) so air-gapped
+# helm pull can use --version to pin the correct chart version.
+HELM_CMD="helm upgrade onelens-agent $CHART_SOURCE \
+  -f /globalvalues.yaml \
+  --history-max 5 \
+  --wait \
+  --timeout=10m \
+  --namespace onelens-agent"
+if [ -n "$CHART_VERSION" ]; then
+    HELM_CMD="$HELM_CMD --version $CHART_VERSION"
+    echo "Pinning chart version to $CHART_VERSION (from PATCHING_VERSION=$PATCHING_VERSION)"
+fi
+
+# Apply customer values (tolerations, nodeSelector, podLabels)
+if [ -n "$CUSTOMER_VALUES_FILE" ] && [ -f "$CUSTOMER_VALUES_FILE" ]; then
+    HELM_CMD="$HELM_CMD -f $CUSTOMER_VALUES_FILE"
+fi
+
+# Identity values (preserved from existing release)
+HELM_CMD="$HELM_CMD \
+  --set onelens-agent.env.CLUSTER_NAME=\"$CLUSTER_NAME\" \
+  --set-string onelens-agent.env.ACCOUNT_ID=\"$ACCOUNT_ID\" \
+  --set onelens-agent.secrets.API_BASE_URL=\"$API_BASE_URL\" \
+  --set onelens-agent.secrets.CLUSTER_TOKEN=\"$CLUSTER_TOKEN\" \
+  --set onelens-agent.secrets.REGISTRATION_ID=\"$REGISTRATION_ID\""
+
+# OpenCost cluster ID — only set if extracted value is non-empty.
+# Empty --set would override the globalvalues.yaml default ('default-cluster'),
+# which breaks OpenCost's idle cost allocation (shareIdle=true → 500 error).
+if [ -n "$DEFAULT_CLUSTER_ID" ]; then
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.defaultClusterId=\"$DEFAULT_CLUSTER_ID\""
+fi
+
+# PVC settings
+HELM_CMD="$HELM_CMD \
+  --set prometheus.server.persistentVolume.enabled=$PVC_ENABLED \
+  $EXISTING_CLAIM_FLAG \
+  --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+
+# StorageClass: EFS requires the SC to stay in the helm manifest because the
+# EFS CSI driver dynamically provisions access points via the SC parameters.
+# Deleting the SC (enabled=false) makes new PVCs Pending. For EBS/Azure/GKE
+# the SC can safely be omitted — existing bound PVs don't need it.
+#
+# NOTE: There is a theoretical race for EBS/Azure/GKE too — if patching runs
+# before the first PVC binds on a fresh install (PVC is WaitForFirstConsumer),
+# deleting the SC would leave the PVC Pending. In practice EBS binds within
+# 1-2 minutes so the 5-minute CronJob window is rarely hit. If this becomes
+# an issue, re-pass SC values for all provisioners (not just EFS).
+if [ -n "$SC_EFS_FSID" ]; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.efs.fileSystemId=\"$SC_EFS_FSID\""
+else
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
+fi
+
+# Retention settings
+HELM_CMD="$HELM_CMD \
+  --set-string prometheus.server.retention=\"$PROMETHEUS_RETENTION\" \
+  --set-string prometheus.server.retentionSize=\"$PROMETHEUS_RETENTION_SIZE\""
+
+# Resource allocations (dynamically calculated based on cluster size)
+HELM_CMD="$HELM_CMD \
+  --set prometheus.server.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\" \
+  --set prometheus.server.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\" \
+  --set prometheus.server.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\" \
+  --set prometheus.server.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.cpu=\"$OPENCOST_CPU_REQUEST\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$OPENCOST_MEMORY_REQUEST\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.cpu=\"$OPENCOST_CPU_LIMIT\" \
+  --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$OPENCOST_MEMORY_LIMIT\" \
+  --set onelens-agent.resources.requests.cpu=\"$ONELENS_CPU_REQUEST\" \
+  --set onelens-agent.resources.requests.memory=\"$ONELENS_MEMORY_REQUEST\" \
+  --set onelens-agent.resources.limits.cpu=\"$ONELENS_CPU_LIMIT\" \
+  --set onelens-agent.resources.limits.memory=\"$ONELENS_MEMORY_LIMIT\" \
+  --set prometheus.prometheus-pushgateway.resources.requests.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_REQUEST\" \
+  --set prometheus.prometheus-pushgateway.resources.requests.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_REQUEST\" \
+  --set prometheus.prometheus-pushgateway.resources.limits.cpu=\"$PROMETHEUS_PUSHGATEWAY_CPU_LIMIT\" \
+  --set prometheus.prometheus-pushgateway.resources.limits.memory=\"$PROMETHEUS_PUSHGATEWAY_MEMORY_LIMIT\" \
+  --set prometheus.kube-state-metrics.resources.requests.cpu=\"$KSM_CPU_REQUEST\" \
+  --set prometheus.kube-state-metrics.resources.requests.memory=\"$KSM_MEMORY_REQUEST\" \
+  --set prometheus.kube-state-metrics.resources.limits.cpu=\"$KSM_CPU_LIMIT\" \
+  --set prometheus.kube-state-metrics.resources.limits.memory=\"$KSM_MEMORY_LIMIT\" \
+  --set prometheus.configmapReload.prometheus.resources.requests.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST\" \
+  --set prometheus.configmapReload.prometheus.resources.requests.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST\" \
+  --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
+  --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
+
+# Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
+# Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
+# Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
+# to produce the flat path $REGISTRY_URL/<name>:{tag} matching what the migration script pushes.
+if [ -n "$REGISTRY_URL" ]; then
+    echo "Applying air-gapped image overrides for registry: $REGISTRY_URL"
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.image.repository=$REGISTRY_URL/onelens-agent \
+      --set prometheus.server.image.repository=$REGISTRY_URL/prometheus \
+      --set prometheus.configmapReload.prometheus.image.repository=$REGISTRY_URL/prometheus-config-reloader \
+      --set prometheus-opencost-exporter.opencost.exporter.image.registry=$REGISTRY_URL \
+      --set prometheus-opencost-exporter.opencost.exporter.image.repository=opencost \
+      --set prometheus.kube-state-metrics.image.registry=$REGISTRY_URL \
+      --set prometheus.kube-state-metrics.image.repository=kube-state-metrics \
+      --set prometheus.prometheus-pushgateway.image.repository=$REGISTRY_URL/pushgateway \
+      --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
+      --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
+      --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
+
+# Proxy: preserve proxy env vars across upgrades
+# Commas in --set values are interpreted as list separators by Helm,
+# so we must escape them with backslashes for NO_PROXY.
+# Double-escape because HELM_CMD is executed via eval (line ~3207).
+if [ -n "$PROXY_HTTP" ] || [ -n "$PROXY_HTTPS" ] || [ -n "$PROXY_NO" ]; then
+    echo "Preserving proxy configuration across upgrade"
+    _PROXY_NO_ESCAPED="${PROXY_NO//,/\\\\,}"
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.env.HTTP_PROXY=\"$PROXY_HTTP\" \
+      --set onelens-agent.env.http_proxy=\"$PROXY_HTTP\" \
+      --set onelens-agent.env.HTTPS_PROXY=\"$PROXY_HTTPS\" \
+      --set onelens-agent.env.https_proxy=\"$PROXY_HTTPS\" \
+      --set onelens-agent.env.NO_PROXY=\"$_PROXY_NO_ESCAPED\" \
+      --set onelens-agent.env.no_proxy=\"$_PROXY_NO_ESCAPED\""
+fi
+
+# Network costs settings (opt-in, preserved from existing release)
+HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.enabled=$NC_ENABLED"
+if [ "$NC_ENABLED" = "true" ] && [ -n "$NC_CLOUD_FLAG" ]; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.networkCosts.cloudProvider.${NC_CLOUD_FLAG}=true"
+fi
+if [ -n "$REGISTRY_URL" ] && [ "$NC_ENABLED" = "true" ]; then
+    HELM_CMD="$HELM_CMD \
+      --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
+      --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
+fi
+
+# Force-delete pods stuck in Terminating for >10 min before helm upgrade.
+# Pods on dead/unreachable nodes stay Terminating forever because kubelet can't
+# acknowledge the deletion. Helm sees them as part of the release and times out
+# waiting for the rollout. Force-delete clears the API objects so helm proceeds.
+TERMINATING_PODS=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    | awk '$3 == "Terminating" {print $1}' || true)
+if [ -n "$TERMINATING_PODS" ]; then
+    NOW=$(date +%s)
+    for pod in $TERMINATING_PODS; do
+        DEL_TS=$(kubectl get pod "$pod" -n onelens-agent \
+            -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
+        if [ -n "$DEL_TS" ]; then
+            DEL_EPOCH=$(date -d "$DEL_TS" +%s 2>/dev/null || echo "0")
+            STUCK_SECS=$(( NOW - DEL_EPOCH ))
+            if [ "$STUCK_SECS" -gt 600 ]; then
+                echo "Force-deleting pod stuck Terminating for $((STUCK_SECS / 60))m: $pod"
+                kubectl delete pod "$pod" -n onelens-agent --force --grace-period=0 2>/dev/null || true
+            fi
+        fi
+    done
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Helm upgrade with pod failure retry loop
+# ═══════════════════════════════════════════════════════════════════════════
+# If any pod OOMs after upgrade, bump that component's memory and retry
+# immediately instead of waiting for the next 5-min CronJob cycle.
 
 # Prune stale helm release secrets to prevent ResourceQuota deadlocks.
 # Helm stores each revision as a secret. With 5-min healthcheck upgrades, secrets
