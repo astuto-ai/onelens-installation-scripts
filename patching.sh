@@ -1668,6 +1668,23 @@ if [ -n "$PROM_SVC" ]; then
         NEW_PGW_OOM="$STATE_LAST_OOM_pushgateway"
         SIZING_CHANGES=0
 
+        # _is_pod_not_ready "$pod_pattern"
+        # Returns 0 (true) if a pod matching $pod_pattern is Running but not fully Ready
+        # (ready_count < total_count). Detects CPU-starved pods that can't pass readiness probes.
+        _is_pod_not_ready() {
+            local pattern="$1"
+            local pod_line
+            pod_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+                | awk -v p="$pattern" '$1 ~ p && $3 == "Running" {print; exit}' || true)
+            [ -z "$pod_line" ] && return 1
+            local ready_col
+            ready_col=$(echo "$pod_line" | awk '{print $2}')
+            local ready_count total_count
+            ready_count=$(echo "$ready_col" | cut -d/ -f1)
+            total_count=$(echo "$ready_col" | cut -d/ -f2)
+            [ "$ready_count" -lt "$total_count" ] 2>/dev/null
+        }
+
         # _evaluate_and_log "$label" "$container_name" "$current_mem" "$current_cpu" \
         #   "$mem_floor" "$mem_cap" "$oom_state_var"
         # Evaluates one component with full diagnostic logging.
@@ -2676,23 +2693,6 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # If any pod OOMs after upgrade, bump that component's memory and retry
 # immediately instead of waiting for the next 5-min CronJob cycle.
-
-# _is_pod_not_ready "$pod_pattern"
-# Returns 0 (true) if a pod matching $pod_pattern is Running but not fully Ready
-# (ready_count < total_count). Detects CPU-starved pods that can't pass readiness probes.
-_is_pod_not_ready() {
-    local pattern="$1"
-    local pod_line
-    pod_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | awk -v p="$pattern" '$1 ~ p && $3 == "Running" {print; exit}' || true)
-    [ -z "$pod_line" ] && return 1
-    local ready_col
-    ready_col=$(echo "$pod_line" | awk '{print $2}')
-    local ready_count total_count
-    ready_count=$(echo "$ready_col" | cut -d/ -f1)
-    total_count=$(echo "$ready_col" | cut -d/ -f2)
-    [ "$ready_count" -lt "$total_count" ] 2>/dev/null
-}
 
 # _detect_pod_failure — check if any onelens pod is failing after upgrade.
 # Scans all pods. Returns 0 (true) if a failing pod is found.
