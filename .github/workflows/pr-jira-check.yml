@@ -1,0 +1,14 @@
+name: PR Jira Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  jira-check:
+    uses: astuto-ai/.github/.github/workflows/pr-jira-check.yml@master
+    secrets: inherit
