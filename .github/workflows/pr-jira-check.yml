@@ -10,5 +10,5 @@ permissions:
 
 jobs:
   jira-check:
-    uses: astuto-ai/.github/.github/workflows/pr-jira-check.yml@master
+    uses: ./.github/workflows/pr-jira-check-reusable.yml
     secrets: inherit
