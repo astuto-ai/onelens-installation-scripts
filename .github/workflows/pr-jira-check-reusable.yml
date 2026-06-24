@@ -1,0 +1,122 @@
+# Reusable workflow: PR Jira ID check
+# Validates that PR branch contains ON-<number>, verifies ticket exists in Jira,
+# and limits to <3 PRs per ticket per repo.
+#
+# Required org-level secrets:
+#   JIRA_BASE_URL   - e.g. https://astuto.atlassian.net
+#   JIRA_EMAIL      - service account email for basic auth
+#   JIRA_API_TOKEN  - Jira API token
+#
+# Usage in any repo (.github/workflows/pr-jira-check.yml):
+#   name: PR Jira Check
+#   on:
+#     pull_request:
+#       types: [opened, edited, synchronize, reopened]
+#   jobs:
+#     jira-check:
+#       uses: astuto-ai/.github/.github/workflows/pr-jira-check.yml@master
+#       secrets: inherit
+
+name: PR Jira Check
+
+on:
+  workflow_call:
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  jira-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name and Jira ID usage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Branch: $BRANCH"
+
+          # Skip validation for special branches
+          if [[ "$BRANCH" =~ ^(main|master|develop|release/.+|hotfix/.+|dependabot/.+|revert-.+)$ ]]; then
+            echo "Special branch '$BRANCH' - skipping validation"
+            exit 0
+          fi
+
+          if ! [[ "$BRANCH" =~ (ON-[0-9]+) ]]; then
+            echo "::error::Branch name '$BRANCH' is missing a Jira ID. Expected pattern: ON-<number> (e.g. ON-123-short-desc). Rename your branch and reopen the PR."
+            exit 1
+          fi
+          JIRA_ID="${BASH_REMATCH[1]}"
+          echo "Found Jira ID: $JIRA_ID"
+
+          # Use REST API (not gh pr list --json, which uses GraphQL and throws
+          # spurious '403 account suspended' from reusable workflow inherited token).
+          COUNT=$(gh api --paginate "repos/${REPO}/pulls?state=all&per_page=100" \
+            --jq '.[].head.ref' \
+            | grep -cE "(^|[^A-Za-z0-9])${JIRA_ID}([^0-9]|$)" || true)
+          echo "PRs (all states) using $JIRA_ID: $COUNT"
+
+          if [ "$COUNT" -ge 5 ]; then
+            echo "::error::Jira ID $JIRA_ID is already used by $COUNT PRs in this repo (limit: < 5). Split the work into separate Jira tasks/sub-tasks."
+            exit 1
+          fi
+
+      - name: Verify Jira ticket exists
+        if: success()
+        env:
+          BRANCH: ${{ github.head_ref }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$BRANCH" =~ ^(main|master|develop|release/.+|hotfix/.+|dependabot/.+|revert-.+)$ ]]; then
+            exit 0
+          fi
+
+          if [[ "$BRANCH" =~ (ON-[0-9]+) ]]; then
+            TICKET="${BASH_REMATCH[1]}"
+          else
+            exit 0
+          fi
+
+          echo "Checking Jira for ticket: $TICKET"
+
+          HTTP_STATUS=$(curl -s -o /tmp/jira_response.json -w "%{http_code}" \
+            -u "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET}?fields=summary,status,issuetype")
+
+          if [[ "$HTTP_STATUS" == "200" ]]; then
+            SUMMARY=$(jq -r '.fields.summary' /tmp/jira_response.json)
+            STATUS=$(jq -r '.fields.status.name' /tmp/jira_response.json)
+            TYPE=$(jq -r '.fields.issuetype.name' /tmp/jira_response.json)
+
+            echo "## Jira ticket verified" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Ticket** | [$TICKET](${JIRA_BASE_URL}/browse/$TICKET) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Summary** | $SUMMARY |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Type** | $TYPE |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| **Status** | $STATUS |" >> "$GITHUB_STEP_SUMMARY"
+            echo "Ticket $TICKET exists: $SUMMARY ($TYPE - $STATUS)"
+
+          elif [[ "$HTTP_STATUS" == "404" ]]; then
+            echo "::error::Jira ticket $TICKET does not exist. Create it first or fix the branch name."
+            exit 1
+
+          else
+            echo "::warning::Could not verify Jira ticket $TICKET (HTTP $HTTP_STATUS). Allowing PR to proceed."
+          fi
