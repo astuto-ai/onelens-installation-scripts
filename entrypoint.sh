@@ -174,7 +174,9 @@ elif [ "$deployment_type" = "cronjob" ]; then
                 date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$_sizing_last_eval" +%s 2>/dev/null || \
                 echo 0)
             _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
-            if [ "$_sizing_age_secs" -ge 21600 ]; then  # 6 hours = 21600 seconds
+            _SIX_HOURS_IN_SEC=21600
+            _GRACE_PERIOD_IN_SEC=1800  # 30 minutes
+            if [ "$_sizing_age_secs" -ge $((_SIX_HOURS_IN_SEC + _GRACE_PERIOD_IN_SEC)) ]; then
                 echo "Sizing evaluation overdue (last: $_sizing_last_eval, ${_sizing_age_secs}s ago)"
                 UNHEALTHY_REASONS="Sizing evaluation overdue\n"
             fi
