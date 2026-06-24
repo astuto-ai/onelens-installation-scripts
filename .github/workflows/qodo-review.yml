@@ -23,5 +23,5 @@ jobs:
       (github.event_name == 'pull_request') ||
       (github.event_name == 'pull_request_review') ||
       (github.event_name == 'workflow_dispatch')
-    uses: astuto-ai/.github/.github/workflows/qodo-review.yml@master
+    uses: ./.github/workflows/qodo-review-reusable.yml
     secrets: inherit
