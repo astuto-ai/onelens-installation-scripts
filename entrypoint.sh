@@ -163,8 +163,26 @@ elif [ "$deployment_type" = "cronjob" ]; then
 
     # ─── Routing: healthy vs unhealthy ────────────────────────────────
     if [ -z "$UNHEALTHY_REASONS" ]; then
-        # ALL HEALTHY — decide whether to send heartbeat or exit silently
+        # ALL HEALTHY — check if sizing evaluation is overdue before final verdict
         echo "All healthchecks passed"
+
+        # Check if sizing evaluation is overdue (every 6 hours)
+        _sizing_last_eval=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent \
+            -o jsonpath='{.data.last_full_evaluation}' 2>/dev/null || true)
+        if [ -n "$_sizing_last_eval" ]; then
+            _sizing_epoch=$(date -u -d "$_sizing_last_eval" +%s 2>/dev/null || \
+                date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$_sizing_last_eval" +%s 2>/dev/null || \
+                echo 0)
+            _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
+            if [ "$_sizing_age_secs" -ge 21600 ]; then  # 6 hours = 21600 seconds
+                echo "Sizing evaluation overdue (last: $_sizing_last_eval, ${_sizing_age_secs}s ago)"
+                UNHEALTHY_REASONS="Sizing evaluation overdue\n"
+            fi
+        fi
+    fi
+
+    if [ -z "$UNHEALTHY_REASONS" ]; then
+        # TRULY HEALTHY — send heartbeat and manage GPU lifecycle
 
         # PUT heartbeat every run — we're already POSTing every 5 min anyway,
         # so the extra write is negligible. Keeps last_healthy_at fresh for
