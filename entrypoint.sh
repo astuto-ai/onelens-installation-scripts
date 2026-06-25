@@ -167,18 +167,28 @@ elif [ "$deployment_type" = "cronjob" ]; then
         echo "All healthchecks passed"
 
         # Check if sizing evaluation is overdue (every 6 hours)
-        _sizing_last_eval=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent \
-            -o jsonpath='{.data.last_full_evaluation}' 2>/dev/null || true)
-        if [ -n "$_sizing_last_eval" ]; then
-            _sizing_epoch=$(date -u -d "$_sizing_last_eval" +%s 2>/dev/null || \
-                date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$_sizing_last_eval" +%s 2>/dev/null || \
-                echo 0)
-            _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
-            _SIX_HOURS_IN_SEC=21600
-            _GRACE_PERIOD_IN_SEC=1800  # 30 minutes
-            if [ "$_sizing_age_secs" -ge $((_SIX_HOURS_IN_SEC + _GRACE_PERIOD_IN_SEC)) ]; then
-                echo "Sizing evaluation overdue (last: $_sizing_last_eval, ${_sizing_age_secs}s ago)"
-                UNHEALTHY_REASONS="Sizing evaluation overdue\n"
+        # Feature-flagged: only runs when ENABLE_PERIODIC_SIZING=true
+        if [ "${ENABLE_PERIODIC_SIZING:-}" = "true" ]; then
+            # Prefer last_sizing_run (written every patching.sh run) so we don't
+            # reset the 72h full-eval cycle. Fall back to last_full_evaluation for
+            # clusters that predate the last_sizing_run field.
+            _sizing_last_run=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent \
+                -o jsonpath='{.data.last_sizing_run}' 2>/dev/null || true)
+            if [ -z "$_sizing_last_run" ]; then
+                _sizing_last_run=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent \
+                    -o jsonpath='{.data.last_full_evaluation}' 2>/dev/null || true)
+            fi
+            if [ -n "$_sizing_last_run" ]; then
+                _sizing_epoch=$(date -u -d "$_sizing_last_run" +%s 2>/dev/null || \
+                    date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$_sizing_last_run" +%s 2>/dev/null || \
+                    echo 0)
+                _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
+                _SIX_HOURS_IN_SEC=21600
+                _GRACE_PERIOD_IN_SEC=1800  # 30 minutes
+                if [ "$_sizing_age_secs" -ge $((_SIX_HOURS_IN_SEC + _GRACE_PERIOD_IN_SEC)) ]; then
+                    echo "Sizing evaluation overdue (last run: $_sizing_last_run, ${_sizing_age_secs}s ago)"
+                    UNHEALTHY_REASONS="Sizing evaluation overdue\n"
+                fi
             fi
         fi
     fi
