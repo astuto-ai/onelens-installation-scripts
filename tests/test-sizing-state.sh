@@ -63,16 +63,23 @@ assert_exit_code 1 "is_oom_recent: empty timestamp = not recent" is_oom_recent "
 # is_full_eval_due
 ###############################################################################
 
-# 73h ago — should be due
+# 73h ago — should be due (default 72h interval)
 SEVENTY_THREE_H_AGO=$(date -u -v-73H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "73 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
 if [ -n "$SEVENTY_THREE_H_AGO" ]; then
-    assert_exit_code 0 "is_full_eval_due: 73h ago = due" is_full_eval_due "$SEVENTY_THREE_H_AGO" 72
+    assert_exit_code 0 "is_full_eval_due: 73h ago = due (72h interval)" is_full_eval_due "$SEVENTY_THREE_H_AGO" 72
 fi
 
-# 48h ago — not due
+# 48h ago — not due (default 72h interval)
 FORTY_EIGHT_H_AGO=$(date -u -v-48H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "48 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
 if [ -n "$FORTY_EIGHT_H_AGO" ]; then
-    assert_exit_code 1 "is_full_eval_due: 48h ago = not due" is_full_eval_due "$FORTY_EIGHT_H_AGO" 72
+    assert_exit_code 1 "is_full_eval_due: 48h ago = not due (72h interval)" is_full_eval_due "$FORTY_EIGHT_H_AGO" 72
+fi
+
+# 25h ago — should be due with 24h interval
+TWENTY_FIVE_H_AGO=$(date -u -v-25H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "25 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+if [ -n "$TWENTY_FIVE_H_AGO" ]; then
+    assert_exit_code 0 "is_full_eval_due: 25h ago = due (24h interval)" is_full_eval_due "$TWENTY_FIVE_H_AGO" 24
+    assert_exit_code 1 "is_full_eval_due: 25h ago = not due (72h interval)" is_full_eval_due "$TWENTY_FIVE_H_AGO" 72
 fi
 
 # Empty timestamp — NOT due (first run, ConfigMap just created with now)

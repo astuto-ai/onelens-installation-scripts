@@ -82,6 +82,10 @@ onelens-agent:
     # Health Checker URLs
     OPENCOST_HEALTH_CHECKER_URL: "http://onelens-agent-prometheus-opencost-exporter:9003/healthz"
     PROMETHEUS_HEALTH_CHECKER_URL: "http://onelens-agent-prometheus-server:80/-/healthy"
+    # Sizing evaluation interval (hours). Controls how often usage-based downsizing
+    # is allowed. Shorter intervals converge faster but need sufficient usage data.
+    # Minimum: 24 (one diurnal cycle). Default: 72.
+    FULL_EVAL_INTERVAL_HOURS: "72"
   secrets:
     # Secrets for onelens-agent
     API_BASE_URL: "https://dev-api.onelens.cloud" # DON'T ADD TRAILING SLASH
