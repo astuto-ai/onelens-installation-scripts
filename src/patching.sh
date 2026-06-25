@@ -1040,6 +1040,13 @@ if [ -n "$PROM_SVC" ]; then
     else
         echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"
     fi
+
+    # Always update last_sizing_run regardless of whether Prometheus data was
+    # available. This tells entrypoint.sh that patching.sh ran and evaluated
+    # sizing (even if it had no data to act on), preventing the 6h staleness
+    # check from re-triggering every 5 min.
+    kubectl patch configmap onelens-agent-sizing-state -n onelens-agent \
+        --type merge -p "{\"data\":{\"last_sizing_run\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" 2>/dev/null || true
 fi
 
 # --- GPU monitoring status (Stage 2: Prometheus check) ---
