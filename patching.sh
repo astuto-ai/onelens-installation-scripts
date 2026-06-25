@@ -1301,6 +1301,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   PROXY_HTTP=$(_get '.["onelens-agent"].env.HTTP_PROXY')
   PROXY_HTTPS=$(_get '.["onelens-agent"].env.HTTPS_PROXY')
   PROXY_NO=$(_get '.["onelens-agent"].env.NO_PROXY')
+  FULL_EVAL_INTERVAL_HOURS=$(_get '.["onelens-agent"].env.FULL_EVAL_INTERVAL_HOURS')
   # Read user-supplied values WITHOUT -a flag — chart defaults like "false" would
   # be mistaken for customer overrides with -a. Single call for GPU + NC fields.
   _user_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
@@ -1395,6 +1396,14 @@ else
   SC_EFS_FSID=""
   CUSTOMER_VALUES_FILE=""
   EXISTING_PVC_SIZE=""
+  FULL_EVAL_INTERVAL_HOURS=""
+fi
+
+# Default and validate full eval interval
+FULL_EVAL_INTERVAL_HOURS="${FULL_EVAL_INTERVAL_HOURS:-72}"
+if ! echo "$FULL_EVAL_INTERVAL_HOURS" | grep -qE '^[0-9]+$' || [ "$FULL_EVAL_INTERVAL_HOURS" -lt 24 ]; then
+    echo "WARNING: FULL_EVAL_INTERVAL_HOURS=$FULL_EVAL_INTERVAL_HOURS is invalid (min 24), using default 72"
+    FULL_EVAL_INTERVAL_HOURS=72
 fi
 
 # Validate required identity values
@@ -1517,9 +1526,10 @@ if [ -n "$PROM_SVC" ]; then
         curl -s -G --max-time 15 "$PROM_QUERY_URL" --data-urlencode "query=$1" 2>/dev/null || true
     }
 
-    # Query 72h max memory and CPU for sizing decisions
-    MEM_72H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[72h]))')
-    CPU_72H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m])[72h:5m]))')
+    # Query max memory and CPU over the evaluation window for sizing decisions
+    _EVAL_WINDOW="${FULL_EVAL_INTERVAL_HOURS}h"
+    MEM_72H_RAW=$(_prom_query_raw "max by (container) (max_over_time(container_memory_working_set_bytes{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"}[${_EVAL_WINDOW}]))")
+    CPU_72H_RAW=$(_prom_query_raw "max by (container) (max_over_time(rate(container_cpu_usage_seconds_total{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"}[5m])[${_EVAL_WINDOW}:5m]))")
 
     # Query current usage for logging (1h window)
     MEM_NOW_RAW=$(_prom_query_raw 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
@@ -1535,7 +1545,7 @@ if [ -n "$PROM_SVC" ]; then
 
     # Log current usage (observability)
     if [ -n "$MEM_NOW" ]; then
-        echo "Actual usage (now | max 1h | max 72h):"
+        echo "Actual usage (now | max 1h | max ${FULL_EVAL_INTERVAL_HOURS}h):"
         (
             echo "$MEM_NOW" | while read c v; do echo "mem_now $c $v"; done
             echo "$MEM_1H" | while read c v; do echo "mem_1h $c $v"; done
@@ -1612,7 +1622,7 @@ if [ -n "$PROM_SVC" ]; then
             --from-literal=kube-state-metrics.last_oom_at="" \
             --from-literal=opencost.last_oom_at="" \
             --from-literal=pushgateway.last_oom_at="" 2>/dev/null || true
-        echo "Created sizing state ConfigMap (first run, downsize deferred 72h)"
+        echo "Created sizing state ConfigMap (first run, downsize deferred ${FULL_EVAL_INTERVAL_HOURS}h)"
         STATE_LAST_FULL_EVAL="$NOW_TS"
         STATE_LAST_OOM_prometheus_server=""
         STATE_LAST_OOM_kube_state_metrics=""
@@ -1622,11 +1632,11 @@ if [ -n "$PROM_SVC" ]; then
         parse_sizing_state "$CM_JSON"
     fi
 
-    # Determine if 72h full evaluation is due
+    # Determine if full evaluation is due
     FULL_EVAL_DUE=false
-    if is_full_eval_due "$STATE_LAST_FULL_EVAL" 72; then
+    if is_full_eval_due "$STATE_LAST_FULL_EVAL" "$FULL_EVAL_INTERVAL_HOURS"; then
         FULL_EVAL_DUE=true
-        echo "72h full evaluation due (last: $STATE_LAST_FULL_EVAL)"
+        echo "${FULL_EVAL_INTERVAL_HOURS}h full evaluation due (last: $STATE_LAST_FULL_EVAL)"
     fi
 
     # Only proceed with usage-based if we have 72h data
@@ -3355,6 +3365,11 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+fi
+
+# Sizing interval: preserve customer override across upgrades
+if [ "$FULL_EVAL_INTERVAL_HOURS" != "72" ]; then
+    HELM_CMD="$HELM_CMD --set-string onelens-agent.env.FULL_EVAL_INTERVAL_HOURS=\"$FULL_EVAL_INTERVAL_HOURS\""
 fi
 
 # Proxy: preserve proxy env vars across upgrades
