@@ -702,6 +702,12 @@ if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ] || [ -n "${NO_PROXY:-}"
     CMD+=" --set onelens-agent.env.no_proxy=\"$_NO_PROXY_ESCAPED\""
 fi
 
+# Sizing evaluation interval: forward customer override to onelens-agent sub-chart
+if [ -n "${FULL_EVAL_INTERVAL_HOURS:-}" ]; then
+    echo "Sizing evaluation interval: ${FULL_EVAL_INTERVAL_HOURS}h"
+    CMD+=" --set-string onelens-agent.env.FULL_EVAL_INTERVAL_HOURS=\"$FULL_EVAL_INTERVAL_HOURS\""
+fi
+
 # Add cloud-specific storage class parameters
 if [ "$CLOUD_PROVIDER" = "AWS" ]; then
     CMD+=" --set onelens-agent.storageClass.volumeType=\"$STORAGE_CLASS_VOLUME_TYPE\""
