@@ -2542,10 +2542,8 @@ if [ -n "$REGISTRY_URL" ]; then
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
 fi
 
-# Sizing interval: preserve customer override across upgrades
-if [ "$FULL_EVAL_INTERVAL_HOURS" != "72" ]; then
-    HELM_CMD="$HELM_CMD --set-string onelens-agent.env.FULL_EVAL_INTERVAL_HOURS=\"$FULL_EVAL_INTERVAL_HOURS\""
-fi
+# Sizing interval: always pass to ensure value is correctly applied or reset across upgrades
+HELM_CMD="$HELM_CMD --set-string onelens-agent.env.FULL_EVAL_INTERVAL_HOURS=\"$FULL_EVAL_INTERVAL_HOURS\""
 
 # Proxy: preserve proxy env vars across upgrades
 # Commas in --set values are interpreted as list separators by Helm,
