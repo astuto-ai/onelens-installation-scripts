@@ -260,6 +260,7 @@ cronjob:
   failedJobsHistoryLimit: 1 # Number of failed jobs to keep
   suspend: false # Suspend the job
   healthCheck: false # Set to true to enable health check for cronjob pod
+  enablePeriodicSizing: false # Set to true to enable periodic resource sizing evaluation
   # Tolerations allow the agent to be scheduled on nodes with matching taints
   tolerations: []
   # - key: "key"
