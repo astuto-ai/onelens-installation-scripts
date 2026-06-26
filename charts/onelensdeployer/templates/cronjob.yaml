@@ -56,9 +56,9 @@ spec:
                   value: {{ $value | quote }}
                 {{- end }}
                 {{- include "onelensdeployer.proxyEnv" . | nindent 16 }}
-                {{- if .Values.job.env.ENABLE_PERIODIC_SIZING }}
+                {{- if .Values.cronjob.enablePeriodicSizing }}
                 - name: ENABLE_PERIODIC_SIZING
-                  value: {{ .Values.job.env.ENABLE_PERIODIC_SIZING | quote }}
+                  value: "true"
                 {{- end }}
                 {{- if .Values.podCountOverride }}
                 - name: POD_COUNT_OVERRIDE
