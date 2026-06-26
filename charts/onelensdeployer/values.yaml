@@ -211,6 +211,7 @@ job:
   env:
     deployment_type: job
     NETWORK_COSTS_ENABLED: ""
+    ENABLE_PERIODIC_SIZING: ""
   resources:
     requests:
       cpu: 200m
