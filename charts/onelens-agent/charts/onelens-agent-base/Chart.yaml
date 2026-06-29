@@ -2,8 +2,8 @@ apiVersion: v2
 name: onelens-agent-base
 description: Base Helm chart for the OneLens Agent
 type: application
-version: 2.1.100
-appVersion: 2.1.100
+version: 2.1.101
+appVersion: 2.1.101
 maintainers:
   - name: OneLens
     email: support@onelens.cloud
