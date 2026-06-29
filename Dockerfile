@@ -1,4 +1,4 @@
-FROM alpine:3.18
+FROM alpine:3.22
 
 # Install dependencies (this layer is cached across builds)
 RUN apk update && apk add --no-cache \
