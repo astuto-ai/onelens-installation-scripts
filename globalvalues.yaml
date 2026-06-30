@@ -88,7 +88,7 @@ prometheus:
       name: configmap-reload
       image:
         repository: quay.io/prometheus-operator/prometheus-config-reloader
-        tag: v0.80.1
+        tag: v0.92.1
         digest: ""
         pullPolicy: IfNotPresent
       containerPort: 8080
@@ -677,7 +677,7 @@ prometheus:
     namespaceOverride: ""
     image:
       repository: quay.io/prometheus/pushgateway
-      tag: "v1.11.2"
+      tag: "v1.11.3"
       pullPolicy: IfNotPresent
     imagePullSecrets: []
     service:
