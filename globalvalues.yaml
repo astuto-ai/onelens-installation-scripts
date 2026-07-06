@@ -452,7 +452,7 @@ prometheus:
     image:
       registry: registry.k8s.io
       repository: kube-state-metrics/kube-state-metrics
-      tag: "v2.15.0"
+      tag: "v2.19.1"
       sha: ""
       pullPolicy: IfNotPresent
     imagePullSecrets: []
@@ -817,7 +817,7 @@ prometheus-opencost-exporter:
       image:
         registry: ghcr.io
         repository: opencost/opencost
-        tag: "1.119.2"
+        tag: "1.120.4"
         pullPolicy: IfNotPresent
       replicas: 1
       resources:
