@@ -50,6 +50,12 @@ parameters:
   {{- else if eq .Values.storageClass.provisioner "pd.csi.storage.gke.io" }}
   # GKE Persistent Disk CSI Driver parameters
   type: {{ .Values.storageClass.gke.type | default "pd-balanced" }}
+  {{- if and .Values.storageClass.gke.encryption .Values.storageClass.gke.encryption.enabled .Values.storageClass.gke.encryption.kmsKey }}
+  disk-encryption-kms-key: {{ .Values.storageClass.gke.encryption.kmsKey | quote }}
+  {{- end }}
+  {{- if and .Values.storageClass.gke.labels .Values.storageClass.gke.labels.enabled .Values.storageClass.gke.labels.value }}
+  labels: {{ .Values.storageClass.gke.labels.value | quote }}
+  {{- end }}
   {{- else }}
   # Generic parameters for other provisioners
   {{- if .Values.storageClass.volumeType }}

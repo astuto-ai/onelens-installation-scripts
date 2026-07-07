@@ -40,6 +40,17 @@ onelens-agent:
       encryption:
         enabled: false
         diskEncryptionSetID: ""  # Azure Disk Encryption Set resource ID
+    # GKE-specific parameters (used when provisioner is pd.csi.storage.gke.io)
+    gke:
+      type: pd-balanced  # Options: pd-standard, pd-balanced, pd-ssd, pd-extreme
+      # GKE Disk labels (comma-separated key=value pairs)
+      labels:
+        enabled: false
+        value: ""  # Format: "key1=value1,key2=value2"
+      # GKE CMEK encryption using Cloud KMS key
+      encryption:
+        enabled: false
+        kmsKey: ""  # Format: projects/<project>/locations/<location>/keyRings/<ring>/cryptoKeys/<key>
     # Azure Files parameters (used when provisioner is file.csi.azure.com)
     # Multi-AZ storage — eliminates PV AZ-lock scheduling issues.
     # skuName (Premium_LRS) and protocol (nfs) are hardcoded in the StorageClass template.
