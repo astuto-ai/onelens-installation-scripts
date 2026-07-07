@@ -195,11 +195,13 @@ detect_cloud_provider() {
     # Primary detection: Check cluster endpoint URL
     # EKS: Always has *.eks.amazonaws.com (100% reliable)
     # AKS: Always has *.azmk8s.io (100% reliable)
-    # GKE: Can be added later (*.gke.io pattern)
+    # GKE: *.gke.goog (DNS-based endpoint clusters)
     if [[ "$cluster_endpoint" =~ \.eks\.amazonaws\.com ]]; then
         echo "AWS"
     elif [[ "$cluster_endpoint" =~ \.azmk8s\.io ]]; then
         echo "AZURE"
+    elif [[ "$cluster_endpoint" =~ \.gke\.goog ]]; then
+        echo "GKE"
     else
         # Fallback detection: Check node provider ID (backup method)
         # Fetch only one node to avoid loading all node objects into memory on large clusters
@@ -210,6 +212,8 @@ detect_cloud_provider() {
             echo "AWS"
         elif [[ "$node_provider" =~ ^azure:// ]]; then
             echo "AZURE"
+        elif [[ "$node_provider" =~ ^gce:// ]]; then
+            echo "GKE"
         else
             echo "UNKNOWN"
         fi
@@ -224,11 +228,11 @@ echo "Auto-detected cloud provider: $CLOUD_PROVIDER"
 if [ "$CLOUD_PROVIDER" = "UNKNOWN" ]; then
     if [ -n "${CLOUD_PROVIDER_OVERRIDE:-}" ]; then
         echo "Auto-detection failed. Using manual override: $CLOUD_PROVIDER_OVERRIDE"
-        if [[ "$CLOUD_PROVIDER_OVERRIDE" =~ ^(AWS|AZURE)$ ]]; then
+        if [[ "$CLOUD_PROVIDER_OVERRIDE" =~ ^(AWS|AZURE|GKE)$ ]]; then
             CLOUD_PROVIDER="$CLOUD_PROVIDER_OVERRIDE"
         else
             echo "ERROR: Invalid CLOUD_PROVIDER_OVERRIDE value: $CLOUD_PROVIDER_OVERRIDE"
-            echo "Supported values: AWS, AZURE"
+            echo "Supported values: AWS, AZURE, GKE"
             exit 1
         fi
     fi
@@ -243,17 +247,22 @@ elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     STORAGE_CLASS_PROVISIONER="disk.csi.azure.com"
     STORAGE_CLASS_SKU="StandardSSD_LRS"
     echo "Using Azure Disk storage class (provisioner: $STORAGE_CLASS_PROVISIONER, sku: $STORAGE_CLASS_SKU)"
+elif [ "$CLOUD_PROVIDER" = "GKE" ]; then
+    STORAGE_CLASS_PROVISIONER="pd.csi.storage.gke.io"
+    STORAGE_CLASS_GKE_TYPE="${GKE_DISK_TYPE:-pd-balanced}"
+    echo "Using GKE Persistent Disk storage class (provisioner: $STORAGE_CLASS_PROVISIONER, type: $STORAGE_CLASS_GKE_TYPE)"
 else
     echo "ERROR: Cloud provider auto-detection failed."
     echo "Detected provider: $CLOUD_PROVIDER"
     echo ""
-    echo "Supported providers: AWS (EKS), Azure (AKS)"
+    echo "Supported providers: AWS (EKS), Azure (AKS), GCP (GKE)"
     echo ""
     echo "To manually specify the cloud provider, set the CLOUD_PROVIDER_OVERRIDE environment variable:"
     echo "  export CLOUD_PROVIDER_OVERRIDE=AWS    # For AWS EKS clusters"
     echo "  export CLOUD_PROVIDER_OVERRIDE=AZURE  # For Azure AKS clusters"
+    echo "  export CLOUD_PROVIDER_OVERRIDE=GKE    # For GCP GKE clusters"
     echo ""
-    echo "Note: Auto-detection should work for all standard EKS and AKS clusters."
+    echo "Note: Auto-detection should work for all standard EKS, AKS, and GKE clusters."
     echo "If detection failed, please verify: kubectl cluster-info"
     exit 1
 fi
@@ -321,6 +330,26 @@ check_azure_disk_driver() {
     return 0
 }
 
+check_gke_pd_driver() {
+    echo "Checking if GKE Persistent Disk CSI driver is installed..."
+
+    if kubectl get csidriver pd.csi.storage.gke.io &> /dev/null; then
+        echo "GKE Persistent Disk CSI driver is installed."
+        return 0
+    fi
+
+    if kubectl get storageclass | grep -q "pd.csi.storage.gke.io"; then
+        echo "GKE Persistent Disk storage class is available."
+        return 0
+    fi
+
+    echo "WARNING: GKE Persistent Disk CSI driver may not be fully configured."
+    echo "For GKE clusters, the PD CSI driver is typically pre-installed."
+    echo "If you encounter storage issues, run:"
+    echo "  gcloud container clusters update <cluster> --zone <zone> --update-addons=GcePersistentDiskCsiDriver=ENABLED"
+    return 0
+}
+
 # Run appropriate CSI driver check based on cloud provider
 if [ "$CLOUD_PROVIDER" = "AWS" ]; then
     if [ -n "${EFS_FILESYSTEM_ID:-}" ]; then
@@ -332,6 +361,9 @@ if [ "$CLOUD_PROVIDER" = "AWS" ]; then
 elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     echo "Running Azure Disk CSI driver check..."
     check_azure_disk_driver
+elif [ "$CLOUD_PROVIDER" = "GKE" ]; then
+    echo "Running GKE Persistent Disk CSI driver check..."
+    check_gke_pd_driver
 else
     echo "Unknown cloud provider. Skipping CSI driver check."
     echo "Please ensure your cluster has a CSI driver installed for persistent storage."
@@ -582,6 +614,13 @@ export AZURE_DISK_ENCRYPTION_ENABLED="${AZURE_DISK_ENCRYPTION_ENABLED:=false}"
 export AZURE_DISK_ENCRYPTION_SET_ID="${AZURE_DISK_ENCRYPTION_SET_ID:=}"
 export AZURE_DISK_CACHING_MODE="${AZURE_DISK_CACHING_MODE:=ReadOnly}"
 
+## GKE Persistent Disk custom labels and encryption (GKE-specific)
+export GKE_DISK_TYPE="${GKE_DISK_TYPE:=pd-balanced}"
+export GKE_DISK_LABELS_ENABLED="${GKE_DISK_LABELS_ENABLED:=false}"
+export GKE_DISK_LABELS="${GKE_DISK_LABELS:=}"
+export GKE_ENCRYPTION_ENABLED="${GKE_ENCRYPTION_ENABLED:=false}"
+export GKE_ENCRYPTION_KMS_KEY="${GKE_ENCRYPTION_KMS_KEY:=}"
+
 ## Network cost attribution (opt-in)
 export NETWORK_COSTS_ENABLED="${NETWORK_COSTS_ENABLED:=}"
 
@@ -713,6 +752,8 @@ if [ "$CLOUD_PROVIDER" = "AWS" ]; then
     CMD+=" --set onelens-agent.storageClass.volumeType=\"$STORAGE_CLASS_VOLUME_TYPE\""
 elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     CMD+=" --set onelens-agent.storageClass.azure.skuName=\"$STORAGE_CLASS_SKU\""
+elif [ "$CLOUD_PROVIDER" = "GKE" ]; then
+    CMD+=" --set onelens-agent.storageClass.gke.type=\"$STORAGE_CLASS_GKE_TYPE\""
 fi
 
 # Network costs (opt-in)
@@ -725,6 +766,9 @@ if [ "${NETWORK_COSTS_ENABLED:-}" = "true" ]; then
     elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
         CMD+=" --set onelens-agent.networkCosts.cloudProvider.azure=true"
         echo "Network costs: cloudProvider=azure"
+    elif [ "$CLOUD_PROVIDER" = "GKE" ]; then
+        CMD+=" --set onelens-agent.networkCosts.cloudProvider.gcp=true"
+        echo "Network costs: cloudProvider=gcp"
     fi
     if [ -n "$REGISTRY_URL" ]; then
         CMD+=" --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL"
@@ -861,6 +905,24 @@ if [[ "$CLOUD_PROVIDER" == "AZURE" ]]; then
     CMD+=" --set onelens-agent.storageClass.azure.encryption.enabled=true"
     if [[ -n "$AZURE_DISK_ENCRYPTION_SET_ID" ]]; then
       CMD+=" --set onelens-agent.storageClass.azure.encryption.diskEncryptionSetID=\"$AZURE_DISK_ENCRYPTION_SET_ID\""
+    fi
+  fi
+fi
+
+# Append GKE-specific settings
+if [[ "$CLOUD_PROVIDER" == "GKE" ]]; then
+  # Append GKE-specific disk labels only if set
+  if [[ "$GKE_DISK_LABELS_ENABLED" == "true" && -n "$GKE_DISK_LABELS" ]]; then
+    echo "Processing GKE Disk labels: $GKE_DISK_LABELS"
+    CMD+=" --set onelens-agent.storageClass.gke.labels.enabled=true"
+    CMD+=" --set onelens-agent.storageClass.gke.labels.value=\"$GKE_DISK_LABELS\""
+  fi
+
+  # Append GKE-specific CMEK encryption only if set
+  if [[ "$GKE_ENCRYPTION_ENABLED" == "true" ]]; then
+    CMD+=" --set onelens-agent.storageClass.gke.encryption.enabled=true"
+    if [[ -n "$GKE_ENCRYPTION_KMS_KEY" ]]; then
+      CMD+=" --set onelens-agent.storageClass.gke.encryption.kmsKey=\"$GKE_ENCRYPTION_KMS_KEY\""
     fi
   fi
 fi

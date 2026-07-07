@@ -24,6 +24,23 @@ onelens-agent:
     volumeTags:
       enabled: false
     azureFiles: {}
+    azure:
+      skuName: StandardSSD_LRS
+      cachingMode: ReadOnly
+      tags:
+        enabled: false
+        value: ""
+      encryption:
+        enabled: false
+        diskEncryptionSetID: ""
+    gke:
+      type: pd-balanced
+      labels:
+        enabled: false
+        value: ""
+      encryption:
+        enabled: false
+        kmsKey: ""
     efs:
       fileSystemId: ""
     labels:

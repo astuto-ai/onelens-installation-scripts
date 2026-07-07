@@ -103,6 +103,10 @@ assert_ne "$aws_path" "" "install.sh has AWS volumeType --set path"
 azure_path=$(grep 'storageClass.azure.skuName' "$ROOT/install.sh" | head -1 || true)
 assert_ne "$azure_path" "" "install.sh has Azure skuName --set path"
 
+# GKE-specific path
+gke_path=$(grep 'storageClass.gke.type' "$ROOT/install.sh" | head -1 || true)
+assert_ne "$gke_path" "" "install.sh has GKE disk type --set path"
+
 ###############################################################################
 # Test 6: EBS tags and encryption paths exist in install.sh
 ###############################################################################
@@ -218,6 +222,46 @@ assert_gt "$sc_efs_repass" "0" "patching.sh re-passes storageClass.efs.fileSyste
 ###############################################################################
 sc_efs_extract=$(grep -c 'SC_EFS_FSID=.*storageClass\.efs\.fileSystemId' "$ROOT/patching.sh" || true)
 assert_gt "$sc_efs_extract" "0" "patching.sh extracts SC_EFS_FSID from existing values"
+
+###############################################################################
+# Test 15: GKE StorageClass renders correctly with helm template
+###############################################################################
+RENDERED_GKE=$(helm template test-release onelens/onelens-agent \
+    --version "$CHART_VERSION" \
+    --set onelens-agent.storageClass.provisioner="pd.csi.storage.gke.io" \
+    --set onelens-agent.storageClass.gke.type="pd-balanced" \
+    2>/dev/null)
+
+if echo "$RENDERED_GKE" | grep -q 'pd.csi.storage.gke.io'; then
+    assert_contains "$RENDERED_GKE" "pd.csi.storage.gke.io" "GKE: provisioner is pd.csi.storage.gke.io"
+    assert_contains "$RENDERED_GKE" "pd-balanced" "GKE: disk type is pd-balanced"
+else
+    echo "  SKIP: GKE StorageClass rendering (chart $CHART_VERSION does not include GKE branch)"
+fi
+
+###############################################################################
+# Test 16: install.sh has GKE disk type --set path
+###############################################################################
+gke_type_path=$(grep -c 'storageClass.gke.type' "$ROOT/install.sh" || true)
+assert_gt "$gke_type_path" "0" "install.sh has GKE storageClass.gke.type --set path"
+
+###############################################################################
+# Test 17: install.sh handles GKE env vars
+###############################################################################
+gke_labels_code=$(grep -c 'GKE_DISK_LABELS_ENABLED' "$ROOT/install.sh" || true)
+assert_gt "$gke_labels_code" "0" "install.sh handles GKE_DISK_LABELS_ENABLED"
+
+gke_encrypt_code=$(grep -c 'GKE_ENCRYPTION_ENABLED' "$ROOT/install.sh" || true)
+assert_gt "$gke_encrypt_code" "0" "install.sh handles GKE_ENCRYPTION_ENABLED"
+
+###############################################################################
+# Test 18: install.sh has GKE PD CSI driver check function and dispatch
+###############################################################################
+gke_csi_func=$(grep -c 'check_gke_pd_driver' "$ROOT/install.sh" || true)
+assert_gt "$gke_csi_func" "0" "install.sh has check_gke_pd_driver function"
+
+gke_csi_dispatch=$(grep -c 'CLOUD_PROVIDER.*=.*"GKE"' "$ROOT/install.sh" || true)
+assert_gt "$gke_csi_dispatch" "0" "install.sh has GKE cloud provider dispatch"
 
 test_summary
 exit $?
