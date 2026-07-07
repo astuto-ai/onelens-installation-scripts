@@ -621,6 +621,9 @@ export GKE_DISK_LABELS="${GKE_DISK_LABELS:=}"
 export GKE_ENCRYPTION_ENABLED="${GKE_ENCRYPTION_ENABLED:=false}"
 export GKE_ENCRYPTION_KMS_KEY="${GKE_ENCRYPTION_KMS_KEY:=}"
 
+## GCP API key for OpenCost pricing data (required for GKE clusters)
+export GCP_API_KEY="${GCP_API_KEY:=}"
+
 ## Network cost attribution (opt-in)
 export NETWORK_COSTS_ENABLED="${NETWORK_COSTS_ENABLED:=}"
 
@@ -754,6 +757,24 @@ elif [ "$CLOUD_PROVIDER" = "AZURE" ]; then
     CMD+=" --set onelens-agent.storageClass.azure.skuName=\"$STORAGE_CLASS_SKU\""
 elif [ "$CLOUD_PROVIDER" = "GKE" ]; then
     CMD+=" --set onelens-agent.storageClass.gke.type=\"$STORAGE_CLASS_GKE_TYPE\""
+fi
+
+# GCP API key for OpenCost pricing data (required for GKE)
+if [ "$CLOUD_PROVIDER" = "GKE" ] && [ -n "$GCP_API_KEY" ]; then
+    echo "GCP API key configured for OpenCost pricing data."
+    CMD+=" --set prometheus-opencost-exporter.opencost.exporter.cloudProviderApiKey=\"$GCP_API_KEY\""
+elif [ "$CLOUD_PROVIDER" = "GKE" ] && [ -z "$GCP_API_KEY" ]; then
+    echo "WARNING: GCP_API_KEY is not set. OpenCost will not be able to fetch GCP pricing data."
+    echo "To fix: set GCP_API_KEY env var with a GCP API key that has Cloud Billing API access."
+fi
+
+# GKE: OpenCost needs a writable /var/configs directory to store its GCP pricing config.
+# The container runs as non-root and cannot create /var/configs itself, causing a nil pointer crash.
+if [ "$CLOUD_PROVIDER" = "GKE" ]; then
+    CMD+=" --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].name=opencost-config"
+    CMD+=" --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].mountPath=/var/configs"
+    CMD+=" --set prometheus-opencost-exporter.extraVolumes[0].name=opencost-config"
+    CMD+=" --set prometheus-opencost-exporter.extraVolumes[0].emptyDir.medium=\"\""
 fi
 
 # Network costs (opt-in)
