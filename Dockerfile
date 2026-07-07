@@ -18,7 +18,7 @@ RUN apk update && apk add --no-cache \
 # Install kubectl for healthcheck mode (entrypoint.sh needs it before patching.sh runs)
 # Also available at runtime so install.sh skips the download in airgapped environments.
 RUN ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/') && \
-    curl -sL "https://dl.k8s.io/release/v1.31.14/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
+    curl -sL "https://dl.k8s.io/release/v1.33.13/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
 # Install Helm so install.sh skips the download in airgapped environments.
