@@ -1317,6 +1317,14 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   SC_PROVISIONER=$(_get '.["onelens-agent"].storageClass.provisioner')
   SC_EFS_FSID=$(_get '.["onelens-agent"].storageClass.efs.fileSystemId')
 
+  # GKE-specific values (API key, disk type, labels, encryption)
+  GKE_API_KEY=$(_get '.["prometheus-opencost-exporter"].opencost.exporter.cloudProviderApiKey')
+  GKE_DISK_TYPE=$(_get '.["onelens-agent"].storageClass.gke.type')
+  GKE_LABELS_ENABLED=$(_get '.["onelens-agent"].storageClass.gke.labels.enabled')
+  GKE_LABELS_VALUE=$(_get '.["onelens-agent"].storageClass.gke.labels.value')
+  GKE_ENCRYPTION_ENABLED=$(_get '.["onelens-agent"].storageClass.gke.encryption.enabled')
+  GKE_ENCRYPTION_KMS_KEY=$(_get '.["onelens-agent"].storageClass.gke.encryption.kmsKey')
+
   echo "  Cluster: $CLUSTER_NAME | Cloud: $SC_PROVISIONER | PVC: $PVC_ENABLED"
   if [ -n "$REGISTRY_URL" ]; then
       echo "  Air-gapped mode: REGISTRY_URL=$REGISTRY_URL"
@@ -1394,6 +1402,12 @@ else
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   SC_EFS_FSID=""
+  GKE_API_KEY=""
+  GKE_DISK_TYPE=""
+  GKE_LABELS_ENABLED=""
+  GKE_LABELS_VALUE=""
+  GKE_ENCRYPTION_ENABLED=""
+  GKE_ENCRYPTION_KMS_KEY=""
   CUSTOMER_VALUES_FILE=""
   EXISTING_PVC_SIZE=""
   FULL_EVAL_INTERVAL_HOURS=""
@@ -3311,8 +3325,31 @@ if [ -n "$SC_EFS_FSID" ]; then
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.efs.fileSystemId=\"$SC_EFS_FSID\""
+elif echo "$SC_PROVISIONER" | grep -q "pd.csi.storage.gke.io"; then
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=pd.csi.storage.gke.io"
+    HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.gke.type=\"${GKE_DISK_TYPE:-pd-balanced}\""
+    if [ "$GKE_LABELS_ENABLED" = "true" ] && [ -n "$GKE_LABELS_VALUE" ]; then
+        HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.gke.labels.enabled=true"
+        HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.gke.labels.value=\"$GKE_LABELS_VALUE\""
+    fi
+    if [ "$GKE_ENCRYPTION_ENABLED" = "true" ] && [ -n "$GKE_ENCRYPTION_KMS_KEY" ]; then
+        HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.gke.encryption.enabled=true"
+        HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.gke.encryption.kmsKey=\"$GKE_ENCRYPTION_KMS_KEY\""
+    fi
 else
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
+fi
+
+# GKE: preserve OpenCost API key and writable config volume across upgrades
+if echo "$SC_PROVISIONER" | grep -q "pd.csi.storage.gke.io"; then
+    if [ -n "$GKE_API_KEY" ]; then
+        HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.cloudProviderApiKey=\"$GKE_API_KEY\""
+    fi
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].name=opencost-config"
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].mountPath=/var/configs"
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.extraVolumes[0].name=opencost-config"
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.extraVolumes[0].emptyDir.medium=\"\""
 fi
 
 # Retention settings
