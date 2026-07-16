@@ -10,6 +10,7 @@
 REQUIRED_URLS=(
     "https://api-in.onelens.cloud"
     "https://astuto-ai.github.io"
+    "https://storage.googleapis.com"
 )
 
 REQUIRED_CONTAINER_REGISTRIES=(
@@ -442,9 +443,10 @@ check_k8s_version() {
     k8s_version=$(
         kubectl version -o json 2>/dev/null | \
             grep -o '"gitVersion": *"v[^"]*"' | \
-            head -1 | \
+            tail -1 | \
             cut -d'"' -f4 | \
-            sed 's/^v//'
+            sed 's/^v//' | \
+            grep -oE '^[0-9]+\.[0-9]+\.[0-9]+'
     )
     
     if [ -z "$k8s_version" ] || [ "$k8s_version" = "null" ]; then
