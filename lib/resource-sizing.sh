@@ -344,13 +344,15 @@ has_sufficient_data() {
 #   "$container" "$current_mem" "$current_cpu" \
 #   "$max_72h_mem_bytes" "$max_72h_cpu_cores" \
 #   "$has_oom_now" "$has_oom_recent" "$is_full_eval" "$is_first_run" \
-#   "$mem_buffer" "$cpu_buffer" "$mem_floor" "$mem_cap" "$cpu_floor" "$cpu_cap"
+#   "$mem_buffer" "$cpu_buffer" "$mem_floor" "$mem_cap" "$cpu_floor" "$cpu_cap" \
+#   "$mem_now_bytes"
 #
 # The master decision function for Prometheus, KSM, OpenCost.
 # Prints two lines: MEM=<value> and CPU=<value>
 # Logic:
 #   - OOM now + not first run: bump memory (2x prom, 1.5x others), capped
 #   - OOM recent (7d hold): HOLD, upsize allowed
+#   - Usage-at-limit: if instantaneous mem usage >= 90% of limit, preemptive bump
 #   - First run: HOLD (no downsize, no OOM reaction)
 #   - Empty Prometheus data: HOLD, upsize allowed
 #   - Full eval (72h): set to usage × buffer (can downsize, with 50% safety guard)
@@ -361,6 +363,7 @@ evaluate_container_sizing() {
     local has_oom_now="$6" has_oom_recent="$7" is_full_eval="$8" is_first_run="$9"
     local mem_buffer="${10}" cpu_buffer="${11}"
     local mem_floor="${12}" mem_cap="${13}" cpu_floor="${14}" cpu_cap="${15}"
+    local mem_now_bytes="${16:-}"
 
     local new_mem="$current_mem"
     local new_cpu="$current_cpu"
@@ -417,6 +420,26 @@ evaluate_container_sizing() {
         echo "MEM=$new_mem"
         echo "CPU=$new_cpu"
         return 0
+    fi
+
+    # Usage-at-limit: if instantaneous memory usage >= 90% of the limit,
+    # the container is about to OOM. Bump preemptively. This catches cases
+    # where Prometheus missed the OOM spike (container killed between scrapes)
+    # and the termination reason wasn't tagged OOMKilled.
+    if [ -n "$mem_now_bytes" ] && [ "$mem_now_bytes" != "0" ]; then
+        local _ual_now_mi _ual_limit_mi
+        _ual_now_mi=$(( mem_now_bytes / 1048576 ))
+        _ual_limit_mi=$(_memory_to_mi "$current_mem")
+        if [ "$_ual_limit_mi" -gt 0 ] && \
+           [ "$_ual_now_mi" -ge $(( _ual_limit_mi * 90 / 100 )) ] 2>/dev/null; then
+            case "$container" in
+                prom*) new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 2 1) ;;
+                *)     new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 3 2) ;;
+            esac
+            echo "MEM=$new_mem"
+            echo "CPU=$new_cpu"
+            return 0
+        fi
     fi
 
     # No Prometheus data: HOLD, upsize allowed
