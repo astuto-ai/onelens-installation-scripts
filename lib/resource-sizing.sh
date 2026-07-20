@@ -429,14 +429,16 @@ evaluate_container_sizing() {
     if [ -n "$mem_now_bytes" ] && [ "$mem_now_bytes" != "0" ]; then
         local _ual_limit_mi
         _ual_limit_mi=$(_memory_to_mi "$current_mem")
-        # Truncate float to integer (Prometheus can return floats)
-        local _ual_now_int=${mem_now_bytes%.*}
+        # Safely convert potential float/scientific notation from Prometheus to integer.
+        # printf handles 8.36e+08 correctly; ${%.*} would break on scientific notation.
+        local _ual_now_int
+        _ual_now_int=$(printf "%.0f" "$mem_now_bytes" 2>/dev/null || true)
 
         # Validate numeric before arithmetic
         if [[ "$_ual_now_int" =~ ^[0-9]+$ && "$_ual_limit_mi" =~ ^[0-9]+$ ]]; then
             local _ual_now_mi=$(( _ual_now_int / 1048576 ))
             if [ "$_ual_limit_mi" -gt 0 ] && \
-               [ "$_ual_now_mi" -ge $(( _ual_limit_mi * 90 / 100 )) ]; then
+               [ $(( _ual_now_mi * 100 )) -ge $(( _ual_limit_mi * 90 )) ]; then
                 case "$container" in
                     prom*) new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 2 1) ;;
                     *)     new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 3 2) ;;
