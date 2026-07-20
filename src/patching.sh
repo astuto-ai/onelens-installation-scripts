@@ -763,38 +763,48 @@ if [ -n "$PROM_SVC" ]; then
     OOM_PROM_RAW=$(_prom_query_raw 'kube_pod_container_status_last_terminated_reason{namespace="onelens-agent",reason="OOMKilled"}')
     OOM_PROM=$(parse_prom_oom_count "$OOM_PROM_RAW")
 
-    # Kubectl fallback for OOM detection + Pending pod warning
+    # Kubectl-based OOM detection + CrashLoopBackOff detection + Pending pod warning
     OOM_KUBECTL=""
-    if [ -z "$OOM_PROM" ]; then
-        # Fetch pod JSON once for both OOM detection and Pending check
-        _pods_json=$(kubectl get pods -n onelens-agent -o json 2>/dev/null || true)
-
-        # Detect OOM from: (1) lastState.terminated.reason == OOMKilled, or
-        # (2) CrashLoopBackOff with restartCount >= 3 (pod keeps crashing, likely OOM —
-        #     kernel doesn't always label it OOMKilled, e.g. during WAL replay)
-        if [ -n "$_pods_json" ]; then
-            OOM_KUBECTL=$(echo "$_pods_json" | jq -r '
+    _pods_json=$(kubectl get pods -n onelens-agent -o json 2>/dev/null || true)
+    if [ -n "$_pods_json" ]; then
+        # 1) OOMKilled via kubectl — only when Prometheus has no OOM data (fallback)
+        if [ -z "$OOM_PROM" ]; then
+            _oom_kubectl_terminated=$(echo "$_pods_json" | jq -r '
                 .items[].status.containerStatuses[]? |
-                select(
-                    .lastState.terminated.reason == "OOMKilled" or
-                    (.state.waiting.reason == "CrashLoopBackOff" and .restartCount >= 3)
-                ) | .name
+                select(.lastState.terminated.reason == "OOMKilled") | .name
             ' 2>/dev/null || true)
-            if [ -n "$OOM_KUBECTL" ]; then
-                echo "OOM detected via kubectl fallback (Prometheus unavailable for KSM metric):"
-                echo "$OOM_KUBECTL" | while read -r _oname; do echo "  $_oname"; done
+            if [ -n "$_oom_kubectl_terminated" ]; then
+                OOM_KUBECTL="$_oom_kubectl_terminated"
+                echo "OOM detected via kubectl (terminated reason):"
+                echo "$_oom_kubectl_terminated" | while read -r _oname; do echo "  $_oname"; done
             fi
+        fi
 
-            # Warn on pods Pending for >30 minutes (possible node resource exhaustion — don't bump)
-            _pending_warn=$(echo "$_pods_json" | jq -r '
-                .items[] | select(.status.phase == "Pending") |
-                select(now - (.metadata.creationTimestamp | fromdateiso8601) > 1800) |
-                .metadata.name
-            ' 2>/dev/null || true)
-            if [ -n "$_pending_warn" ]; then
-                echo "WARNING: pods Pending for >30 minutes (possible node resource exhaustion):"
-                echo "$_pending_warn" | while read -r _pname; do echo "  $_pname"; done
-            fi
+        # 2) CrashLoopBackOff — ALWAYS check regardless of OOM_PROM.
+        #    Prometheus may report zero OOMs while a pod is crash-looping from
+        #    a non-tagged kernel OOM kill (e.g. during WAL replay).
+        #    Require exitCode 137 (SIGKILL) to avoid false positives from
+        #    config errors or other non-OOM crashes.
+        _oom_kubectl_crashloop=$(echo "$_pods_json" | jq -r '
+            .items[].status.containerStatuses[]? |
+            select(.state.waiting.reason == "CrashLoopBackOff" and .restartCount >= 3 and .lastState.terminated.exitCode == 137) | .name
+        ' 2>/dev/null || true)
+        if [ -n "$_oom_kubectl_crashloop" ]; then
+            # Merge with any existing OOM_KUBECTL, dedup
+            OOM_KUBECTL=$(printf '%s\n%s' "$OOM_KUBECTL" "$_oom_kubectl_crashloop" | sort -u | sed '/^$/d')
+            echo "OOM detected via kubectl (CrashLoopBackOff + restartCount >= 3 + exitCode 137):"
+            echo "$_oom_kubectl_crashloop" | while read -r _oname; do echo "  $_oname"; done
+        fi
+
+        # 3) Pending pod warning — always check
+        _pending_warn=$(echo "$_pods_json" | jq -r '
+            .items[] | select(.status.phase == "Pending") |
+            select(now - (.metadata.creationTimestamp | fromdateiso8601) > 1800) |
+            .metadata.name
+        ' 2>/dev/null || true)
+        if [ -n "$_pending_warn" ]; then
+            echo "WARNING: pods Pending for >30 minutes (possible node resource exhaustion):"
+            echo "$_pending_warn" | while read -r _pname; do echo "  $_pname"; done
         fi
     fi
 
@@ -885,13 +895,14 @@ if [ -n "$PROM_SVC" ]; then
         }
 
         # _evaluate_and_log "$label" "$container_name" "$current_mem" "$current_cpu" \
-        #   "$mem_floor" "$mem_cap" "$oom_state_var"
+        #   "$mem_floor" "$mem_cap" "$oom_state_var" "$cpu_floor" "$mem_now_bytes"
         # Evaluates one component with full diagnostic logging.
         # Sets: _OUT_MEM, _OUT_CPU, increments SIZING_CHANGES if changed.
         _evaluate_and_log() {
             local label="$1" container="$2" cur_mem="$3" cur_cpu="$4"
             local mem_floor="$5" mem_cap="$6" oom_state_var="$7"
             local cpu_floor="${8:-$_USAGE_FLOOR_CPU}"
+            local mem_now_bytes="${9:-}"
 
             local mem_bytes cpu_cores oom_now oom_recent
             mem_bytes=$(_get_container_val "$MEM_72H" "$container")
@@ -918,7 +929,8 @@ if [ -n "$PROM_SVC" ]; then
             result=$(evaluate_container_sizing "$container" \
                 "$cur_mem" "$cur_cpu" "$mem_bytes" "$cpu_cores" \
                 "$oom_now" "$oom_recent" "$FULL_EVAL_DUE" "$IS_FIRST_RUN" \
-                1.35 1.25 "$mem_floor" "$mem_cap" "$cpu_floor" "$_USAGE_CAP_CPU")
+                1.35 1.25 "$mem_floor" "$mem_cap" "$cpu_floor" "$_USAGE_CAP_CPU" \
+                "$mem_now_bytes")
             new_mem=$(echo "$result" | grep '^MEM=' | cut -d= -f2)
             new_cpu=$(echo "$result" | grep '^CPU=' | cut -d= -f2)
 
@@ -990,14 +1002,16 @@ if [ -n "$PROM_SVC" ]; then
         # Evaluate: Prometheus
         _evaluate_and_log "prometheus-server" "prometheus-server" \
             "$PROMETHEUS_MEMORY_LIMIT" "$PROMETHEUS_CPU_LIMIT" \
-            "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "NEW_PROM_OOM"
+            "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "NEW_PROM_OOM" \
+            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "prometheus-server")"
         PROMETHEUS_MEMORY_REQUEST="$_OUT_MEM"; PROMETHEUS_MEMORY_LIMIT="$_OUT_MEM"
         PROMETHEUS_CPU_REQUEST="$_OUT_CPU"; PROMETHEUS_CPU_LIMIT="$_OUT_CPU"
 
         # Evaluate: KSM
         _evaluate_and_log "kube-state-metrics" "kube-state-metrics" \
             "$KSM_MEMORY_LIMIT" "$KSM_CPU_LIMIT" \
-            "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "NEW_KSM_OOM"
+            "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "NEW_KSM_OOM" \
+            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "kube-state-metrics")"
         KSM_MEMORY_REQUEST="$_OUT_MEM"; KSM_MEMORY_LIMIT="$_OUT_MEM"
         KSM_CPU_REQUEST="$_OUT_CPU"; KSM_CPU_LIMIT="$_OUT_CPU"
 
@@ -1006,7 +1020,8 @@ if [ -n "$PROM_SVC" ]; then
         _evaluate_and_log "opencost" "onelens-agent-prometheus-opencost-exporter" \
             "$OPENCOST_MEMORY_LIMIT" "$OPENCOST_CPU_LIMIT" \
             "$_USAGE_FLOOR_OPENCOST_MEM" "$_USAGE_CAP_OPENCOST_MEM" "NEW_OC_OOM" \
-            "$_USAGE_FLOOR_OPENCOST_CPU"
+            "$_USAGE_FLOOR_OPENCOST_CPU" \
+            "$(_get_container_val "$MEM_NOW" "onelens-agent-prometheus-opencost-exporter")"
         # OpenCost needs ≥100m CPU for startup burst (readiness probe).
         # If pod is Running+NotReady, hold CPU at pre-evaluation value to prevent
         # the vicious cycle where near-zero usage from a starved pod reinforces low CPU.
@@ -1043,7 +1058,8 @@ if [ -n "$PROM_SVC" ]; then
         # (Job-history fallback) that was prone to false-positive bumps.
         _evaluate_and_log "onelens-agent" "onelens-agent" \
             "$ONELENS_MEMORY_LIMIT" "$ONELENS_CPU_LIMIT" \
-            "$_USAGE_FLOOR_AGENT_MEM" "$_USAGE_CAP_AGENT_MEM" "NEW_AGENT_OOM"
+            "$_USAGE_FLOOR_AGENT_MEM" "$_USAGE_CAP_AGENT_MEM" "NEW_AGENT_OOM" \
+            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "onelens-agent")"
         ONELENS_MEMORY_REQUEST="$_OUT_MEM"; ONELENS_MEMORY_LIMIT="$_OUT_MEM"
         ONELENS_CPU_REQUEST="$_OUT_CPU"; ONELENS_CPU_LIMIT="$_OUT_CPU"
 

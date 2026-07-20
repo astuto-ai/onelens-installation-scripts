@@ -170,5 +170,50 @@ assert_eq "$(calculate_oom_response_memory "400Mi" 4800)" "800Mi" \
 assert_eq "$_USAGE_CAP_AGENT_MEM" "8192" \
     "_USAGE_CAP_AGENT_MEM raised to 8192 (from 4096) in v2.1.66"
 
+###############################################################################
+# evaluate_container_sizing — usage-at-limit detection (param 16: mem_now_bytes)
+###############################################################################
+
+# Usage at 95% of limit → preemptive 1.5x bump (non-prom container like opencost)
+# 800Mi limit, mem_now = 798Mi (95% = 760Mi threshold), 72h max = 579Mi
+# Should bump: 800Mi * 1.5 = 1200Mi
+_ual_result=$(evaluate_container_sizing "opencost" "800Mi" "100m" \
+    607000000 0.05 false false false false \
+    1.35 1.25 192 4800 50 1200 \
+    836763238)
+_ual_mem=$(echo "$_ual_result" | grep '^MEM=' | cut -d= -f2)
+assert_eq "$_ual_mem" "1200Mi" \
+    "usage-at-limit: 95% of 800Mi limit → 1.5x bump to 1200Mi (non-prom)"
+
+# Usage at 95% of limit → preemptive 2x bump (prometheus container)
+# 800Mi limit, mem_now = 798Mi (95% = 760Mi threshold), 72h max = 579Mi
+# Should bump: 800Mi * 2 = 1600Mi
+_ual_result=$(evaluate_container_sizing "prometheus-server" "800Mi" "100m" \
+    607000000 0.05 false false false false \
+    1.35 1.25 150 8192 50 1200 \
+    836763238)
+_ual_mem=$(echo "$_ual_result" | grep '^MEM=' | cut -d= -f2)
+assert_eq "$_ual_mem" "1600Mi" \
+    "usage-at-limit: 95% of 800Mi limit → 2x bump to 1600Mi (prometheus)"
+
+# Usage at 80% of limit → no bump (below 90% threshold)
+# 800Mi limit, mem_now = 640Mi (80% = below 720Mi threshold), 72h max = 579Mi
+_ual_result=$(evaluate_container_sizing "opencost" "800Mi" "100m" \
+    607000000 0.05 false false false false \
+    1.35 1.25 192 4800 50 1200 \
+    671088640)
+_ual_mem=$(echo "$_ual_result" | grep '^MEM=' | cut -d= -f2)
+assert_eq "$_ual_mem" "800Mi" \
+    "usage-at-limit: 80% of 800Mi limit → no bump (below 90% threshold)"
+
+# Usage at limit with empty mem_now_bytes → no bump (no data)
+_ual_result=$(evaluate_container_sizing "opencost" "800Mi" "100m" \
+    607000000 0.05 false false false false \
+    1.35 1.25 192 4800 50 1200 \
+    "")
+_ual_mem=$(echo "$_ual_result" | grep '^MEM=' | cut -d= -f2)
+assert_eq "$_ual_mem" "800Mi" \
+    "usage-at-limit: empty mem_now_bytes → no bump"
+
 test_summary
 exit $?
