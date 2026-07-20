@@ -428,7 +428,8 @@ evaluate_container_sizing() {
     # and the termination reason wasn't tagged OOMKilled.
     if [ -n "$mem_now_bytes" ] && [ "$mem_now_bytes" != "0" ]; then
         local _ual_now_mi _ual_limit_mi
-        _ual_now_mi=$(( mem_now_bytes / 1048576 ))
+        # Truncate float to integer to prevent bash arithmetic errors
+        _ual_now_mi=$(( ${mem_now_bytes%.*} / 1048576 ))
         _ual_limit_mi=$(_memory_to_mi "$current_mem")
         if [ "$_ual_limit_mi" -gt 0 ] && \
            [ "$_ual_now_mi" -ge $(( _ual_limit_mi * 90 / 100 )) ] 2>/dev/null; then

@@ -783,14 +783,16 @@ if [ -n "$PROM_SVC" ]; then
         # 2) CrashLoopBackOff — ALWAYS check regardless of OOM_PROM.
         #    Prometheus may report zero OOMs while a pod is crash-looping from
         #    a non-tagged kernel OOM kill (e.g. during WAL replay).
+        #    Require exitCode 137 (SIGKILL) to avoid false positives from
+        #    config errors or other non-OOM crashes.
         _oom_kubectl_crashloop=$(echo "$_pods_json" | jq -r '
             .items[].status.containerStatuses[]? |
-            select(.state.waiting.reason == "CrashLoopBackOff" and .restartCount >= 3) | .name
+            select(.state.waiting.reason == "CrashLoopBackOff" and .restartCount >= 3 and .lastState.terminated.exitCode == 137) | .name
         ' 2>/dev/null || true)
         if [ -n "$_oom_kubectl_crashloop" ]; then
             # Merge with any existing OOM_KUBECTL, dedup
             OOM_KUBECTL=$(printf '%s\n%s' "$OOM_KUBECTL" "$_oom_kubectl_crashloop" | sort -u | sed '/^$/d')
-            echo "OOM detected via kubectl (CrashLoopBackOff + restartCount >= 3):"
+            echo "OOM detected via kubectl (CrashLoopBackOff + restartCount >= 3 + exitCode 137):"
             echo "$_oom_kubectl_crashloop" | while read -r _oname; do echo "  $_oname"; done
         fi
 
