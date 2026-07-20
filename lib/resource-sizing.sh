@@ -427,19 +427,24 @@ evaluate_container_sizing() {
     # where Prometheus missed the OOM spike (container killed between scrapes)
     # and the termination reason wasn't tagged OOMKilled.
     if [ -n "$mem_now_bytes" ] && [ "$mem_now_bytes" != "0" ]; then
-        local _ual_now_mi _ual_limit_mi
-        # Truncate float to integer to prevent bash arithmetic errors
-        _ual_now_mi=$(( ${mem_now_bytes%.*} / 1048576 ))
+        local _ual_limit_mi
         _ual_limit_mi=$(_memory_to_mi "$current_mem")
-        if [ "$_ual_limit_mi" -gt 0 ] && \
-           [ "$_ual_now_mi" -ge $(( _ual_limit_mi * 90 / 100 )) ] 2>/dev/null; then
-            case "$container" in
-                prom*) new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 2 1) ;;
-                *)     new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 3 2) ;;
-            esac
-            echo "MEM=$new_mem"
-            echo "CPU=$new_cpu"
-            return 0
+        # Truncate float to integer (Prometheus can return floats)
+        local _ual_now_int=${mem_now_bytes%.*}
+
+        # Validate numeric before arithmetic
+        if [[ "$_ual_now_int" =~ ^[0-9]+$ && "$_ual_limit_mi" =~ ^[0-9]+$ ]]; then
+            local _ual_now_mi=$(( _ual_now_int / 1048576 ))
+            if [ "$_ual_limit_mi" -gt 0 ] && \
+               [ "$_ual_now_mi" -ge $(( _ual_limit_mi * 90 / 100 )) ]; then
+                case "$container" in
+                    prom*) new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 2 1) ;;
+                    *)     new_mem=$(calculate_oom_response_memory "$current_mem" "$mem_cap" 3 2) ;;
+                esac
+                echo "MEM=$new_mem"
+                echo "CPU=$new_cpu"
+                return 0
+            fi
         fi
     fi
 
