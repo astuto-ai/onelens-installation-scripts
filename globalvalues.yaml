@@ -1,5 +1,6 @@
 onelens-agent:
   enabled: true
+  metricsBackend: "prometheus"
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
     tag: v2.1.108
@@ -84,6 +85,153 @@ onelens-agent:
     enabled: "false"
     dcgmExporter:
       image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+  victoriaMetrics:
+    image:
+      repository: victoriametrics/victoria-metrics
+      tag: v1.117.1
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1536Mi"
+    retentionPeriod: "30d"
+    maxLabelsPerTimeseries: 50
+    persistentVolume:
+      enabled: false
+      storageClass: onelens-sc
+      accessModes:
+        - ReadWriteOnce
+      size: 10Gi
+    tolerations: []
+    nodeSelector: {}
+    scrapeConfigs: |
+      - job_name: prometheus
+        static_configs:
+          - targets:
+              - localhost:8428
+      - job_name: 'kubernetes-nodes'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'kubelet_volume_stats_.*'
+            action: keep
+      - job_name: 'kubernetes-nodes-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_usage_bytes|container_fs_usage_bytes|container_fs_limit_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_periods_total|container_cpu_cfs_throttled_seconds_total|container_oom_events_total|container_spec_memory_limit_bytes|container_spec_cpu_shares|container_spec_cpu_quota|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_packets_total'
+            action: keep
+      - job_name: 'kubernetes-service-endpoints'
+        honor_labels: true
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_custom_metrics_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape_slow]
+            action: drop
+            regex: true
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+            action: replace
+            target_label: __scheme__
+            regex: (https?)
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+?)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          - action: labelmap
+            regex: __meta_kubernetes_service_annotation_prometheus_io_param_(.+)
+            replacement: __param_$1
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            action: replace
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: node
+      - job_name: 'prometheus-pushgateway'
+        honor_labels: true
+        kubernetes_sd_configs:
+          - role: service
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
+            action: keep
+            regex: pushgateway
+    extraScrapeConfigs: |
+      - job_name: opencost
+        honor_labels: true
+        scrape_interval: 1m
+        scrape_timeout: 10s
+        metrics_path: /metrics
+        scheme: http
+        dns_sd_configs:
+          - names:
+              - onelens-agent-prometheus-opencost-exporter
+            type: 'A'
+            port: 9003
+      - job_name: dcgm-gpu-metrics
+        honor_labels: true
+        scrape_interval: 30s
+        scrape_timeout: 10s
+        metrics_path: /metrics
+        scheme: http
+        dns_sd_configs:
+          - names:
+              - nvidia-dcgm-exporter.onelens-agent
+            type: A
+            port: 9400
+      - job_name: network-costs
+        honor_labels: true
+        scrape_interval: 1m
+        scrape_timeout: 10s
+        metrics_path: /metrics
+        scheme: http
+        dns_sd_configs:
+          - names:
+              - opencost-network-costs.onelens-agent
+            type: A
+            port: 3001
 prometheus:
   enabled: true
   rbac:

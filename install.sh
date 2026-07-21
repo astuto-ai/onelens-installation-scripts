@@ -44,9 +44,10 @@ trap 'code=$?; if [ $code -ne 0 ]; then send_logs; fi; exit $code' EXIT
 : "${IMAGE_TAG:=v$RELEASE_VERSION}"
 : "${API_BASE_URL:=https://api-in.onelens.cloud}"
 : "${PVC_ENABLED:=true}"
+: "${METRICS_BACKEND:=prometheus}"
 
 # Export the variables so they are available in the environment
-export RELEASE_VERSION IMAGE_TAG API_BASE_URL TOKEN PVC_ENABLED
+export RELEASE_VERSION IMAGE_TAG API_BASE_URL TOKEN PVC_ENABLED METRICS_BACKEND
 
 # Phase 2.5: Proxy Configuration
 # If proxy env vars are set (injected by the deployer Helm chart), augment NO_PROXY
@@ -710,6 +711,26 @@ CMD="helm upgrade --install onelens-agent -n onelens-agent $CREATE_NS_FLAG $CHAR
     --set-string prometheus.server.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\" \
     --set onelens-agent.storageClass.provisioner=\"$STORAGE_CLASS_PROVISIONER\""
 
+# VictoriaMetrics: when METRICS_BACKEND=victoriametrics, disable Prometheus server
+# but keep KSM and pushgateway (they are subcharts of the prometheus chart).
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    echo "Metrics backend: VictoriaMetrics (disabling Prometheus server, keeping KSM/pushgateway)"
+    CMD+=" --set prometheus.server.replicaCount=0"
+    CMD+=" --set prometheus.server.service.enabled=false"
+    CMD+=" --set prometheus.server.persistentVolume.enabled=false"
+    CMD+=" --set prometheus.configmapReload.prometheus.enabled=false"
+    CMD+=" --set onelens-agent.metricsBackend=victoriametrics"
+    CMD+=" --set onelens-agent.victoriaMetrics.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\""
+    CMD+=" --set onelens-agent.victoriaMetrics.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\""
+    CMD+=" --set onelens-agent.victoriaMetrics.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\""
+    CMD+=" --set onelens-agent.victoriaMetrics.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\""
+    CMD+=" --set onelens-agent.victoriaMetrics.persistentVolume.enabled=$PVC_ENABLED"
+    CMD+=" --set-string onelens-agent.victoriaMetrics.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+    CMD+=" --set onelens-agent.env.PROMETHEUS_HEALTH_CHECKER_URL=\"http://onelens-agent-prometheus-server:80/health\""
+    CMD+=" --set onelens-agent.env.METRICS_BACKEND=victoriametrics"
+    CMD+=" --set onelens-agent.env.METRICS_CONTAINER_NAME=victoriametrics"
+fi
+
 # Air-gapped: override all image sources to private registry.
 # Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
 # Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
@@ -727,6 +748,9 @@ if [ -n "$REGISTRY_URL" ]; then
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL"
     CMD+=" --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy"
     CMD+=" --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+    if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+        CMD+=" --set onelens-agent.victoriaMetrics.image.repository=$REGISTRY_URL/victoria-metrics"
+    fi
 fi
 
 # Proxy: pass effective proxy env vars to onelens-agent sub-chart
@@ -817,12 +841,18 @@ fi
 if [[ -n "$TOLERATION_KEY" && -n "$TOLERATION_OPERATOR" && -n "$TOLERATION_EFFECT" ]]; then
   # For operator=Exists, value is not required. For other operators, value is required.
   if [[ "$TOLERATION_OPERATOR" == "Exists" ]] || [[ -n "$TOLERATION_VALUE" ]]; then
-    for path in \
-      prometheus-opencost-exporter.opencost \
-      prometheus.server \
-      onelens-agent.cronJob \
-      prometheus.prometheus-pushgateway \
-      prometheus.kube-state-metrics; do
+    _toleration_paths=(
+      prometheus-opencost-exporter.opencost
+      onelens-agent.cronJob
+      prometheus.prometheus-pushgateway
+      prometheus.kube-state-metrics
+    )
+    if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+      _toleration_paths+=( onelens-agent.victoriaMetrics )
+    else
+      _toleration_paths+=( prometheus.server )
+    fi
+    for path in "${_toleration_paths[@]}"; do
       CMD+=" \
       --set $path.tolerations[0].key=\"$TOLERATION_KEY\" \
       --set $path.tolerations[0].operator=\"$TOLERATION_OPERATOR\""
@@ -839,12 +869,18 @@ fi
 
 # Append nodeSelector only if set
 if [[ -n "$NODE_SELECTOR_KEY" && -n "$NODE_SELECTOR_VALUE" ]]; then
-  for path in \
-    prometheus-opencost-exporter.opencost \
-    prometheus.server \
-    onelens-agent.cronJob \
-    prometheus.prometheus-pushgateway \
-    prometheus.kube-state-metrics; do
+  _nodeselector_paths=(
+    prometheus-opencost-exporter.opencost
+    onelens-agent.cronJob
+    prometheus.prometheus-pushgateway
+    prometheus.kube-state-metrics
+  )
+  if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    _nodeselector_paths+=( onelens-agent.victoriaMetrics )
+  else
+    _nodeselector_paths+=( prometheus.server )
+  fi
+  for path in "${_nodeselector_paths[@]}"; do
     CMD+=" --set $path.nodeSelector.$NODE_SELECTOR_KEY=\"$NODE_SELECTOR_VALUE\""
   done
 fi

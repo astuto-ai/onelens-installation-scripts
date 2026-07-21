@@ -673,7 +673,8 @@ if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
     # Pod is Running — check for TSDB I/O errors in logs (indicates underlying disk is gone).
     # The /-/healthy and /-/ready endpoints still return 200 even when disk is deleted,
     # because Prometheus HTTP server runs from memory. Only TSDB logs reveal the truth.
-    TSDB_ERRORS=$(kubectl logs "$PROM_POD_PRE" -n onelens-agent -c prometheus-server --tail=50 2>/dev/null \
+    _METRICS_CONTAINER="${METRICS_CONTAINER_NAME:-prometheus-server}"
+    TSDB_ERRORS=$(kubectl logs "$PROM_POD_PRE" -n onelens-agent -c "$_METRICS_CONTAINER" --tail=50 2>/dev/null \
         | grep -c 'input/output error' || true)
     if [ "$TSDB_ERRORS" -gt 0 ] 2>/dev/null; then
         echo "Prometheus pod is Running but has $TSDB_ERRORS TSDB I/O errors — underlying disk is gone."

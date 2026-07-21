@@ -128,11 +128,12 @@ elif [ "$deployment_type" = "cronjob" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pods not ready: ${NOT_READY}\n"
     fi
 
-    # Check 2: Prometheus healthy
+    # Check 2: Prometheus/VictoriaMetrics healthy
     PROM_SVC=$(kubectl get svc -n onelens-agent --no-headers 2>/dev/null \
         | awk '/prometheus-server/{print $1; exit}' || true)
     if [ -n "$PROM_SVC" ]; then
-        PROM_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy" 2>/dev/null || echo "000")
+        _HEALTH_URL="${PROMETHEUS_HEALTH_CHECKER_URL:-http://${PROM_SVC}.onelens-agent.svc.cluster.local:80/-/healthy}"
+        PROM_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$_HEALTH_URL" 2>/dev/null || echo "000")
         if [ "$PROM_HTTP_CODE" != "200" ]; then
             UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Prometheus unhealthy (HTTP ${PROM_HTTP_CODE})\n"
         fi
