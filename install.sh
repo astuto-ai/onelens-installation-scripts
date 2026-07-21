@@ -726,6 +726,7 @@ if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
     CMD+=" --set onelens-agent.victoriaMetrics.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\""
     CMD+=" --set onelens-agent.victoriaMetrics.persistentVolume.enabled=$PVC_ENABLED"
     CMD+=" --set-string onelens-agent.victoriaMetrics.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+    CMD+=" --set-string onelens-agent.victoriaMetrics.retentionPeriod=\"$PROMETHEUS_RETENTION\""
     CMD+=" --set onelens-agent.env.PROMETHEUS_HEALTH_CHECKER_URL=\"http://onelens-agent-prometheus-server:80/health\""
     CMD+=" --set onelens-agent.env.METRICS_BACKEND=victoriametrics"
     CMD+=" --set onelens-agent.env.METRICS_CONTAINER_NAME=victoriametrics"
