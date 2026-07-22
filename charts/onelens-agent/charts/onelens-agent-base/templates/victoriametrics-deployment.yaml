@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: onelens-agent-prometheus-server
+  name: onelens-agent-victoriametrics
   labels:
     {{- include "onelens-agent.labels" . | nindent 4 }}
     component: victoriametrics
@@ -19,12 +19,12 @@ spec:
 {{- end }}
   selector:
     matchLabels:
-      app: onelens-agent-prometheus-server
+      app: onelens-agent-victoriametrics
       component: victoriametrics
   template:
     metadata:
       labels:
-        app: onelens-agent-prometheus-server
+        app: onelens-agent-victoriametrics
         component: victoriametrics
     spec:
       serviceAccountName: onelens-agent-prometheus-server
@@ -82,11 +82,11 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: onelens-agent-prometheus-server
+            name: onelens-agent-victoriametrics-config
         - name: data
           {{- if .Values.victoriaMetrics.persistentVolume.enabled }}
           persistentVolumeClaim:
-            claimName: onelens-agent-prometheus-server
+            claimName: onelens-agent-victoriametrics
           {{- else }}
           emptyDir: {}
           {{- end }}
