@@ -1526,9 +1526,13 @@ echo ""
 echo "Checking Prometheus health..."
 _report_milestone  # M6: prometheus-health — values set, checking usage data
 
-# Get the Prometheus service endpoint
+# Get the metrics service endpoint and pod
 PROM_SVC=$(kubectl get svc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
-PROM_POD_PRE=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    PROM_POD_PRE=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/onelens-agent-victoriametrics/{print $1; exit}' || true)
+else
+    PROM_POD_PRE=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+fi
 PROM_POD_STATUS_PRE=""
 if [ -n "$PROM_POD_PRE" ]; then
     PROM_POD_STATUS_PRE=$(kubectl get pod "$PROM_POD_PRE" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
@@ -1550,8 +1554,10 @@ if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
         echo "Waiting for pod restart..."
         for _rw in 1 2 3 4 5 6; do
             sleep 10
+            _POD_PATTERN="prometheus-server"
+            [ "$METRICS_BACKEND" = "victoriametrics" ] && _POD_PATTERN="onelens-agent-victoriametrics"
             NEW_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                | grep 'prometheus-server' | grep -v 'Terminating' | awk '{print $1; exit}' || true)
+                | grep "$_POD_PATTERN" | grep -v 'Terminating' | awk '{print $1; exit}' || true)
             if [ -n "$NEW_POD" ] && [ "$NEW_POD" != "$PROM_POD_PRE" ]; then
                 NEW_POD_STATUS=$(kubectl get pod "$NEW_POD" -n onelens-agent -o jsonpath='{.status.phase}' 2>/dev/null || true)
                 echo "New pod '$NEW_POD': status=$NEW_POD_STATUS"
