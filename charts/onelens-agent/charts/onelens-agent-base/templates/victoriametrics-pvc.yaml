@@ -1,0 +1,18 @@
+{{- if and (eq .Values.metricsBackend "victoriametrics") .Values.victoriaMetrics.persistentVolume.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: onelens-agent-prometheus-server
+  labels:
+    {{- include "onelens-agent.labels" . | nindent 4 }}
+    component: victoriametrics
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.victoriaMetrics.persistentVolume.accessModes | nindent 4 }}
+  storageClassName: {{ .Values.victoriaMetrics.persistentVolume.storageClass | default "onelens-sc" }}
+  resources:
+    requests:
+      storage: {{ .Values.victoriaMetrics.persistentVolume.size | default "10Gi" }}
+{{- end }}

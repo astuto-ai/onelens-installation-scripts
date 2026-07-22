@@ -1,5 +1,8 @@
 # Default values for onelens-agent-base
 
+# Metrics backend: "prometheus" (default) or "victoriametrics"
+metricsBackend: "prometheus"
+
 image:
   repository: public.ecr.aws/w7k6q5m9/onelens-agent
   tag: v2.1.108
@@ -100,6 +103,31 @@ gpu:
   enabled: "false" # "true" | "false" — resolved by patching.sh/install.sh from "auto" detection
   dcgmExporter:
     image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+# VictoriaMetrics configuration (used when metricsBackend: "victoriametrics")
+victoriaMetrics:
+  image:
+    repository: victoriametrics/victoria-metrics
+    tag: v1.117.1
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1536Mi"
+  retentionPeriod: "30d"
+  maxLabelsPerTimeseries: 50
+  persistentVolume:
+    enabled: false
+    storageClass: onelens-sc
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+  tolerations: []
+  nodeSelector: {}
+  scrapeConfigs: ""
+  extraScrapeConfigs: ""
 # Network cost attribution (opt-in)
 networkCosts:
   enabled: false
