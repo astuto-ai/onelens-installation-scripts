@@ -1333,6 +1333,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   PROXY_HTTPS=$(_get '.["onelens-agent"].env.HTTPS_PROXY')
   PROXY_NO=$(_get '.["onelens-agent"].env.NO_PROXY')
   FULL_EVAL_INTERVAL_HOURS=$(_get '.["onelens-agent"].env.FULL_EVAL_INTERVAL_HOURS')
+  METRICS_BACKEND=$(_get '.["onelens-agent"].env.METRICS_BACKEND')
   # Read user-supplied values WITHOUT -a flag — chart defaults like "false" would
   # be mistaken for customer overrides with -a. Single call for GPU + NC fields.
   _user_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
@@ -1400,6 +1401,10 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
         tolerations: (.["onelens-agent"].cronJob.tolerations // []),
         nodeSelector: (.["onelens-agent"].cronJob.nodeSelector // {}),
         podLabels: (.["onelens-agent"].cronJob.podLabels // {})
+      },
+      victoriaMetrics: {
+        tolerations: (.["onelens-agent"].victoriaMetrics.tolerations // []),
+        nodeSelector: (.["onelens-agent"].victoriaMetrics.nodeSelector // {})
       }
     }
   }' > "$CUSTOMER_VALUES_FILE" 2>/dev/null || true
@@ -1442,7 +1447,11 @@ else
   CUSTOMER_VALUES_FILE=""
   EXISTING_PVC_SIZE=""
   FULL_EVAL_INTERVAL_HOURS=""
+  METRICS_BACKEND=""
 fi
+
+# Default METRICS_BACKEND to prometheus if not set (fresh installs or pre-VM clusters)
+: "${METRICS_BACKEND:=prometheus}"
 
 # Default and validate full eval interval
 FULL_EVAL_INTERVAL_HOURS="${FULL_EVAL_INTERVAL_HOURS:-72}"
@@ -1529,7 +1538,8 @@ if [ -n "$PROM_POD_PRE" ] && [ "$PROM_POD_STATUS_PRE" = "Running" ]; then
     # Pod is Running — check for TSDB I/O errors in logs (indicates underlying disk is gone).
     # The /-/healthy and /-/ready endpoints still return 200 even when disk is deleted,
     # because Prometheus HTTP server runs from memory. Only TSDB logs reveal the truth.
-    TSDB_ERRORS=$(kubectl logs "$PROM_POD_PRE" -n onelens-agent -c prometheus-server --tail=50 2>/dev/null \
+    _METRICS_CONTAINER="${METRICS_CONTAINER_NAME:-prometheus-server}"
+    TSDB_ERRORS=$(kubectl logs "$PROM_POD_PRE" -n onelens-agent -c "$_METRICS_CONTAINER" --tail=50 2>/dev/null \
         | grep -c 'input/output error' || true)
     if [ "$TSDB_ERRORS" -gt 0 ] 2>/dev/null; then
         echo "Prometheus pod is Running but has $TSDB_ERRORS TSDB I/O errors — underlying disk is gone."
@@ -3431,6 +3441,27 @@ HELM_CMD="$HELM_CMD \
   --set prometheus.configmapReload.prometheus.resources.limits.cpu=\"$PROMETHEUS_CONFIGMAP_RELOAD_CPU_LIMIT\" \
   --set prometheus.configmapReload.prometheus.resources.limits.memory=\"$PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT\""
 
+# VictoriaMetrics: when METRICS_BACKEND=victoriametrics, disable Prometheus server
+# but keep KSM and pushgateway (they are subcharts of the prometheus chart).
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    echo "Metrics backend: VictoriaMetrics (disabling Prometheus server, keeping KSM/pushgateway)"
+    HELM_CMD="$HELM_CMD --set prometheus.server.replicaCount=0"
+    HELM_CMD="$HELM_CMD --set prometheus.server.service.enabled=false"
+    HELM_CMD="$HELM_CMD --set prometheus.server.persistentVolume.enabled=false"
+    HELM_CMD="$HELM_CMD --set prometheus.configmapReload.prometheus.enabled=false"
+    HELM_CMD="$HELM_CMD --set onelens-agent.metricsBackend=victoriametrics"
+    HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.resources.requests.cpu=\"$PROMETHEUS_CPU_REQUEST\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.resources.requests.memory=\"$PROMETHEUS_MEMORY_REQUEST\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.resources.limits.cpu=\"$PROMETHEUS_CPU_LIMIT\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.resources.limits.memory=\"$PROMETHEUS_MEMORY_LIMIT\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.persistentVolume.enabled=$PVC_ENABLED"
+    HELM_CMD="$HELM_CMD --set-string onelens-agent.victoriaMetrics.persistentVolume.size=\"$PROMETHEUS_VOLUME_SIZE\""
+    HELM_CMD="$HELM_CMD --set-string onelens-agent.victoriaMetrics.retentionPeriod=\"$PROMETHEUS_RETENTION\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.env.PROMETHEUS_HEALTH_CHECKER_URL=\"http://onelens-agent-prometheus-server:80/health\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.env.METRICS_BACKEND=victoriametrics"
+    HELM_CMD="$HELM_CMD --set onelens-agent.env.METRICS_CONTAINER_NAME=victoriametrics"
+fi
+
 # Air-gapped: override all image sources to private registry and persist REGISTRY_URL.
 # Charts that use "{repository}:{tag}" get repository=$REGISTRY_URL/<name>.
 # Charts that use "{registry}/{repository}:{tag}" get registry=$REGISTRY_URL + repository=<name>
@@ -3449,6 +3480,9 @@ if [ -n "$REGISTRY_URL" ]; then
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.registry=$REGISTRY_URL \
       --set prometheus.kube-state-metrics.kubeRBACProxy.image.repository=kube-rbac-proxy \
       --set onelens-agent.env.REGISTRY_URL=$REGISTRY_URL"
+    if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+        HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.image.repository=$REGISTRY_URL/victoria-metrics"
+    fi
 fi
 
 # Sizing interval: always pass to ensure value is correctly applied or reset across upgrades

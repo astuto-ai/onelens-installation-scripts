@@ -2,10 +2,9 @@
 
 # Metrics backend: "prometheus" (default) or "victoriametrics"
 metricsBackend: "prometheus"
-
 image:
   repository: public.ecr.aws/w7k6q5m9/onelens-agent
-  tag: v2.1.108
+  tag: v2.1.109
   pullPolicy: IfNotPresent
 nameOverride: "onelens-agent"
 fullnameOverride: "onelens-agent"
