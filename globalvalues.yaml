@@ -3,7 +3,7 @@ onelens-agent:
   metricsBackend: "prometheus"
   image:
     repository: public.ecr.aws/w7k6q5m9/onelens-agent
-    tag: v2.1.109
+    tag: v2.1.110
     pullPolicy: IfNotPresent
   nameOverride: "onelens-agent"
   fullnameOverride: "onelens-agent"
