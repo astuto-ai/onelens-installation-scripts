@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: onelens-agent-prometheus-server
+  name: onelens-agent-victoriametrics
   labels:
     {{- include "onelens-agent.labels" . | nindent 4 }}
     component: victoriametrics

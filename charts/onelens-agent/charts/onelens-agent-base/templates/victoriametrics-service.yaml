@@ -14,6 +14,6 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app: onelens-agent-prometheus-server
+    app: onelens-agent-victoriametrics
     component: victoriametrics
 {{- end }}
