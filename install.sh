@@ -507,6 +507,9 @@ if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
         if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
             GPU_ENABLED="false"
             echo "GPU helm value: gpu.enabled=false (existing customer DCGM detected)"
+        elif [ -z "$GPU_NODE_LABEL_KEY" ]; then
+            GPU_ENABLED="false"
+            echo "GPU helm value: gpu.enabled=false (no suitable GPU node label found)"
         else
             GPU_ENABLED="true"
             echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
