@@ -2,7 +2,7 @@
 
 # OneLens Agent Pre-requisite Checker
 # This script validates all prerequisites for OneLens Agent installation
-# Supports both AWS EKS and Azure AKS clusters
+# Supports AWS EKS, Azure AKS, and GCP GKE clusters
 # Version: 2.0
 
 
@@ -95,6 +95,7 @@ detect_cloud_provider() {
         print_error "kubectl cannot connect to any cluster."
         echo "  For EKS: aws eks update-kubeconfig --name <cluster-name> --region <region>"
         echo "  For AKS: az aks get-credentials --resource-group <rg> --name <cluster>"
+        echo "  For GKE: gcloud container clusters get-credentials <cluster> --zone <zone> --project <project>"
         return 1
     fi
     
@@ -107,6 +108,9 @@ detect_cloud_provider() {
     elif [[ "$cluster_endpoint" =~ \.azmk8s\.io ]]; then
         CLOUD_PROVIDER="azure"
         print_success "Detected Azure AKS cluster"
+    elif [[ "$cluster_endpoint" =~ \.gke\.goog ]]; then
+        CLOUD_PROVIDER="gke"
+        print_success "Detected GCP GKE cluster"
     else
         # Try to detect from node labels
         local node_provider
@@ -118,6 +122,9 @@ detect_cloud_provider() {
         elif [[ "$node_provider" =~ ^azure:// ]]; then
             CLOUD_PROVIDER="azure"
             print_success "Detected Azure AKS cluster (from node provider)"
+        elif [[ "$node_provider" =~ ^gce:// ]]; then
+            CLOUD_PROVIDER="gke"
+            print_success "Detected GCP GKE cluster (from node provider)"
         else
             print_warning "Could not auto-detect cloud provider"
             print_info "Cluster endpoint: $cluster_endpoint"
@@ -128,12 +135,14 @@ detect_cloud_provider() {
             echo "Please specify your cloud provider:"
             echo "1) AWS (EKS)"
             echo "2) Azure (AKS)"
-            read -r -p "Enter choice [1/2]: " choice < /dev/tty
+            echo "3) GCP (GKE)"
+            read -r -p "Enter choice [1/2/3]: " choice < /dev/tty
             case "$choice" in
                 1) CLOUD_PROVIDER="aws" ;;
                 2) CLOUD_PROVIDER="azure" ;;
+                3) CLOUD_PROVIDER="gke" ;;
                 *)
-                    print_error "Invalid choice. OneLens only supports AWS EKS and Azure AKS."
+                    print_error "Invalid choice. OneLens supports AWS EKS, Azure AKS, and GCP GKE."
                     echo "  See: https://github.com/astuto-ai/onelens-installation-scripts/blob/master/docs/troubleshooting.md#cloud-provider-auto-detection-failed"
                     exit 1
                     ;;
@@ -261,6 +270,43 @@ get_aks_cluster_info() {
     
     # Method 2: Fallback to context name with parsed location
     echo "$context_name (context name)|$location|unknown"
+    return 0
+}
+
+# Function to get GKE cluster info
+get_gke_cluster_info() {
+    local cluster_endpoint="$1"
+    local context_name="$2"
+
+    # Method 1: Try to get from gcloud CLI if available
+    if check_command gcloud; then
+        local cluster_name project zone_region
+        cluster_name=$(gcloud config get-value container/cluster 2>/dev/null || echo "")
+        project=$(gcloud config get-value project 2>/dev/null || echo "")
+        zone_region=$(gcloud config get-value compute/zone 2>/dev/null || echo "")
+        if [ -z "$zone_region" ]; then
+            zone_region=$(gcloud config get-value compute/region 2>/dev/null || echo "")
+        fi
+
+        if [ -n "$cluster_name" ] && [ "$cluster_name" != "(unset)" ]; then
+            [ -z "$project" ] || [ "$project" = "(unset)" ] && project="unknown"
+            [ -z "$zone_region" ] || [ "$zone_region" = "(unset)" ] && zone_region="unknown"
+            echo "$cluster_name|$project|$zone_region"
+            return 0
+        fi
+    fi
+
+    # Method 2: Parse from context name (GKE contexts are typically gke_<project>_<zone>_<cluster>)
+    if [[ "$context_name" =~ ^gke_([^_]+)_([^_]+)_(.+)$ ]]; then
+        local project="${BASH_REMATCH[1]}"
+        local zone_region="${BASH_REMATCH[2]}"
+        local cluster_name="${BASH_REMATCH[3]}"
+        echo "$cluster_name|$project|$zone_region"
+        return 0
+    fi
+
+    # Method 3: Fallback to context name
+    echo "$context_name (context name)|unknown|unknown"
     return 0
 }
 
@@ -394,6 +440,56 @@ check_kubectl_cluster_aks() {
     add_confirmed_detail "AKS Cluster Name: $actual_cluster_name"
     add_confirmed_detail "Azure Location: $cluster_location"
     add_confirmed_detail "Resource Group: $resource_group"
+    add_confirmed_detail "Kubectl Context: $cluster_context"
+    add_confirmed_detail "Cluster Endpoint: $cluster_endpoint"
+    return 0
+}
+
+# Kubectl cluster check for GKE
+check_kubectl_cluster_gke() {
+    print_step "Checking kubectl cluster configuration..."
+
+    if ! check_command kubectl; then
+        print_error "kubectl is not installed or not in PATH"
+        add_failed_check "Kubectl: kubectl is not installed or not in PATH"
+        return 1
+    fi
+
+    # Check if kubectl can connect to cluster
+    if ! kubectl cluster-info &> /dev/null; then
+        print_error "kubectl cannot connect to any cluster"
+        echo "  Configure kubectl for your GKE cluster:"
+        echo "  gcloud container clusters get-credentials <cluster> --zone <zone> --project <project>"
+        add_failed_check "Kubectl: Cannot connect to cluster. Run: gcloud container clusters get-credentials <cluster> --zone <zone> --project <project>"
+        return 1
+    fi
+
+    # Get cluster information
+    local cluster_context
+    cluster_context=$(kubectl config current-context)
+    local cluster_endpoint
+    cluster_endpoint=$(kubectl cluster-info | grep "Kubernetes control plane" | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
+
+    # Try to get actual GKE cluster info
+    local cluster_info
+    cluster_info=$(get_gke_cluster_info "$cluster_endpoint" "$cluster_context")
+    local actual_cluster_name="${cluster_info%%|*}"
+    local remaining="${cluster_info#*|}"
+    local project="${remaining%%|*}"
+    local zone_region="${remaining#*|}"
+
+    print_success "kubectl is configured and connected"
+    echo "Cluster Details:"
+    echo "  Current Context: $cluster_context"
+    echo "  Cluster Endpoint: $cluster_endpoint"
+    echo "  GKE Cluster Name: $actual_cluster_name"
+    echo "  GCP Project: $project"
+    echo "  Zone/Region: $zone_region"
+
+    # Store cluster details for final confirmation
+    add_confirmed_detail "GKE Cluster Name: $actual_cluster_name"
+    add_confirmed_detail "GCP Project: $project"
+    add_confirmed_detail "Zone/Region: $zone_region"
     add_confirmed_detail "Kubectl Context: $cluster_context"
     add_confirmed_detail "Cluster Endpoint: $cluster_endpoint"
     return 0
@@ -708,6 +804,124 @@ check_azure_files_driver() {
     fi
 }
 
+# GKE Persistent Disk CSI driver check (GKE)
+check_gke_pd_driver() {
+    print_step "Checking GKE Persistent Disk CSI driver installation..."
+
+    # Check if PD CSI driver is installed
+    if ! kubectl get csidriver pd.csi.storage.gke.io &> /dev/null; then
+        # PD CSI driver is typically pre-installed on GKE; check storage classes as fallback
+        local storage_classes
+        storage_classes=$(kubectl get storageclass -o jsonpath='{.items[*].provisioner}' 2>/dev/null)
+
+        if [[ "$storage_classes" =~ pd.csi.storage.gke.io ]]; then
+            print_success "GKE Persistent Disk storage class is available"
+            add_confirmed_detail "GKE PD CSI Driver: Storage class configured"
+        else
+            print_error "GKE Persistent Disk CSI driver is not installed"
+            echo ""
+            echo "  The GKE Persistent Disk CSI driver is required for OneLens to create persistent volumes for Prometheus data storage."
+            echo "  For GKE clusters, the PD CSI driver is typically pre-installed."
+            echo "  If missing, enable it via gcloud:"
+            echo ""
+            echo "    gcloud container clusters update <cluster> --zone <zone> --update-addons=GcePersistentDiskCsiDriver=ENABLED"
+            echo ""
+            add_failed_check "GKE PD CSI Driver: Not installed. OneLens requires the Persistent Disk CSI driver for persistent storage."
+            return 1
+        fi
+
+        return 0
+    fi
+
+    print_success "GKE Persistent Disk CSI driver is installed"
+
+    # Check PD CSI driver controller pods
+    print_step "Checking GKE PD CSI driver controller pod status..."
+    local controller_pods_output
+    controller_pods_output=$(kubectl get pods --all-namespaces -l app=gcp-compute-persistent-disk-csi-driver --no-headers 2>/dev/null)
+
+    if [ -z "$controller_pods_output" ]; then
+        # Try kube-system with name pattern as fallback (single-namespace output)
+        local fallback_pods
+        fallback_pods=$(kubectl get pods -n kube-system --no-headers 2>/dev/null | grep "pdcsi-node\|csi-gce-pd")
+
+        if [ -z "$fallback_pods" ]; then
+            print_warning "No GKE PD CSI driver pods found explicitly"
+            echo "This might be normal for managed GKE clusters."
+
+            # Check if a storage class exists
+            if kubectl get storageclass | grep -q "pd.csi.storage.gke.io"; then
+                print_success "GKE PD storage class is available"
+                add_confirmed_detail "GKE PD CSI Driver: Storage class available"
+            else
+                add_confirmed_detail "GKE PD CSI Driver: No pods or storage class found"
+            fi
+        else
+            # Single-namespace output: READY is column $2 and STATUS is $3
+            local not_ready
+            not_ready=$(echo "$fallback_pods" | awk '{split($2,a,"/"); if(a[1] != a[2] || $3 != "Running") print $0}')
+
+            if [ -n "$not_ready" ]; then
+                print_warning "Some GKE PD CSI driver pods are not ready"
+                echo "Pod status:"
+                echo "$fallback_pods"
+                add_confirmed_detail "GKE PD CSI Driver: Pods have issues (see warnings above)"
+            else
+                print_success "GKE PD CSI driver pods are running and ready"
+                add_confirmed_detail "GKE PD CSI Driver: Pods are healthy"
+            fi
+        fi
+    else
+        # --all-namespaces output: READY is column $3 and STATUS is $4
+        local not_ready
+        not_ready=$(echo "$controller_pods_output" | awk '{split($3,a,"/"); if(a[1] != a[2] || $4 != "Running") print $0}')
+
+        if [ -n "$not_ready" ]; then
+            print_warning "Some GKE PD CSI driver pods are not ready"
+            echo "Pod status:"
+            echo "$controller_pods_output"
+            add_confirmed_detail "GKE PD CSI Driver: Pods have issues (see warnings above)"
+        else
+            print_success "GKE PD CSI driver pods are running and ready"
+            add_confirmed_detail "GKE PD CSI Driver: Pods are healthy"
+        fi
+    fi
+
+    # Verify a storage class with PD CSI provisioner exists
+    print_step "Checking GKE Persistent Disk storage classes..."
+    local storage_classes
+    storage_classes=$(kubectl get storageclass -o jsonpath='{.items[*].provisioner}' 2>/dev/null)
+
+    if [[ "$storage_classes" =~ pd.csi.storage.gke.io ]]; then
+        print_success "GKE Persistent Disk storage class is available"
+        add_confirmed_detail "GKE PD CSI Driver: Storage class configured"
+    else
+        print_warning "No GKE Persistent Disk storage class found"
+        echo "Available storage classes:"
+        kubectl get storageclass
+    fi
+
+    return 0
+}
+
+# GKE Filestore CSI driver check (GKE) — informational, not required
+check_gke_filestore_driver() {
+    print_step "Checking GKE Filestore CSI driver (optional, for multi-AZ storage)..."
+
+    if kubectl get csidriver filestore.csi.storage.gke.io &> /dev/null; then
+        print_success "GKE Filestore CSI driver is available"
+        echo "  You can use Filestore for multi-AZ shared storage if needed."
+        echo "  See: https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/filestore-csi-driver"
+        add_confirmed_detail "GKE Filestore CSI Driver: Available (multi-AZ storage option)"
+    else
+        print_info "GKE Filestore CSI driver not found (optional)"
+        echo "  OneLens will use Persistent Disk (default). If you need multi-AZ storage,"
+        echo "  enable the Filestore CSI driver:"
+        echo "    gcloud container clusters update <cluster> --zone <zone> --update-addons=GcpFilestoreCsiDriver=ENABLED"
+        add_confirmed_detail "GKE Filestore CSI Driver: Not installed (optional — PD will be used)"
+    fi
+}
+
 # Print summary for AWS
 print_summary_aws() {
     echo ""
@@ -763,6 +977,36 @@ print_summary_azure() {
     echo "--------"
     for detail in "${CONFIRMED_DETAILS[@]}"; do
         if [[ "$detail" =~ ^Azure\ Disk|^Azure\ Files ]]; then
+            echo "  $detail"
+        fi
+    done
+}
+
+# Print summary for GKE
+print_summary_gke() {
+    echo ""
+    echo "KUBERNETES CLUSTER:"
+    echo "-------------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^GKE\ Cluster|^Kubectl|^Cluster|^GCP\ Project|^Zone/Region ]] && [[ ! "$detail" =~ ^GKE\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
+
+    echo ""
+    echo "TOOLS & VERSIONS:"
+    echo "-----------------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^Helm|^GKE\ Version ]]; then
+            echo "  $detail"
+        fi
+    done
+
+    echo ""
+    echo "STORAGE:"
+    echo "--------"
+    for detail in "${CONFIRMED_DETAILS[@]}"; do
+        if [[ "$detail" =~ ^GKE\ PD|^GKE\ Filestore ]]; then
             echo "  $detail"
         fi
     done
@@ -846,11 +1090,48 @@ run_azure_checks() {
     check_azure_files_driver
 }
 
+# Main execution for GCP/GKE
+run_gke_checks() {
+    CHECKS_PASSED=0
+    TOTAL_CHECKS=5
+
+    echo ""
+    print_header "1/5 - Internet Connectivity Check"
+    if check_internet_access; then
+        ((CHECKS_PASSED++))
+    fi
+
+    echo ""
+    print_header "2/5 - Kubectl Cluster Configuration Check"
+    if check_kubectl_cluster_gke; then
+        ((CHECKS_PASSED++))
+    fi
+
+    echo ""
+    print_header "3/5 - Helm Version Check"
+    if check_helm_version; then
+        ((CHECKS_PASSED++))
+    fi
+
+    echo ""
+    print_header "4/5 - GKE Version Check"
+    if check_k8s_version "GKE"; then
+        ((CHECKS_PASSED++))
+    fi
+
+    echo ""
+    print_header "5/5 - Storage CSI Driver Check"
+    if check_gke_pd_driver; then
+        ((CHECKS_PASSED++))
+    fi
+    check_gke_filestore_driver
+}
+
 # Main execution
 main() {
     print_header "OneLens Agent Pre-requisite Checker"
     echo "This script will validate all prerequisites for OneLens Agent installation."
-    echo "Supports both AWS EKS and Azure AKS clusters."
+    echo "Supports AWS EKS, Azure AKS, and GCP GKE clusters."
     echo ""
     
     # First detect cloud provider
@@ -871,6 +1152,8 @@ main() {
         run_aws_checks
     elif [ "$CLOUD_PROVIDER" = "azure" ]; then
         run_azure_checks
+    elif [ "$CLOUD_PROVIDER" = "gke" ]; then
+        run_gke_checks
     else
         print_error "Unsupported cloud provider: $CLOUD_PROVIDER"
         exit 1
@@ -899,6 +1182,8 @@ main() {
             print_summary_aws
         elif [ "$CLOUD_PROVIDER" = "azure" ]; then
             print_summary_azure
+        elif [ "$CLOUD_PROVIDER" = "gke" ]; then
+            print_summary_gke
         fi
         
         echo ""

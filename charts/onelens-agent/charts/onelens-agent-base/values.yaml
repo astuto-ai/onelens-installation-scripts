@@ -68,7 +68,7 @@ resources:
 cronJob:
   cronSchedule: "0 * * * *" # Run once an hour at the top of the hour
   concurrencyPolicy: "Forbid" # Prevent concurrent job executions
-  successfulJobsHistoryLimit: 3 # Number of successful jobs to keep
+  successfulJobsHistoryLimit: 1 # Number of successful jobs to keep
   failedJobsHistoryLimit: 2 # Number of failed jobs to keep
   backoffLimit: 0 # Number of retries before giving up
   suspend: false # Suspend the job
