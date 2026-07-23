@@ -337,7 +337,7 @@ DCGM_EOF
                 fi
             else
                 # No GPU nodes — clean up our DCGM if it exists
-                if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
+                if kubectl get ds -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
                     echo "GPU: cleaning up DCGM exporter (no GPU nodes)"
                     kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
                     kubectl delete svc -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
@@ -345,7 +345,7 @@ DCGM_EOF
             fi
         else
             # GPU disabled — clean up any previously auto-deployed DCGM (from before this flag existed)
-            if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
+            if kubectl get ds -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
                 echo "GPU: cleaning up DCGM exporter (gpu.enabled is not true)"
                 kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
                 kubectl delete svc -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
