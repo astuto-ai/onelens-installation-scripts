@@ -278,25 +278,7 @@ get_gke_cluster_info() {
     local cluster_endpoint="$1"
     local context_name="$2"
 
-    # Method 1: Try to get from gcloud CLI if available
-    if check_command gcloud; then
-        local cluster_name project zone_region
-        cluster_name=$(gcloud config get-value container/cluster 2>/dev/null || echo "")
-        project=$(gcloud config get-value project 2>/dev/null || echo "")
-        zone_region=$(gcloud config get-value compute/zone 2>/dev/null || echo "")
-        if [ -z "$zone_region" ]; then
-            zone_region=$(gcloud config get-value compute/region 2>/dev/null || echo "")
-        fi
-
-        if [ -n "$cluster_name" ] && [ "$cluster_name" != "(unset)" ]; then
-            [ -z "$project" ] || [ "$project" = "(unset)" ] && project="unknown"
-            [ -z "$zone_region" ] || [ "$zone_region" = "(unset)" ] && zone_region="unknown"
-            echo "$cluster_name|$project|$zone_region"
-            return 0
-        fi
-    fi
-
-    # Method 2: Parse from context name (GKE contexts are typically gke_<project>_<zone>_<cluster>)
+    # Method 1: Parse from context name (GKE contexts are typically gke_<project>_<zone>_<cluster>)
     if [[ "$context_name" =~ ^gke_([^_]+)_([^_]+)_(.+)$ ]]; then
         local project="${BASH_REMATCH[1]}"
         local zone_region="${BASH_REMATCH[2]}"
@@ -305,8 +287,35 @@ get_gke_cluster_info() {
         return 0
     fi
 
-    # Method 3: Fallback to context name
-    echo "$context_name (context name)|unknown|unknown"
+    # Method 2: Extract project and zone/region from node providerID and labels
+    # providerID format: gce://<project>/<zone>/<node-name>
+    local provider_id
+    provider_id=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || echo "")
+    local project="unknown"
+    local zone_region="unknown"
+
+    if [[ "$provider_id" =~ ^gce://([^/]+)/([^/]+)/ ]]; then
+        project="${BASH_REMATCH[1]}"
+        zone_region="${BASH_REMATCH[2]}"
+    fi
+
+    # Get region from node label (more useful than zone for display)
+    local region
+    region=$(kubectl get nodes -o jsonpath='{.items[0].metadata.labels.topology\.kubernetes\.io/region}' 2>/dev/null || echo "")
+    if [ -n "$region" ]; then
+        zone_region="$region"
+    fi
+
+    # Get actual GKE cluster name from gke-metrics-agent-conf configmap
+    local cluster_name
+    cluster_name=$(kubectl get configmap gke-metrics-agent-conf -n kube-system -o jsonpath='{.data.gke-metrics-agent-config}' 2>/dev/null | grep "cluster_name:" | head -1 | awk '{print $2}')
+
+    # Fallback to kubeconfig cluster name
+    if [ -z "$cluster_name" ]; then
+        cluster_name=$(kubectl config view --minify -o jsonpath='{.clusters[0].name}' 2>/dev/null || echo "$context_name")
+    fi
+
+    echo "$cluster_name|$project|$zone_region"
     return 0
 }
 
@@ -885,20 +894,6 @@ check_gke_pd_driver() {
             print_success "GKE PD CSI driver pods are running and ready"
             add_confirmed_detail "GKE PD CSI Driver: Pods are healthy"
         fi
-    fi
-
-    # Verify a storage class with PD CSI provisioner exists
-    print_step "Checking GKE Persistent Disk storage classes..."
-    local storage_classes
-    storage_classes=$(kubectl get storageclass -o jsonpath='{.items[*].provisioner}' 2>/dev/null)
-
-    if [[ "$storage_classes" =~ pd.csi.storage.gke.io ]]; then
-        print_success "GKE Persistent Disk storage class is available"
-        add_confirmed_detail "GKE PD CSI Driver: Storage class configured"
-    else
-        print_warning "No GKE Persistent Disk storage class found"
-        echo "Available storage classes:"
-        kubectl get storageclass
     fi
 
     return 0
