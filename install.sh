@@ -439,74 +439,81 @@ echo "Label density: $AVG_LABELS (default), multiplier: ${LABEL_MULTIPLIER}x"
 # --- GPU node detection ---
 # No Prometheus at install time (it's deployed as part of this install).
 # First patching run (5 min after install) performs the Prometheus PROF metric check.
+# GPU monitoring is opt-in: only runs when GPU_MONITORING_ENABLED=true (set on deployer pod).
 GPU_NODE_COUNT=0
 TOTAL_GPU_COUNT=0
 GPU_MONITORING_STATUS="not_applicable"
 DCGM_PODS_OURS=0
 DCGM_PODS_OTHER=0
 DCGM_PODS_TOTAL=0
-gpu_capacities=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
-if [ -n "$gpu_capacities" ]; then
-    GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
-    TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" {s+=$1} END {print s+0}')
-fi
-if [ "$GPU_NODE_COUNT" -gt 0 ]; then
-    echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
-    GPU_MONITORING_STATUS="cost_only"
-    DCGM_PODS_OURS=$(kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
-    # Broad detection: check both standalone DCGM label and GPU Operator label
-    dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
-    dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
-    DCGM_PODS_OTHER=$(( dcgm_by_app > dcgm_by_operator ? dcgm_by_app : dcgm_by_operator ))
-    DCGM_PODS_TOTAL=$((DCGM_PODS_OURS + DCGM_PODS_OTHER))
-    if [ "$DCGM_PODS_TOTAL" -eq 0 ] 2>/dev/null; then
-        echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
-        echo "  GPU cost (gpuCount, gpuHours, gpuCost) works without DCGM."
-        echo "  GPU utilization (gpuUsageAverage, gpuUsageMax, gpuEfficiency) requires DCGM exporter."
-    elif [ "$DCGM_PODS_OTHER" -gt 0 ]; then
-        echo "DCGM exporter: $DCGM_PODS_OTHER pods (customer-managed, outside onelens-agent namespace)"
-    else
-        echo "DCGM exporter: $DCGM_PODS_OURS pods (in onelens-agent namespace)"
-    fi
-
-    # Discover GPU node label for DCGM DaemonSet scheduling.
-    GPU_NODE_LABEL_KEY=""
-    _gpu_node_name=$(kubectl get nodes --chunk-size=100 -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null | awk '$2 != "<none>" && $2+0 > 0 {print $1; exit}' || true)
-    if [ -n "$_gpu_node_name" ]; then
-        _gpu_node_json=$(kubectl get node "$_gpu_node_name" -o json 2>/dev/null || true)
-        # Search for any label starting with nvidia.com/gpu (covers all NVIDIA conventions)
-        GPU_NODE_LABEL_KEY=$(echo "$_gpu_node_json" | jq -r '.metadata.labels | keys[] | select(startswith("nvidia.com/gpu"))' 2>/dev/null | head -1 || true)
-        # Fallback: cloud-specific labels
-        if [ -z "$GPU_NODE_LABEL_KEY" ]; then
-            for _label in "feature.node.kubernetes.io/pci-10de.present" "cloud.google.com/gke-accelerator"; do
-                _val=$(echo "$_gpu_node_json" | jq -r --arg l "$_label" '.metadata.labels[$l] // empty' 2>/dev/null || true)
-                if [ -n "$_val" ]; then
-                    GPU_NODE_LABEL_KEY="$_label"
-                    break
-                fi
-            done
-        fi
-        if [ -n "$GPU_NODE_LABEL_KEY" ]; then
-            echo "GPU node label: $GPU_NODE_LABEL_KEY (from node $_gpu_node_name)"
-        else
-            echo "WARNING: GPU nodes detected but no GPU scheduling label found on node $_gpu_node_name"
-            echo "  DCGM exporter cannot be deployed. GPU cost metrics still work."
-        fi
-    fi
-
-    echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
-fi
-
-# --- GPU Phase 2: resolve gpu.enabled for helm install ---
-# No customer-override check needed (fresh install, no existing release).
+GPU_NODE_LABEL_KEY=""
 GPU_ENABLED="false"
-if [ "$GPU_NODE_COUNT" -gt 0 ]; then
-    if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
-        GPU_ENABLED="false"
-        echo "GPU helm value: gpu.enabled=false (existing customer DCGM detected)"
-    else
-        GPU_ENABLED="true"
-        echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+
+if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
+    gpu_capacities=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
+    if [ -n "$gpu_capacities" ]; then
+        GPU_NODE_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
+        TOTAL_GPU_COUNT=$(echo "$gpu_capacities" | awk '$1 != "<none>" {s+=$1} END {print s+0}')
+    fi
+    if [ "$GPU_NODE_COUNT" -gt 0 ]; then
+        echo "GPU nodes: $GPU_NODE_COUNT nodes, $TOTAL_GPU_COUNT GPUs total"
+        GPU_MONITORING_STATUS="cost_only"
+        DCGM_PODS_OURS=$(kubectl get pods -n onelens-agent -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+        # Broad detection: check both standalone DCGM label and GPU Operator label
+        dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+        dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+        DCGM_PODS_OTHER=$(( dcgm_by_app > dcgm_by_operator ? dcgm_by_app : dcgm_by_operator ))
+        DCGM_PODS_TOTAL=$((DCGM_PODS_OURS + DCGM_PODS_OTHER))
+        if [ "$DCGM_PODS_TOTAL" -eq 0 ] 2>/dev/null; then
+            echo "WARNING: GPU nodes found but NVIDIA DCGM exporter not detected — GPU utilization metrics unavailable"
+            echo "  GPU cost (gpuCount, gpuHours, gpuCost) works without DCGM."
+            echo "  GPU utilization (gpuUsageAverage, gpuUsageMax, gpuEfficiency) requires DCGM exporter."
+        elif [ "$DCGM_PODS_OTHER" -gt 0 ]; then
+            echo "DCGM exporter: $DCGM_PODS_OTHER pods (customer-managed, outside onelens-agent namespace)"
+        else
+            echo "DCGM exporter: $DCGM_PODS_OURS pods (in onelens-agent namespace)"
+        fi
+
+        # Discover GPU node label for DCGM DaemonSet scheduling.
+        _gpu_node_name=$(kubectl get nodes --chunk-size=100 -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null | awk '$2 != "<none>" && $2+0 > 0 {print $1; exit}' || true)
+        if [ -n "$_gpu_node_name" ]; then
+            _gpu_node_json=$(kubectl get node "$_gpu_node_name" -o json 2>/dev/null || true)
+            # Search for any label starting with nvidia.com/gpu (covers all NVIDIA conventions)
+            GPU_NODE_LABEL_KEY=$(echo "$_gpu_node_json" | jq -r '.metadata.labels | keys[] | select(startswith("nvidia.com/gpu"))' 2>/dev/null | head -1 || true)
+            # Fallback: cloud-specific labels
+            if [ -z "$GPU_NODE_LABEL_KEY" ]; then
+                for _label in "feature.node.kubernetes.io/pci-10de.present" "cloud.google.com/gke-accelerator"; do
+                    _val=$(echo "$_gpu_node_json" | jq -r --arg l "$_label" '.metadata.labels[$l] // empty' 2>/dev/null || true)
+                    if [ -n "$_val" ]; then
+                        GPU_NODE_LABEL_KEY="$_label"
+                        break
+                    fi
+                done
+            fi
+            if [ -n "$GPU_NODE_LABEL_KEY" ]; then
+                echo "GPU node label: $GPU_NODE_LABEL_KEY (from node $_gpu_node_name)"
+            else
+                echo "WARNING: GPU nodes detected but no GPU scheduling label found on node $_gpu_node_name"
+                echo "  DCGM exporter cannot be deployed. GPU cost metrics still work."
+            fi
+        fi
+
+        echo "GPU_MONITORING_STATUS=$GPU_MONITORING_STATUS"
+    fi
+
+    # --- GPU Phase 2: resolve gpu.enabled for helm install ---
+    # No customer-override check needed (fresh install, no existing release).
+    if [ "$GPU_NODE_COUNT" -gt 0 ]; then
+        if [ "$DCGM_PODS_OTHER" -gt 0 ] 2>/dev/null; then
+            GPU_ENABLED="false"
+            echo "GPU helm value: gpu.enabled=false (existing customer DCGM detected)"
+        elif [ -z "$GPU_NODE_LABEL_KEY" ]; then
+            GPU_ENABLED="false"
+            echo "GPU helm value: gpu.enabled=false (no suitable GPU node label found)"
+        else
+            GPU_ENABLED="true"
+            echo "GPU helm value: gpu.enabled=true (deploying OneLens DCGM exporter)"
+        fi
     fi
 fi
 
@@ -800,6 +807,12 @@ if [ "$CLOUD_PROVIDER" = "GKE" ]; then
     CMD+=" --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].mountPath=/var/configs"
     CMD+=" --set prometheus-opencost-exporter.extraVolumes[0].name=opencost-config"
     CMD+=" --set prometheus-opencost-exporter.extraVolumes[0].emptyDir.medium=\"\""
+fi
+
+# GPU monitoring (opt-in)
+if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
+    echo "GPU monitoring: enabled (GPU_MONITORING_ENABLED=true), gpu.enabled=$GPU_ENABLED"
+    CMD+=" --set onelens-agent.gpu.enabled=$GPU_ENABLED"
 fi
 
 # Network costs (opt-in)

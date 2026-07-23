@@ -381,11 +381,11 @@ patching_dcgm_kubectl=$(grep -c 'kubectl apply.*DCGM_EOF' "$ROOT/src/patching.sh
 assert_gt "$install_dcgm_kubectl" "0" "install.sh deploys DCGM via kubectl apply (not helm)"
 assert_gt "$patching_dcgm_kubectl" "0" "patching.sh deploys DCGM via kubectl apply (not helm)"
 
-# Test 44: Neither script passes gpu.enabled to helm (decoupled)
+# Test 44: Both scripts pass gpu.enabled to helm (opt-in flag)
 install_gpu_helm=$(grep 'onelens-agent.gpu.enabled' "$ROOT/install.sh" | grep -c '\-\-set' || true)
 patching_gpu_helm=$(grep 'onelens-agent.gpu.enabled' "$ROOT/src/patching.sh" | grep -c '\-\-set' || true)
-assert_eq "$install_gpu_helm" "0" "install.sh does NOT pass gpu.enabled to helm"
-assert_eq "$patching_gpu_helm" "0" "patching.sh does NOT pass gpu.enabled to helm"
+assert_gt "$install_gpu_helm" "0" "install.sh passes gpu.enabled to helm"
+assert_gt "$patching_gpu_helm" "0" "patching.sh passes gpu.enabled to helm"
 
 # Test 45: Both scripts have DCGM image from nvcr.io (NVIDIA's registry) in kubectl apply block
 install_dcgm_img=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/install.sh" | grep -c 'nvcr.io/nvidia' || true)
@@ -393,17 +393,18 @@ patching_dcgm_img=$(sed -n '/GPU Phase 2: deploy/,/DCGM_EOF/p' "$ROOT/src/patchi
 assert_gt "$install_dcgm_img" "0" "install.sh DCGM image is from nvcr.io"
 assert_gt "$patching_dcgm_img" "0" "patching.sh DCGM image is from nvcr.io"
 
-# Test 46: Both scripts check DCGM_PODS_OTHER in the GPU_ENABLED resolution block
+# Test 46: install.sh checks DCGM_PODS_OTHER in the GPU_ENABLED resolution block
+# patching.sh only respects the explicit Helm value (no auto-detection fallback)
 install_pods_other_check=$(sed -n '/GPU Phase 2: resolve gpu.enabled/,/^$/p' "$ROOT/install.sh" | grep -c 'DCGM_PODS_OTHER' || true)
-patching_pods_other_check=$(sed -n '/GPU Phase 2: resolve gpu.enabled/,/^$/p' "$ROOT/src/patching.sh" | grep -c 'DCGM_PODS_OTHER' || true)
 assert_gt "$install_pods_other_check" "0" "install.sh checks DCGM_PODS_OTHER for GPU_ENABLED resolution"
-assert_gt "$patching_pods_other_check" "0" "patching.sh checks DCGM_PODS_OTHER for GPU_ENABLED resolution"
 
-# Test 47: Only patching.sh reads GPU_ENABLED_OVERRIDE from existing release
-# install.sh is a fresh install — no existing release to read from
+# Test 47: GPU gating uses different env vars: install.sh uses GPU_MONITORING_ENABLED (deployer env),
+# patching.sh uses GPU_ENABLED_OVERRIDE (from existing Helm release values)
 patching_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/src/patching.sh" || true)
+install_gpu_monitoring=$(grep -c 'GPU_MONITORING_ENABLED' "$ROOT/install.sh" || true)
 install_gpu_override=$(grep -c 'GPU_ENABLED_OVERRIDE' "$ROOT/install.sh" || true)
 assert_gt "$patching_gpu_override" "0" "patching.sh reads GPU_ENABLED_OVERRIDE from existing release"
+assert_gt "$install_gpu_monitoring" "0" "install.sh uses GPU_MONITORING_ENABLED env var"
 assert_eq "$install_gpu_override" "0" "install.sh does NOT read GPU_ENABLED_OVERRIDE (fresh install)"
 
 # Test 48: Both scripts detect GPU Operator DCGM (app.kubernetes.io/component label)

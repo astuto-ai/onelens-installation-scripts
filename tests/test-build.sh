@@ -402,9 +402,9 @@ assert_gt "$built_dcgm_kubectl" "0" "built patching.sh deploys DCGM via kubectl 
 built_dcgm_nonfatal=$(grep -c 'WARNING.*DCGM.*failed' "$OUT_FILE" || true)
 assert_gt "$built_dcgm_nonfatal" "0" "built patching.sh DCGM failure is non-fatal"
 
-# No --set gpu.enabled in built patching.sh (decoupled from helm)
+# gpu.enabled is passed to helm in built patching.sh (opt-in flag preserved across upgrades)
 built_gpu_helm_set=$(grep 'onelens-agent.gpu.enabled' "$OUT_FILE" | grep -c '\-\-set' || true)
-assert_eq "$built_gpu_helm_set" "0" "built patching.sh does NOT pass gpu.enabled to helm"
+assert_gt "$built_gpu_helm_set" "0" "built patching.sh passes gpu.enabled to helm"
 
 # DCGM image is from nvcr.io (NVIDIA's registry) in built patching.sh
 built_dcgm_img=$(grep 'nvcr.io/nvidia.*dcgm-exporter' "$OUT_FILE" | head -1)

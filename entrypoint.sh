@@ -211,49 +211,52 @@ elif [ "$deployment_type" = "cronjob" ]; then
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null 2>&1 || true
 
-        # --- GPU: DCGM exporter lifecycle (runs every healthcheck cycle) ---
-        # Ensures DCGM DaemonSet exists when GPU nodes are present. Once deployed,
-        # the DaemonSet controller handles spot/scale churn automatically.
+        # --- GPU: DCGM exporter lifecycle (only when gpu.enabled=true) ---
+        # GPU monitoring is opt-in. Read gpu.enabled from Helm values to decide
+        # whether to deploy/maintain DCGM or clean up a previously auto-deployed instance.
         # Non-fatal — failures don't affect healthcheck result.
-        _gpu_caps=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
-        _gpu_node_count=0
-        if [ -n "$_gpu_caps" ]; then
-            _gpu_node_count=$(echo "$_gpu_caps" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
-        fi
-        if [ "$_gpu_node_count" -gt 0 ]; then
-            # Discover GPU node label for DaemonSet scheduling
-            _gpu_label_key=""
-            _gpu_node_name=$(kubectl get nodes --chunk-size=100 -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null | awk '$2 != "<none>" && $2+0 > 0 {print $1; exit}' || true)
-            if [ -n "$_gpu_node_name" ]; then
-                _gpu_node_json=$(kubectl get node "$_gpu_node_name" -o json 2>/dev/null || true)
-                # Search for any label starting with nvidia.com/gpu (covers all NVIDIA conventions)
-                _gpu_label_key=$(echo "$_gpu_node_json" | jq -r '.metadata.labels | keys[] | select(startswith("nvidia.com/gpu"))' 2>/dev/null | head -1 || true)
-                # Fallback: cloud-specific labels
-                if [ -z "$_gpu_label_key" ]; then
-                    for _label in "feature.node.kubernetes.io/pci-10de.present" "cloud.google.com/gke-accelerator"; do
-                        _val=$(echo "$_gpu_node_json" | jq -r --arg l "$_label" '.metadata.labels[$l] // empty' 2>/dev/null || true)
-                        if [ -n "$_val" ]; then
-                            _gpu_label_key="$_label"
-                            break
-                        fi
-                    done
-                fi
+        _gpu_enabled=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null \
+            | jq -r '.["onelens-agent"].gpu.enabled // "false"' 2>/dev/null || echo "false")
+        if [ "$_gpu_enabled" = "true" ]; then
+            _gpu_caps=$(kubectl get nodes --chunk-size=100 -o custom-columns='GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null || true)
+            _gpu_node_count=0
+            if [ -n "$_gpu_caps" ]; then
+                _gpu_node_count=$(echo "$_gpu_caps" | awk '$1 != "<none>" && $1+0 > 0 {c++} END {print c+0}')
             fi
-
-            # Check for customer-managed DCGM (standalone + GPU Operator labels)
-            _dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
-            _dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
-            _dcgm_other=$(( _dcgm_by_app > _dcgm_by_operator ? _dcgm_by_app : _dcgm_by_operator ))
-            if [ "$_dcgm_other" -eq 0 ] && [ -n "$_gpu_label_key" ]; then
-                # No customer DCGM + known label found — ensure ours exists
-                if ! kubectl get ds nvidia-dcgm-exporter -n onelens-agent --no-headers 2>/dev/null | grep -q .; then
-                    _registry_url=$(kubectl get cm onelens-agent-env -n onelens-agent -o jsonpath='{.data.REGISTRY_URL}' 2>/dev/null || true)
-                    _dcgm_image="nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
-                    if [ -n "$_registry_url" ]; then
-                        _dcgm_image="$_registry_url/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+            if [ "$_gpu_node_count" -gt 0 ]; then
+                # Discover GPU node label for DaemonSet scheduling
+                _gpu_label_key=""
+                _gpu_node_name=$(kubectl get nodes --chunk-size=100 -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu' --no-headers 2>/dev/null | awk '$2 != "<none>" && $2+0 > 0 {print $1; exit}' || true)
+                if [ -n "$_gpu_node_name" ]; then
+                    _gpu_node_json=$(kubectl get node "$_gpu_node_name" -o json 2>/dev/null || true)
+                    # Search for any label starting with nvidia.com/gpu (covers all NVIDIA conventions)
+                    _gpu_label_key=$(echo "$_gpu_node_json" | jq -r '.metadata.labels | keys[] | select(startswith("nvidia.com/gpu"))' 2>/dev/null | head -1 || true)
+                    # Fallback: cloud-specific labels
+                    if [ -z "$_gpu_label_key" ]; then
+                        for _label in "feature.node.kubernetes.io/pci-10de.present" "cloud.google.com/gke-accelerator"; do
+                            _val=$(echo "$_gpu_node_json" | jq -r --arg l "$_label" '.metadata.labels[$l] // empty' 2>/dev/null || true)
+                            if [ -n "$_val" ]; then
+                                _gpu_label_key="$_label"
+                                break
+                            fi
+                        done
                     fi
-                    echo "GPU: deploying DCGM exporter ($_gpu_node_count GPU nodes, label: $_gpu_label_key)"
-                    kubectl apply -n onelens-agent -f - <<DCGM_EOF 2>&1 || echo "  WARNING: DCGM deploy failed (non-fatal)"
+                fi
+
+                # Check for customer-managed DCGM (standalone + GPU Operator labels)
+                _dcgm_by_app=$(kubectl get pods --all-namespaces -l app=nvidia-dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+                _dcgm_by_operator=$(kubectl get pods --all-namespaces -l app.kubernetes.io/component=dcgm-exporter --no-headers 2>/dev/null | grep -v "^onelens-agent " | wc -l | tr -d '[:space:]')
+                _dcgm_other=$(( _dcgm_by_app > _dcgm_by_operator ? _dcgm_by_app : _dcgm_by_operator ))
+                if [ "$_dcgm_other" -eq 0 ] && [ -n "$_gpu_label_key" ]; then
+                    # No customer DCGM + known label found — ensure ours exists
+                    if ! kubectl get ds nvidia-dcgm-exporter -n onelens-agent --no-headers 2>/dev/null | grep -q .; then
+                        _registry_url=$(kubectl get cm onelens-agent-env -n onelens-agent -o jsonpath='{.data.REGISTRY_URL}' 2>/dev/null || true)
+                        _dcgm_image="nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+                        if [ -n "$_registry_url" ]; then
+                            _dcgm_image="$_registry_url/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+                        fi
+                        echo "GPU: deploying DCGM exporter ($_gpu_node_count GPU nodes, label: $_gpu_label_key)"
+                        kubectl apply -n onelens-agent -f - <<DCGM_EOF 2>&1 || echo "  WARNING: DCGM deploy failed (non-fatal)"
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -330,14 +333,22 @@ spec:
       port: 9400
       targetPort: 9400
 DCGM_EOF
+                    fi
+                fi
+            else
+                # No GPU nodes — clean up our DCGM if it exists
+                if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
+                    echo "GPU: cleaning up DCGM exporter (no GPU nodes)"
+                    kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+                    kubectl delete svc -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
                 fi
             fi
         else
-            # No GPU nodes — clean up our DCGM if it exists
+            # GPU disabled — clean up any previously auto-deployed DCGM (from before this flag existed)
             if kubectl get ds nvidia-dcgm-exporter -n onelens-agent -l managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
-                echo "GPU: cleaning up DCGM exporter (no GPU nodes)"
+                echo "GPU: cleaning up DCGM exporter (gpu.enabled is not true)"
                 kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
-                kubectl delete svc nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+                kubectl delete svc -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
             fi
         fi
 
