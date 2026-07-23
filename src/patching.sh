@@ -2816,8 +2816,8 @@ elif [ $UPGRADE_EXIT -eq 0 ] && [ "$GPU_ENABLED" = "false" ]; then
     # (e.g., customer installed their own DCGM, or GPU nodes were removed)
     if kubectl get ds -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens --no-headers 2>/dev/null | grep -q .; then
         echo "Cleaning up OneLens DCGM exporter (no longer needed)"
-        kubectl delete ds nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
-        kubectl delete svc nvidia-dcgm-exporter -n onelens-agent 2>/dev/null || true
+        kubectl delete ds -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
+        kubectl delete svc -n onelens-agent -l app=nvidia-dcgm-exporter,managed-by=onelens 2>/dev/null || true
     fi
 fi
 
