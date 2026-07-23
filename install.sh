@@ -808,8 +808,8 @@ fi
 
 # GPU monitoring (opt-in)
 if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
-    echo "GPU monitoring: enabled (GPU_MONITORING_ENABLED=true)"
-    CMD+=" --set onelens-agent.gpu.enabled=true"
+    echo "GPU monitoring: enabled (GPU_MONITORING_ENABLED=true), gpu.enabled=$GPU_ENABLED"
+    CMD+=" --set onelens-agent.gpu.enabled=$GPU_ENABLED"
 fi
 
 # Network costs (opt-in)
