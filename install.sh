@@ -517,6 +517,21 @@ if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
     fi
 fi
 
+# --- Node Exporter: detect existing deployment ---
+# If node-exporter already runs in the cluster (customer monitoring stack),
+# skip deploying ours to avoid port 9100 conflicts. The scrape config
+# targets <node_ip>:9100 regardless — it'll scrape whatever is there.
+NODE_EXPORTER_ENABLED="false"
+_NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
+    | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
+_NE_COUNT="${_NE_COUNT:-0}"
+if [ "$_NE_COUNT" -gt 0 ]; then
+    echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+else
+    NODE_EXPORTER_ENABLED="true"
+    echo "Node exporter: deploying (no existing node-exporter detected)"
+fi
+
 # --- Air-gapped self-detection ---
 # If the deployer pod's image is NOT from public.ecr.aws, this is an air-gapped cluster.
 # Extract the private registry URL from the image path for chart pulls and image overrides.
@@ -759,6 +774,10 @@ if [ -n "$REGISTRY_URL" ]; then
     if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
         CMD+=" --set onelens-agent.victoriaMetrics.image.repository=$REGISTRY_URL/victoria-metrics"
     fi
+    if [ "$NODE_EXPORTER_ENABLED" = "true" ]; then
+        CMD+=" --set prometheus.prometheus-node-exporter.image.registry=$REGISTRY_URL"
+        CMD+=" --set prometheus.prometheus-node-exporter.image.repository=node-exporter"
+    fi
 fi
 
 # Proxy: pass effective proxy env vars to onelens-agent sub-chart
@@ -834,6 +853,10 @@ if [ "${NETWORK_COSTS_ENABLED:-}" = "true" ]; then
         CMD+=" --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
     fi
 fi
+
+# Node exporter (auto-detected, skip if customer already has one)
+CMD+=" --set prometheus.prometheus-node-exporter.enabled=$NODE_EXPORTER_ENABLED"
+CMD+=" --set prometheus.prometheus-node-exporter.hostPID=false"
 
 # Multi-AZ storage overrides (EFS for AWS, Azure Files for Azure)
 # These override the default block-storage provisioner with a multi-AZ file-storage provisioner,

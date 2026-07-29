@@ -1184,6 +1184,21 @@ if [ "$NC_ENABLED" = "true" ]; then
     fi
 fi
 
+# --- Node Exporter: detect existing deployment ---
+# If node-exporter already runs in the cluster (customer monitoring stack),
+# skip deploying ours to avoid port 9100 conflicts. The scrape config
+# targets <node_ip>:9100 regardless — it'll scrape whatever is there.
+NODE_EXPORTER_ENABLED="false"
+_NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
+    | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
+_NE_COUNT="${_NE_COUNT:-0}"
+if [ "$_NE_COUNT" -gt 0 ]; then
+    echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+else
+    NODE_EXPORTER_ENABLED="true"
+    echo "Node exporter: deploying (no existing node-exporter detected)"
+fi
+
 # --- Agent OOM pre-helm detection ---
 # Agent CronJob OOM must be handled here (before helm upgrade), not in the
 # post-helm Agent CronJob Health section. kubectl patches to CronJobs get
@@ -2628,6 +2643,10 @@ if [ -n "$REGISTRY_URL" ]; then
     if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
         HELM_CMD="$HELM_CMD --set onelens-agent.victoriaMetrics.image.repository=$REGISTRY_URL/victoria-metrics"
     fi
+    if [ "$NODE_EXPORTER_ENABLED" = "true" ]; then
+        HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.image.registry=$REGISTRY_URL"
+        HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.image.repository=node-exporter"
+    fi
 fi
 
 # Sizing interval: always pass to ensure value is correctly applied or reset across upgrades
@@ -2662,6 +2681,10 @@ if [ -n "$REGISTRY_URL" ] && [ "$NC_ENABLED" = "true" ]; then
       --set onelens-agent.networkCosts.image.registry=$REGISTRY_URL \
       --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
 fi
+
+# Node exporter (auto-detected, skip if customer already has one)
+HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.enabled=$NODE_EXPORTER_ENABLED"
+HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.hostPID=false"
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
 # Pods on dead/unreachable nodes stay Terminating forever because kubelet can't

@@ -198,6 +198,22 @@ onelens-agent:
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
             action: keep
             regex: pushgateway
+      - job_name: 'node-exporter'
+        scheme: http
+        scrape_interval: 1m
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_address_InternalIP]
+            target_label: __address__
+            replacement: $1:9100
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_memory_MemFree_bytes|node_memory_Cached_bytes|node_memory_Buffers_bytes'
+            action: keep
     extraScrapeConfigs: |
       - job_name: opencost
         honor_labels: true
@@ -582,6 +598,21 @@ prometheus:
             - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
               action: keep
               regex: pushgateway
+        - job_name: 'node-exporter'
+          scrape_interval: 1m
+          scrape_timeout: 10s
+          kubernetes_sd_configs:
+            - role: node
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_node_address_InternalIP]
+              target_label: __address__
+              replacement: $1:9100
+            - source_labels: [__meta_kubernetes_node_name]
+              target_label: node
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: 'node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_memory_MemFree_bytes|node_memory_Cached_bytes|node_memory_Buffers_bytes'
+              action: keep
   alertRelabelConfigs: {}
   networkPolicy:
     enabled: false
@@ -942,6 +973,7 @@ prometheus:
     lifecycle: {}
   prometheus-node-exporter:
     enabled: false
+    hostPID: false
     nodeSelector:
       kubernetes.io/os: linux
     tolerations:
