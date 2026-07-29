@@ -199,6 +199,7 @@ onelens-agent:
             action: keep
             regex: pushgateway
       - job_name: 'node-exporter'
+        scheme: http
         scrape_interval: 1m
         scrape_timeout: 10s
         kubernetes_sd_configs:
