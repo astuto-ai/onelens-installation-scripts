@@ -522,8 +522,9 @@ fi
 # skip deploying ours to avoid port 9100 conflicts. The scrape config
 # targets <node_ip>:9100 regardless — it'll scrape whatever is there.
 NODE_EXPORTER_ENABLED="false"
-_NE_COUNT=$(kubectl get ds --all-namespaces --no-headers 2>/dev/null \
-    | grep -iv "onelens-agent" | awk '$2 ~ /node-exporter/ {print}' | wc -l | tr -d '[:space:]')
+_NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
+    | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
+_NE_COUNT="${_NE_COUNT:-0}"
 if [ "$_NE_COUNT" -gt 0 ]; then
     echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
 else
