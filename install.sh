@@ -523,7 +523,7 @@ fi
 # targets <node_ip>:9100 regardless — it'll scrape whatever is there.
 NODE_EXPORTER_ENABLED="false"
 _NE_COUNT=$(kubectl get ds --all-namespaces --no-headers 2>/dev/null \
-    | grep -iv "onelens-agent" | grep -i "node.exporter" | wc -l | tr -d '[:space:]')
+    | grep -iv "onelens-agent" | grep -i "node-exporter" | wc -l | tr -d '[:space:]')
 if [ "$_NE_COUNT" -gt 0 ]; then
     echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
 else
