@@ -3,13 +3,15 @@ on:
   pull_request:
     branches: ["main", "master"]
     types: [opened, reopened, ready_for_review, synchronize]
-  pull_request_review:
-    types: [submitted]
   workflow_dispatch:
     inputs:
       pr_number:
         description: "PR number to review"
         required: true
+
+concurrency:
+  group: qodo-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,8 +22,10 @@ permissions:
 jobs:
   review:
     if: |
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'pull_request_review') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       (github.event_name == 'workflow_dispatch')
+    # NOTE: this repo is public and astuto-ai/.github is internal, so GitHub
+    # forbids calling the org reusable workflow directly. Keep this local copy
+    # byte-identical to astuto-ai/.github/.github/workflows/qodo-review.yml.
     uses: ./.github/workflows/qodo-review-reusable.yml
     secrets: inherit
