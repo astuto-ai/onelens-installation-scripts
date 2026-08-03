@@ -33,7 +33,9 @@ jobs:
           OPENAI_KEY: ""
           # Vertex AI
           vertexai.vertex_project: "astuto-prod-mum"
-          vertexai.vertex_location: "us-central1"
+          # 'global' endpoint: new models (e.g. gemini-3.6-flash) reach it before
+          # they roll out to regional endpoints like us-central1.
+          vertexai.vertex_location: "global"
           # Model
           config.model: "vertex_ai/gemini-3.6-flash"
           config.model_turbo: "vertex_ai/gemini-3.6-flash"
