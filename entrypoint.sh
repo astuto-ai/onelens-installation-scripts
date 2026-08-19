@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Global API endpoint
-API_ENDPOINT="https://api-in.onelens.cloud"
+# Driven by API_BASE_URL (injected from onelens-agent-secrets by the deployer CronJob)
+# so relocated/air-gapped installs reach the configured control plane, not the default infra.
+API_ENDPOINT="${API_BASE_URL:-https://api-in.onelens.cloud}"
 
 # Proxy Configuration
 # If proxy env vars are set (injected by the deployer Helm chart), augment NO_PROXY

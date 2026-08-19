@@ -76,6 +76,12 @@ spec:
                       name: onelens-agent-secrets
                       key: CLUSTER_TOKEN
                       optional: true
-                
+                - name: API_BASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: onelens-agent-secrets
+                      key: API_BASE_URL
+                      optional: true
+
           restartPolicy: {{ .Values.cronjob.restartPolicy }}
 {{- end }}

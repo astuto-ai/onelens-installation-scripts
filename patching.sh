@@ -29,7 +29,7 @@ _send_patching_logs() {
             '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_logs: $plogs}}' 2>/dev/null)
         if [ -n "$payload" ]; then
             curl -s --max-time 10 --location --request PUT \
-                "https://api-in.onelens.cloud/v1/kubernetes/cluster-version" \
+                "${API_BASE_URL:-https://api-in.onelens.cloud}/v1/kubernetes/cluster-version" \
                 --header 'Content-Type: application/json' \
                 --data "$payload" >/dev/null 2>&1 || true
         fi
@@ -63,7 +63,7 @@ _report_milestone() {
         '{registration_id: $reg_id, cluster_token: $token, update_data: {patching_logs: $plogs}}' 2>/dev/null)
     if [ -n "$payload" ]; then
         curl -s --max-time 5 --location --request PUT \
-            "https://api-in.onelens.cloud/v1/kubernetes/cluster-version" \
+            "${API_BASE_URL:-https://api-in.onelens.cloud}/v1/kubernetes/cluster-version" \
             --header 'Content-Type: application/json' \
             --data "$payload" >/dev/null 2>&1 || true
     fi
@@ -1423,7 +1423,10 @@ else
   echo "WARNING: Could not read existing release values. Using defaults."
   CLUSTER_NAME=""
   ACCOUNT_ID=""
-  API_BASE_URL="https://api-in.onelens.cloud"
+  # Preserve API_BASE_URL from environment (injected by deployer CronJob from
+  # onelens-agent-secrets). Don't blank it — it's our fallback when helm get values
+  # fails due to RBAC, and hardcoding it would repoint relocated installs at the old infra.
+  API_BASE_URL="${API_BASE_URL:-https://api-in.onelens.cloud}"
   # Preserve CLUSTER_TOKEN and REGISTRATION_ID from environment (injected by deployer CronJob
   # from onelens-agent-secrets). Don't blank them — they're our fallback when helm get values
   # fails due to RBAC. Helm upgrade will be skipped but API reporting and diagnostics continue.
