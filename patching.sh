@@ -1445,7 +1445,10 @@ else
   PVC_ENABLED="true"
   SC_PROVISIONER=""
   SC_EFS_FSID=""
-  GKE_API_KEY=""
+  # Don't blank the GCP/OpenCost API key when `helm get values` fails. Seed it from
+  # the deployer's own env (injected from onelens-agent-secrets). The resolver below
+  # (runs for both branches) then tries the live OpenCost Deployment as a final source.
+  GKE_API_KEY="${GCP_API_KEY:-}"
   GKE_DISK_TYPE=""
   GKE_LABELS_ENABLED=""
   GKE_LABELS_VALUE=""
@@ -1474,6 +1477,45 @@ if [ -z "$CLUSTER_TOKEN" ] || [ -z "$REGISTRATION_ID" ]; then
     echo "These are required for helm upgrade. Check if onelens-agent is installed."
     echo "Skipping helm upgrade — continuing with diagnostics only."
     SKIP_HELM_UPGRADE=true
+fi
+
+# --- OpenCost GCP API key: resolve from durable sources; never drop it ---
+# The key is only re-applied to the release via --set (no --reuse-values), so if it is
+# empty here it would be blanked on the next upgrade and OpenCost panics ("Supply a GCP
+# Key"). Recover it from, in order: the helm release value (read above), the live OpenCost
+# Deployment's CLOUD_PROVIDER_API_KEY env, and the deployer's own env (from the secret).
+# If the release value is empty AND a cluster read errored (so we can't tell whether a key
+# exists), skip the upgrade rather than risk shipping an empty key.
+GKE_API_KEY_SOURCE="release-values"
+if [ -z "$GKE_API_KEY" ]; then
+    _oc_deploy=$(kubectl get deploy -n onelens-agent -o name 2>/dev/null | grep -i opencost | head -1)
+    if [ -n "$_oc_deploy" ]; then
+        _live_key=$(kubectl get "$_oc_deploy" -n onelens-agent -o json 2>/dev/null \
+            | jq -r '[.spec.template.spec.containers[]?.env[]? | select(.name=="CLOUD_PROVIDER_API_KEY") | .value] | map(select(. != null and . != "")) | first // empty' 2>/dev/null || true)
+        if [ -n "$_live_key" ]; then
+            GKE_API_KEY="$_live_key"
+            GKE_API_KEY_SOURCE="live-opencost-deployment"
+            echo "Recovered OpenCost GCP API key from live Deployment (release value was empty)."
+        fi
+    fi
+fi
+if [ -z "$GKE_API_KEY" ] && [ -n "${GCP_API_KEY:-}" ]; then
+    GKE_API_KEY="$GCP_API_KEY"
+    GKE_API_KEY_SOURCE="deployer-env-secret"
+    echo "Recovered OpenCost GCP API key from deployer env (onelens-agent-secrets)."
+fi
+# Guard: on a GKE cluster, if we still have no key AND the OpenCost Deployment exists but
+# could not be read (kubectl error, not a confirmed-empty key), don't blank a possibly-good
+# key — skip the upgrade this run. A genuinely-absent key (never configured) falls through.
+if [ -z "$GKE_API_KEY" ] && echo "$SC_PROVISIONER" | grep -q "pd.csi.storage.gke.io"; then
+    if kubectl get deploy -n onelens-agent 2>/dev/null | grep -qi opencost; then
+        if ! kubectl get deploy -n onelens-agent -o json >/dev/null 2>&1; then
+            echo "ERROR: GKE cluster with OpenCost, but the API key could not be resolved and"
+            echo "  the OpenCost Deployment could not be read. Skipping helm upgrade to avoid"
+            echo "  dropping a possibly-configured GCP API key. Will retry next healthcheck."
+            SKIP_HELM_UPGRADE=true
+        fi
+    fi
 fi
 
 _report_milestone  # M3: credentials-ready — identity extracted, about to diagnose
@@ -3417,11 +3459,19 @@ else
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=false"
 fi
 
-# GKE: preserve OpenCost API key and writable config volume across upgrades
+# OpenCost GCP API key: re-apply whenever we have one, independent of StorageClass
+# detection — a transient empty SC_PROVISIONER read must never drop the key. Also persist
+# it to onelens-agent-secrets so the deployer env (and future runs) can recover it even if
+# the helm release value is pruned. GKE_API_KEY was resolved earlier from release values /
+# live Deployment / deployer env.
+if [ -n "$GKE_API_KEY" ]; then
+    HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.cloudProviderApiKey=\"$GKE_API_KEY\""
+    HELM_CMD="$HELM_CMD --set onelens-agent.secrets.GCP_API_KEY=\"$GKE_API_KEY\""
+    echo "OpenCost GCP API key: re-applying (source: $GKE_API_KEY_SOURCE)"
+fi
+
+# GKE: OpenCost needs a writable /var/configs volume for its GCP pricing config
 if echo "$SC_PROVISIONER" | grep -q "pd.csi.storage.gke.io"; then
-    if [ -n "$GKE_API_KEY" ]; then
-        HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.cloudProviderApiKey=\"$GKE_API_KEY\""
-    fi
     HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].name=opencost-config"
     HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.opencost.exporter.extraVolumeMounts[0].mountPath=/var/configs"
     HELM_CMD="$HELM_CMD --set prometheus-opencost-exporter.extraVolumes[0].name=opencost-config"
