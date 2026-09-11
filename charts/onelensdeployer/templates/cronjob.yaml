@@ -82,6 +82,14 @@ spec:
                       name: onelens-agent-secrets
                       key: API_BASE_URL
                       optional: true
+                # OpenCost GCP API key (GKE). Durable fallback so patching can re-apply it
+                # even when `helm get values` fails — prevents dropping it on upgrade.
+                - name: GCP_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: onelens-agent-secrets
+                      key: GCP_API_KEY
+                      optional: true
 
           restartPolicy: {{ .Values.cronjob.restartPolicy }}
 {{- end }}

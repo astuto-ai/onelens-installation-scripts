@@ -814,6 +814,9 @@ fi
 if [ "$CLOUD_PROVIDER" = "GKE" ] && [ -n "$GCP_API_KEY" ]; then
     echo "GCP API key configured for OpenCost pricing data."
     CMD+=" --set prometheus-opencost-exporter.opencost.exporter.cloudProviderApiKey=\"$GCP_API_KEY\""
+    # Also store it durably in onelens-agent-secrets so patching can always recover and
+    # re-apply it (never dropped on upgrade, even if `helm get values` fails).
+    CMD+=" --set onelens-agent.secrets.GCP_API_KEY=\"$GCP_API_KEY\""
 elif [ "$CLOUD_PROVIDER" = "GKE" ] && [ -z "$GCP_API_KEY" ]; then
     echo "WARNING: GCP_API_KEY is not set. OpenCost will not be able to fetch GCP pricing data."
     echo "To fix: set GCP_API_KEY env var with a GCP API key that has Cloud Billing API access."

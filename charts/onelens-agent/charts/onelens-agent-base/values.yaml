@@ -97,6 +97,7 @@ secrets:
   API_BASE_URL: "https://dev-api.onelens.cloud" # DON'T ADD TRAILING SLASH
   CLUSTER_TOKEN: "your-raw-token" # Don't encode
   REGISTRATION_ID: "your-raw-id" # Don't encode
+  GCP_API_KEY: "" # OpenCost GCP pricing API key (GKE only); empty on non-GKE
 # GPU monitoring (DCGM exporter DaemonSet)
 gpu:
   enabled: "false" # "true" | "false" — resolved by patching.sh/install.sh from "auto" detection
