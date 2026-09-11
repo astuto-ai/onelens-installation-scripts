@@ -50,7 +50,10 @@ rbac:
     enabled: true
     name: onelensdeployer-clusterrole
     rules:
-      # StorageClass permissions - we own this resource, restricted by resourceNames
+      # StorageClass permissions - we own this resource, restricted by resourceNames.
+      # No cluster-wide "create" is granted (same as the AWS/Azure model): patching keeps
+      # onelens-sc un-deletable (helm.sh/resource-policy=keep) so Helm only ever patches
+      # the existing SC — which this rule allows — and never needs to create one.
       - apiGroups: ["storage.k8s.io"]
         resources: ["storageclasses"]
         verbs: ["*"]
