@@ -3439,6 +3439,31 @@ HELM_CMD="$HELM_CMD \
 # deleting the SC would leave the PVC Pending. In practice EBS binds within
 # 1-2 minutes so the 5-minute CronJob window is rarely hit. If this becomes
 # an issue, re-pass SC values for all provisioners (not just EFS).
+# Durably resolve the StorageClass provisioner. SC_PROVISIONER comes from `helm get
+# values`, which returns empty when that read fails — and an empty value here would take
+# the enabled=false branch below and DELETE onelens-sc. On GKE the updater SA cannot
+# recreate a StorageClass (create is not granted at cluster scope), so a deletion breaks
+# patching permanently. If the value is empty, read it from the live StorageClass object.
+_SC_NAME="${SC_NAME:-onelens-sc}"
+if [ -z "$SC_PROVISIONER" ]; then
+    _live_sc_prov=$(kubectl get storageclass "$_SC_NAME" -o jsonpath='{.provisioner}' 2>/dev/null || true)
+    if [ -n "$_live_sc_prov" ]; then
+        SC_PROVISIONER="$_live_sc_prov"
+        echo "Resolved StorageClass provisioner from live cluster: $SC_PROVISIONER (helm values were empty)"
+    fi
+fi
+
+# Mark the live StorageClass as un-deletable by Helm. On GKE/EFS the SC stays in the
+# release manifest but the updater SA cannot create a StorageClass — only patch the
+# existing onelens-sc (create is intentionally NOT granted, same as the AWS/Azure model).
+# resource-policy=keep guarantees Helm never deletes it even if detection above fails,
+# so Helm only ever patches it and never needs create. The SA can patch onelens-sc, so
+# this annotate succeeds; it is a no-op if the SC is absent.
+if kubectl get storageclass "$_SC_NAME" >/dev/null 2>&1; then
+    kubectl annotate storageclass "$_SC_NAME" helm.sh/resource-policy=keep --overwrite >/dev/null 2>&1 \
+        && echo "StorageClass $_SC_NAME marked keep (Helm will not delete it)" || true
+fi
+
 if [ -n "$SC_EFS_FSID" ]; then
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.enabled=true"
     HELM_CMD="$HELM_CMD --set onelens-agent.storageClass.provisioner=efs.csi.aws.com"
