@@ -17,7 +17,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  id-token: write
 
 jobs:
   review:
@@ -26,6 +25,7 @@ jobs:
       (github.event_name == 'workflow_dispatch')
     # NOTE: this repo is public and astuto-ai/.github is internal, so GitHub
     # forbids calling the org reusable workflow directly. Keep this local copy
-    # byte-identical to astuto-ai/.github/.github/workflows/qodo-review.yml.
+    # in sync with astuto-ai/.github/.github/workflows/qodo-review.yml — identical
+    # except this repo's OPENAI secret is named OPENAI_API_KEY (org uses OPENAI_KEY).
     uses: ./.github/workflows/qodo-review-reusable.yml
     secrets: inherit
