@@ -21,10 +21,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
-          # Model — GPT 5.6 Luna via OpenAI key
-          config.model: "gpt-5.6-luna"
-          config.model_turbo: "gpt-5.6-luna"
-          config.fallback_models: '["gpt-5.6-luna"]'
+          # Model — GPT 5.6 Luna routed via the internal LiteLLM proxy (OpenAI-compatible).
+          # api_base points pr-agent/litellm at the proxy instead of api.openai.com; the
+          # openai/ prefix tells litellm to use the OpenAI-compatible transport.
+          openai.api_base: "https://litellm.onelens.cloud"
+          config.model: "openai/gpt-5.6-luna"
+          config.model_turbo: "openai/gpt-5.6-luna"
+          config.fallback_models: '["openai/gpt-5.6-luna"]'
           config.max_model_tokens: "128000"
           config.ai_timeout: "180"
           config.reasoning_effort: "medium"
