@@ -2,7 +2,7 @@ name: Qodo Merge — AI Code Review
 on:
   workflow_call:
     secrets:
-      OPENAI_KEY:
+      OPENAI_API_KEY:
         required: true
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
         uses: the-pr-agent/pr-agent@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Model — GPT 5.6 Luna routed via the internal LiteLLM proxy (OpenAI-compatible).
           # api_base points pr-agent/litellm at the proxy instead of api.openai.com; the
           # openai/ prefix tells litellm to use the OpenAI-compatible transport.
