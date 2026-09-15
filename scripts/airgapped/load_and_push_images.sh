@@ -91,7 +91,7 @@ for _name_tag in "${_IMAGES[@]}"; do
     _image_tag=""
 
     # Known multi-hyphen image names
-    for _known in onelens-deployer onelens-agent onelens-network-costs prometheus-config-reloader kube-state-metrics kube-rbac-proxy dcgm-exporter; do
+    for _known in onelens-deployer onelens-agent onelens-network-costs prometheus-config-reloader kube-state-metrics kube-rbac-proxy dcgm-exporter victoria-metrics; do
         if [[ "$_name_tag" == "${_known}-"* ]]; then
             _image_name="$_known"
             _image_tag="${_name_tag#${_known}-}"
