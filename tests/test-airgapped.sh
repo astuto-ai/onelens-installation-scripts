@@ -273,5 +273,32 @@ patching_nc_override=$(grep -c 'networkCosts.image.registry=\$REGISTRY_URL' "$RO
 assert_gt "$install_nc_override" "0" "install.sh has network-costs air-gapped image override"
 assert_gt "$patching_nc_override" "0" "patching.sh has network-costs air-gapped image override"
 
+# ---------------------------------------------------------------------------
+# Test 36: Migration script mirrors the victoria-metrics image
+# (required for METRICS_BACKEND=victoriametrics to work air-gapped)
+# ---------------------------------------------------------------------------
+migrate_vm=$(grep -c 'victoriametrics/victoria-metrics' "$MIGRATE" || true)
+assert_gt "$migrate_vm" "0" "migration script includes victoria-metrics image"
+migrate_no_dockerhub=$(grep -c 'docker.io' "$MIGRATE" || true)
+assert_eq "$migrate_no_dockerhub" "0" "migration script sources no image from Docker Hub (VM mirrored from quay.io)"
+migrate_vm_target=$(grep -c 'victoria-metrics:${_tag}' "$MIGRATE" || true)
+assert_gt "$migrate_vm_target" "0" "migration script mirrors victoria-metrics to the private-registry target name"
+
+# ---------------------------------------------------------------------------
+# Test 37: Both scripts point VictoriaMetrics at the private registry
+# ---------------------------------------------------------------------------
+install_vm_override=$(grep -c 'victoriaMetrics.image.repository=\$REGISTRY_URL/victoria-metrics' "$ROOT/install.sh" || true)
+patching_vm_override=$(grep -c 'victoriaMetrics.image.repository=\$REGISTRY_URL/victoria-metrics' "$ROOT/src/patching.sh" || true)
+assert_gt "$install_vm_override" "0" "install.sh points VictoriaMetrics image at private registry"
+assert_gt "$patching_vm_override" "0" "patching.sh points VictoriaMetrics image at private registry"
+
+# ---------------------------------------------------------------------------
+# Test 38: Offline load/push parser recognizes the victoria-metrics image name
+# ---------------------------------------------------------------------------
+LOAD_PUSH="$ROOT/scripts/airgapped/load_and_push_images.sh"
+assert_file_exists "$LOAD_PUSH" "load_and_push_images.sh exists"
+loadpush_vm=$(grep -c 'victoria-metrics' "$LOAD_PUSH" || true)
+assert_gt "$loadpush_vm" "0" "load_and_push_images.sh known-names list includes victoria-metrics"
+
 test_summary
 exit $?
