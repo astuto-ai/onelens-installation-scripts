@@ -607,6 +607,25 @@ fi
 # Default METRICS_BACKEND to prometheus if not set (fresh installs or pre-VM clusters)
 : "${METRICS_BACKEND:=prometheus}"
 
+# Metrics backend identity for sizing and remediation. With VictoriaMetrics the
+# Prometheus server is scaled to 0, so every lookup of "the metrics pod" (usage,
+# OOM state, resource guards, crash recovery, kubectl fallback) must target VM.
+# METRICS_COMPONENT doubles as the container name and the pod-name match pattern.
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    METRICS_COMPONENT="victoriametrics"
+    METRICS_DEPLOYMENT="onelens-agent-victoriametrics"
+    METRICS_RESOURCES_PATH='.["onelens-agent"].victoriaMetrics.resources'
+    METRICS_MEM_FLOOR="$_USAGE_FLOOR_VM_MEM"
+    METRICS_LABEL="VictoriaMetrics"
+else
+    METRICS_COMPONENT="prometheus-server"
+    METRICS_DEPLOYMENT="onelens-agent-prometheus-server"
+    METRICS_RESOURCES_PATH='.prometheus.server.resources'
+    METRICS_MEM_FLOOR="$_USAGE_FLOOR_PROM_MEM"
+    METRICS_LABEL="Prometheus"
+fi
+apply_vm_memory_floor
+
 # Default and validate full eval interval
 FULL_EVAL_INTERVAL_HOURS="${FULL_EVAL_INTERVAL_HOURS:-72}"
 if ! echo "$FULL_EVAL_INTERVAL_HOURS" | grep -qE '^[0-9]+$' || [ "$FULL_EVAL_INTERVAL_HOURS" -lt 24 ]; then
@@ -928,7 +947,7 @@ if [ -n "$PROM_SVC" ]; then
         _get_oom_recent() {
             local container="$1"
             case "$container" in
-                prometheus-server) is_oom_recent "$STATE_LAST_OOM_prometheus_server" 7 && echo "true" || echo "false" ;;
+                prometheus-server|victoriametrics) is_oom_recent "$STATE_LAST_OOM_prometheus_server" 7 && echo "true" || echo "false" ;;
                 kube-state-metrics) is_oom_recent "$STATE_LAST_OOM_kube_state_metrics" 7 && echo "true" || echo "false" ;;
                 *opencost*) is_oom_recent "$STATE_LAST_OOM_opencost" 7 && echo "true" || echo "false" ;;
                 *) echo "false" ;;
@@ -1048,10 +1067,10 @@ if [ -n "$PROM_SVC" ]; then
                     eval "$var=\"$kept\""
                 fi
             }
-            _upguard_mem '.prometheus.server.resources.limits.memory' PROMETHEUS_MEMORY_LIMIT
-            _upguard_mem '.prometheus.server.resources.requests.memory' PROMETHEUS_MEMORY_REQUEST
-            _upguard_cpu '.prometheus.server.resources.limits.cpu' PROMETHEUS_CPU_LIMIT
-            _upguard_cpu '.prometheus.server.resources.requests.cpu' PROMETHEUS_CPU_REQUEST
+            _upguard_mem "${METRICS_RESOURCES_PATH}.limits.memory" PROMETHEUS_MEMORY_LIMIT
+            _upguard_mem "${METRICS_RESOURCES_PATH}.requests.memory" PROMETHEUS_MEMORY_REQUEST
+            _upguard_cpu "${METRICS_RESOURCES_PATH}.limits.cpu" PROMETHEUS_CPU_LIMIT
+            _upguard_cpu "${METRICS_RESOURCES_PATH}.requests.cpu" PROMETHEUS_CPU_REQUEST
             _upguard_mem '.prometheus["kube-state-metrics"].resources.limits.memory' KSM_MEMORY_LIMIT
             _upguard_mem '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
             _upguard_cpu '.prometheus["kube-state-metrics"].resources.limits.cpu' KSM_CPU_LIMIT
@@ -1064,11 +1083,11 @@ if [ -n "$PROM_SVC" ]; then
             _upguard_mem '.["onelens-agent"].resources.requests.memory' ONELENS_MEMORY_REQUEST
         fi
 
-        # Evaluate: Prometheus
-        _evaluate_and_log "prometheus-server" "prometheus-server" \
+        # Evaluate: metrics backend (Prometheus server or VictoriaMetrics)
+        _evaluate_and_log "$METRICS_COMPONENT" "$METRICS_COMPONENT" \
             "$PROMETHEUS_MEMORY_LIMIT" "$PROMETHEUS_CPU_LIMIT" \
-            "$_USAGE_FLOOR_PROM_MEM" "$_USAGE_CAP_PROM_MEM" "NEW_PROM_OOM" \
-            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "prometheus-server")"
+            "$METRICS_MEM_FLOOR" "$_USAGE_CAP_PROM_MEM" "NEW_PROM_OOM" \
+            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "$METRICS_COMPONENT")"
         PROMETHEUS_MEMORY_REQUEST="$_OUT_MEM"; PROMETHEUS_MEMORY_LIMIT="$_OUT_MEM"
         PROMETHEUS_CPU_REQUEST="$_OUT_CPU"; PROMETHEUS_CPU_LIMIT="$_OUT_CPU"
 
@@ -1144,6 +1163,23 @@ if [ -n "$PROM_SVC" ]; then
         kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
     else
         echo "Usage-based sizing: no Prometheus data available, keeping tier-based limits"
+
+        # The metrics backend may have no data *because* it is OOM-looping. Still record
+        # kubectl-detected OOMs so the 7-day no-downsize hold starts — otherwise the next
+        # full evaluation can shrink the component straight back into the OOM.
+        # VictoriaMetrics clusters only — Prometheus clusters keep their existing behavior.
+        if [ "$METRICS_BACKEND" = "victoriametrics" ] && [ -n "$OOM_KUBECTL" ]; then
+            _oom_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            _oom_prom="$STATE_LAST_OOM_prometheus_server"; _oom_ksm="$STATE_LAST_OOM_kube_state_metrics"
+            _oom_oc="$STATE_LAST_OOM_opencost"; _oom_pgw="$STATE_LAST_OOM_pushgateway"
+            echo "$OOM_KUBECTL" | grep -qF "$METRICS_COMPONENT" && _oom_prom="$_oom_ts"
+            echo "$OOM_KUBECTL" | grep -qF "kube-state-metrics" && _oom_ksm="$_oom_ts"
+            echo "$OOM_KUBECTL" | grep -qF "opencost" && _oom_oc="$_oom_ts"
+            echo "$OOM_KUBECTL" | grep -qF "pushgateway" && _oom_pgw="$_oom_ts"
+            PATCH_JSON=$(build_sizing_state_patch "$STATE_LAST_FULL_EVAL" "$_oom_prom" "$_oom_ksm" "$_oom_oc" "$_oom_pgw")
+            kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge -p "$PATCH_JSON" 2>/dev/null || true
+            echo "Recorded OOM for 7-day no-downsize hold: $(echo "$OOM_KUBECTL" | tr '\n' ' ')"
+        fi
     fi
 
 fi
@@ -1610,7 +1646,7 @@ _remediate_stuck_volume_pod() {
 }
 
 # Remediate stuck volume pods for all onelens components
-for _vol_component in prometheus-server kube-state-metrics opencost prometheus-pushgateway; do
+for _vol_component in "$METRICS_COMPONENT" kube-state-metrics opencost prometheus-pushgateway; do
     _remediate_stuck_volume_pod "$_vol_component"
 done
 
@@ -1651,8 +1687,8 @@ if [ "$USAGE_BASED_APPLIED" != "true" ] && [[ -n "$CURRENT_VALUES" ]] && command
     }
 
     echo "Fallback: usage-based unavailable, applying legacy memory guard..."
-    _guard_memory "Prometheus request" '.prometheus.server.resources.requests.memory' PROMETHEUS_MEMORY_REQUEST
-    _guard_memory "Prometheus limit" '.prometheus.server.resources.limits.memory' PROMETHEUS_MEMORY_LIMIT
+    _guard_memory "$METRICS_LABEL request" "${METRICS_RESOURCES_PATH}.requests.memory" PROMETHEUS_MEMORY_REQUEST
+    _guard_memory "$METRICS_LABEL limit" "${METRICS_RESOURCES_PATH}.limits.memory" PROMETHEUS_MEMORY_LIMIT
     _guard_memory "KSM request" '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
     _guard_memory "KSM limit" '.prometheus["kube-state-metrics"].resources.limits.memory' KSM_MEMORY_LIMIT
     _guard_memory "OpenCost request" '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory' OPENCOST_MEMORY_REQUEST
@@ -1813,14 +1849,14 @@ $(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
     local _prom_ready=false
     local _prom_pod_check
     _prom_pod_check=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-        | awk '/prometheus-server/{print $2, $3; exit}' || true)
+        | awk -v p="$METRICS_COMPONENT" '$1 ~ p {print $2, $3; exit}' || true)
     if echo "$_prom_pod_check" | grep -q 'Running' && echo "$_prom_pod_check" | grep -qE '^2/2|^1/1'; then
         _prom_ready=true
     fi
 
     # Check each component in dependency order
     local component
-    for component in prometheus-server kube-state-metrics prometheus-opencost-exporter prometheus-pushgateway; do
+    for component in "$METRICS_COMPONENT" kube-state-metrics prometheus-opencost-exporter prometheus-pushgateway; do
         # Skip OpenCost if Prometheus is not ready — OpenCost depends on Prometheus
         if [ "$component" = "prometheus-opencost-exporter" ] && [ "$_prom_ready" != "true" ]; then
             continue
@@ -1922,6 +1958,15 @@ _bump_component_memory() {
             new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
             PROMETHEUS_MEMORY_REQUEST="$new_mem"; PROMETHEUS_MEMORY_LIMIT="$new_mem"
             set_flags="--set prometheus.server.resources.requests.memory=\"$new_mem\" --set prometheus.server.resources.limits.memory=\"$new_mem\""
+            ;;
+        victoriametrics)
+            # Shares PROMETHEUS_MEMORY_* with the Prometheus server (the helm VM branch
+            # reads them), so later --set flags in the same upgrade stay consistent.
+            old_mem="$PROMETHEUS_MEMORY_LIMIT"
+            cap="$_USAGE_CAP_PROM_MEM"
+            new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
+            PROMETHEUS_MEMORY_REQUEST="$new_mem"; PROMETHEUS_MEMORY_LIMIT="$new_mem"
+            set_flags="--set onelens-agent.victoriaMetrics.resources.requests.memory=\"$new_mem\" --set onelens-agent.victoriaMetrics.resources.limits.memory=\"$new_mem\""
             ;;
         kube-state-metrics)
             old_mem="$KSM_MEMORY_LIMIT"
@@ -2035,11 +2080,19 @@ _get_pod_failure_reason() {
     # ANY container that is terminated or waiting (skips healthy sidecars at
     # index 0). If multiple containers are failing, jsonpath returns reasons
     # space-separated — prefer OOMKilled over other reasons.
-    local term_reasons waiting_reasons
+    local term_reasons waiting_reasons crashloop_last_reasons=""
     term_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
         -o jsonpath='{.status.containerStatuses[?(@.state.terminated)].state.terminated.reason}' 2>/dev/null)
     waiting_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
         -o jsonpath='{.status.containerStatuses[?(@.state.waiting)].state.waiting.reason}' 2>/dev/null)
+    # A crash-looping container killed by the kernel OOM killer is waiting=CrashLoopBackOff;
+    # the OOM is only in lastState (the app's own logs never mention it). VictoriaMetrics
+    # clusters only: on Prometheus this would add kubectl bump+restart cycles (WAL replays)
+    # on top of the helm OOM retry, which helm then reverts.
+    if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+        crashloop_last_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[?(@.state.waiting.reason=="CrashLoopBackOff")].lastState.terminated.reason}' 2>/dev/null)
+    fi
 
     if [ -n "$term_reasons" ]; then
         # Prefer OOMKilled over other terminated reasons
@@ -2048,6 +2101,8 @@ _get_pod_failure_reason() {
         else
             echo "Terminated"
         fi
+    elif echo "$crashloop_last_reasons" | grep -q "OOMKilled"; then
+        echo "OOMKilled"
     elif [ -n "$waiting_reasons" ]; then
         # Return the first waiting reason (sidecar-order-independent)
         echo "$waiting_reasons" | awk '{print $1}'
@@ -2505,7 +2560,7 @@ if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
             --limits="cpu=${cpu_lim},memory=${mem_lim}" \
             2>&1 || echo "  WARNING: failed to patch $deploy"
     }
-    _kubectl_set_resources "onelens-agent-prometheus-server" "prometheus-server" \
+    _kubectl_set_resources "$METRICS_DEPLOYMENT" "$METRICS_COMPONENT" \
         "$PROMETHEUS_CPU_REQUEST" "$PROMETHEUS_MEMORY_REQUEST" "$PROMETHEUS_CPU_LIMIT" "$PROMETHEUS_MEMORY_LIMIT"
     _kubectl_set_resources "onelens-agent-kube-state-metrics" "kube-state-metrics" \
         "$KSM_CPU_REQUEST" "$KSM_MEMORY_REQUEST" "$KSM_CPU_LIMIT" "$KSM_MEMORY_LIMIT"
@@ -3011,7 +3066,7 @@ while true; do
             _oc_logs=$(kubectl logs "$_FAIL_POD" -n onelens-agent --tail=10 2>/dev/null || true)
             if echo "$_oc_logs" | grep -qiE 'Failed to create Prometheus data source|connection refused.*prometheus'; then
                 _prom_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                    | awk '/prometheus-server/{print; exit}')
+                    | awk -v p="$METRICS_COMPONENT" '$1 ~ p {print; exit}')
                 _prom_ready_col=$(echo "$_prom_line" | awk '{print $2}')
                 _prom_status_col=$(echo "$_prom_line" | awk '{print $3}')
                 if [ "$_prom_status_col" = "Running" ] && echo "$_prom_ready_col" | grep -qE '^2/2$|^1/1$'; then
@@ -3440,7 +3495,7 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
     if [ "$_should_trigger" = "true" ]; then
         # Check if Prometheus and OpenCost are healthy
         _prom_ok=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-            | awk '/prometheus-server/{split($2,a,"/"); if(a[1]==a[2] && $3=="Running") print "yes"; exit}' || true)
+            | awk -v p="$METRICS_COMPONENT" '$1 ~ p {split($2,a,"/"); if(a[1]==a[2] && $3=="Running") print "yes"; exit}' || true)
         _oc_ok=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
             | awk '/opencost/{split($2,a,"/"); if(a[1]==a[2] && $3=="Running") print "yes"; exit}' || true)
 
