@@ -263,5 +263,19 @@ assert_gt "$gke_csi_func" "0" "install.sh has check_gke_pd_driver function"
 gke_csi_dispatch=$(grep -c 'CLOUD_PROVIDER.*=.*"GKE"' "$ROOT/install.sh" || true)
 assert_gt "$gke_csi_dispatch" "0" "install.sh has GKE cloud provider dispatch"
 
+###############################################################################
+# Test 19: install.sh PVC wait follows the metrics backend
+###############################################################################
+# With VictoriaMetrics, a reused Prometheus PVC can still be Bound — waiting on it
+# would mask an unprovisioned VictoriaMetrics PV.
+vm_pvc_select=$(grep -c 'METRICS_PVC_NAME="onelens-agent-victoriametrics"' "$ROOT/install.sh" || true)
+assert_gt "$vm_pvc_select" "0" "install.sh waits on the VictoriaMetrics PVC when METRICS_BACKEND=victoriametrics"
+
+prom_pvc_select=$(grep -c 'METRICS_PVC_NAME="onelens-agent-prometheus-server"' "$ROOT/install.sh" || true)
+assert_gt "$prom_pvc_select" "0" "install.sh waits on the Prometheus PVC by default"
+
+hardcoded_prom_pvc_wait=$(grep -c 'kubectl get pvc onelens-agent-prometheus-server' "$ROOT/install.sh" || true)
+assert_eq "$hardcoded_prom_pvc_wait" "0" "install.sh PVC wait is not hardcoded to the Prometheus PVC"
+
 test_summary
 exit $?
