@@ -1147,18 +1147,29 @@ DCGM_EOF
     fi
 fi
 
-# Wait for Prometheus PVC to be bound — proves the PV was provisioned by the CSI driver.
-# This is the only hard dependency: without a bound PV, Prometheus can't start and
-# patching.sh can't do usage-based sizing. All other pod issues are self-healing.
+# Metrics backend PVC + display name. With VictoriaMetrics, Prometheus server is scaled
+# to 0 and a reused Prometheus PVC may still be Bound — waiting on it would report
+# success even if the VictoriaMetrics PV was never provisioned.
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    METRICS_PVC_NAME="onelens-agent-victoriametrics"
+    METRICS_BACKEND_LABEL="VictoriaMetrics"
+else
+    METRICS_PVC_NAME="onelens-agent-prometheus-server"
+    METRICS_BACKEND_LABEL="Prometheus"
+fi
+
+# Wait for the metrics backend PVC to be bound — proves the PV was provisioned by the CSI
+# driver. This is the only hard dependency: without a bound PV, the metrics backend can't
+# start and patching.sh can't do usage-based sizing. All other pod issues are self-healing.
 if [ "$PVC_ENABLED" = "true" ]; then
-    echo "Waiting for Prometheus persistent volume to be provisioned..."
+    echo "Waiting for $METRICS_BACKEND_LABEL persistent volume to be provisioned..."
     PVC_BOUND=false
     for _pvc_wait in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        PVC_STATUS=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+        PVC_STATUS=$(kubectl get pvc "$METRICS_PVC_NAME" -n onelens-agent \
             -o jsonpath='{.status.phase}' 2>/dev/null || true)
         if [ "$PVC_STATUS" = "Bound" ]; then
             PVC_BOUND=true
-            PV_NAME=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+            PV_NAME=$(kubectl get pvc "$METRICS_PVC_NAME" -n onelens-agent \
                 -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
             echo "PVC bound to PV '$PV_NAME' (${_pvc_wait}0s)"
             break
@@ -1167,7 +1178,7 @@ if [ "$PVC_ENABLED" = "true" ]; then
         sleep 10
     done
     if [ "$PVC_BOUND" != "true" ]; then
-        echo "WARNING: PVC not bound after 120s. Prometheus may fail to start."
+        echo "WARNING: PVC '$METRICS_PVC_NAME' not bound after 120s. $METRICS_BACKEND_LABEL may fail to start."
         echo "Possible causes:"
         echo "  - CSI driver not installed or not running"
         echo "  - StorageClass 'onelens-sc' not created correctly"
@@ -1237,7 +1248,7 @@ if [ -z "$NOT_READY" ]; then
 else
     echo ""
     echo "Some pods are still starting up. This is normal — components like OpenCost"
-    echo "depend on Prometheus and may take 1-2 minutes to stabilize."
+    echo "depend on $METRICS_BACKEND_LABEL and may take 1-2 minutes to stabilize."
     echo ""
     echo "The patching job runs every 5 minutes and will automatically:"
     echo "  - Increase memory for any OOMKilled pods"
