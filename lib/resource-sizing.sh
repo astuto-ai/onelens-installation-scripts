@@ -87,6 +87,7 @@ _max_memory() {
 # Floor: tier-tiny minimums. Cap: hard maximums for mega clusters.
 # These prevent usage-based from going absurdly low (zero usage) or high (runaway OOM doubling).
 _USAGE_FLOOR_PROM_MEM=150   # tiny tier Prometheus memory (Mi)
+_USAGE_FLOOR_VM_MEM=512     # VictoriaMetrics minimum (Mi) — OOM-loops at the 150Mi tiny tier once it holds data; matches the chart's default VM request
 _USAGE_FLOOR_KSM_MEM=64     # tiny tier KSM memory (Mi)
 _USAGE_FLOOR_OPENCOST_MEM=192 # tiny tier OpenCost memory (Mi)
 _USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
@@ -97,6 +98,15 @@ _USAGE_CAP_KSM_MEM=4800     # max KSM memory for mega clusters (Mi)
 _USAGE_CAP_OPENCOST_MEM=4800 # max OpenCost memory for mega clusters (Mi)
 _USAGE_CAP_AGENT_MEM=8192   # max agent memory (raised 4096→8192 in v2.1.66; agent mem scales with metric cardinality/cost data volume, not just pod count — 5 customer clusters hit the 4GB cap)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
+
+# apply_vm_memory_floor
+# PROMETHEUS_MEMORY_{REQUEST,LIMIT} size the metrics backend, including VictoriaMetrics.
+# When METRICS_BACKEND=victoriametrics, raise them to _USAGE_FLOOR_VM_MEM. No-op otherwise.
+apply_vm_memory_floor() {
+    [ "${METRICS_BACKEND:-prometheus}" = "victoriametrics" ] || return 0
+    PROMETHEUS_MEMORY_REQUEST=$(_max_memory "$PROMETHEUS_MEMORY_REQUEST" "${_USAGE_FLOOR_VM_MEM}Mi")
+    PROMETHEUS_MEMORY_LIMIT=$(_max_memory "$PROMETHEUS_MEMORY_LIMIT" "${_USAGE_FLOOR_VM_MEM}Mi")
+}
 
 # apply_cpu_multiplier "$cpu_str" "$multiplier"
 # Multiply a CPU string by a float multiplier, rounded up to nearest 50m (cgroup-safe).

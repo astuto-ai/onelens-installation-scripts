@@ -597,6 +597,9 @@ if [ "$LABEL_MULTIPLIER" != "1.0" ]; then
     echo "  OneLens Agent: ${ONELENS_MEMORY_REQUEST} request / ${ONELENS_MEMORY_LIMIT} limit"
 fi
 
+# VictoriaMetrics reuses the Prometheus memory values but can't run at the tiny-tier 150Mi.
+apply_vm_memory_floor
+
 # Configmap-reload sidecar: fixed small footprint, does not scale with cluster size.
 PROMETHEUS_CONFIGMAP_RELOAD_CPU_REQUEST="10m"
 PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_REQUEST="32Mi"
