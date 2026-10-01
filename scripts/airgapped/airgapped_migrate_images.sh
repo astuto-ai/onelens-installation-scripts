@@ -167,6 +167,19 @@ ${_repo}:${_tag} prometheus-config-reloader:${_tag}"
     echo "  prometheus-config-reloader: ${_repo}:${_tag}"
 fi
 
+# victoria-metrics (alternate metrics backend — mirrored so METRICS_BACKEND=victoriametrics
+# works air-gapped; install.sh/patching.sh point it at $REGISTRY_URL/victoria-metrics).
+# Pulled from quay.io (already a required registry) rather than the chart's Docker Hub
+# default — same image, but avoids a new registry dependency and Docker Hub rate limits.
+_repo="victoriametrics/victoria-metrics"
+_tag=$(_get_tag "$_V" "$_repo")
+if [ -n "$_tag" ]; then
+    _source="quay.io/${_repo}:${_tag}"
+    IMAGES="${IMAGES}
+${_source} victoria-metrics:${_tag}"
+    echo "  victoria-metrics: ${_source}"
+fi
+
 # opencost (has separate registry field)
 _repo="opencost/opencost"
 _tag=$(_get_tag "$_V" "$_repo")
