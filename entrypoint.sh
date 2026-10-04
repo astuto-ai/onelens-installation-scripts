@@ -134,7 +134,7 @@ elif [ "$deployment_type" = "cronjob" ]; then
             split($2,a,"/"); if (a[1] == a[2] && $3 == "Running") next
             age = $(NF-1)
             young = (age ~ /^[0-9]+s$/ || (age ~ /^[0-9]+m([0-9]+s)?$/ && age + 0 < 10))
-            if ($NF ~ /job-name=/ && $3 ~ /^(Pending|ContainerCreating|PodInitializing|Init:)/ && young) next
+            if ($NF ~ /job-name=/ && $3 ~ /^(Pending|ContainerCreating|PodInitializing|Init:[0-9])/ && young) next
             print $1 " (" $3 ")"
         }' || true)
     if [ -n "$NOT_READY" ]; then

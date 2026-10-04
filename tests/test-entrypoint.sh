@@ -230,6 +230,8 @@ assert_contains "$(_not_ready "$(_job 0/1 ContainerCreating 10m)")" "ContainerCr
 assert_contains "$(_not_ready "$(_job 0/1 Pending 1h)")" "Pending" "agent job pod Pending for 1h is reported"
 assert_contains "$(_not_ready "$(_job 0/1 OOMKilled 30s)")" "OOMKilled" "agent job pod OOMKilled is reported (agent OOM bump still triggers)"
 assert_contains "$(_not_ready "$(_job 0/1 ImagePullBackOff 2m)")" "ImagePullBackOff" "agent job pod ImagePullBackOff is reported"
+assert_contains "$(_not_ready "$(_job 0/1 Init:CrashLoopBackOff 45s)")" "Init:CrashLoopBackOff" "agent job pod Init:CrashLoopBackOff is reported (failing init, not progress)"
+assert_contains "$(_not_ready "$(_job 0/1 Init:ImagePullBackOff 45s)")" "Init:ImagePullBackOff" "agent job pod Init:ImagePullBackOff is reported"
 assert_eq "$(_not_ready "$(_job 0/1 Completed 50m)")" "" "completed agent job pod is ignored"
 assert_contains "$(_not_ready "$(_dep 0/1 ContainerCreating 0 8s)")" "ContainerCreating" "Deployment pod ContainerCreating is reported (unchanged)"
 assert_contains "$(_not_ready "$(_dep 0/1 Running "3 (2m ago)" 1h)")" "(Running)" "Deployment pod Running 0/1 is reported (unchanged)"
