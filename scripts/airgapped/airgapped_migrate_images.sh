@@ -234,7 +234,7 @@ fi
 _repo="quay.io/prometheus/node-exporter"
 _tag=""
 if [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" ]; then
-    _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" | awk '{print $2}' | tr -d '"')"
+    _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" | awk '{print $2}' | tr -d "\"'")"
 fi
 if [ -n "$_tag" ] && [ "$_tag" != "v" ]; then
     IMAGES="${IMAGES}

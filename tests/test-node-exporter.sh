@@ -105,7 +105,8 @@ _mirror() {
     rm -rf "$dir"
 }
 assert_eq "$(_mirror 1.8.2)" "quay.io/prometheus/node-exporter:v1.8.2 node-exporter:v1.8.2" "node-exporter mirrored to <registry>/node-exporter:v<appVersion>"
-assert_eq "$(_mirror '"1.9.0"')" "quay.io/prometheus/node-exporter:v1.9.0 node-exporter:v1.9.0" "quoted appVersion handled"
+assert_eq "$(_mirror '"1.9.0"')" "quay.io/prometheus/node-exporter:v1.9.0 node-exporter:v1.9.0" "double-quoted appVersion handled"
+assert_eq "$(_mirror "'1.9.0'")" "quay.io/prometheus/node-exporter:v1.9.0 node-exporter:v1.9.0" "single-quoted appVersion handled"
 assert_eq "$(_mirror "")" "" "no sub-chart -> skipped with a warning, not a broken entry"
 
 test_summary
