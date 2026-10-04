@@ -1184,6 +1184,22 @@ select_retention_tier() {
         PROMETHEUS_VOLUME_SIZE="50Gi"
     fi
 }
+
+# keep_vm_volume_size "$existing_vm_pvc_size"
+# VictoriaMetrics only. Our chart templates VM's PVC and a PVC can't shrink, so when the
+# existing VM volume is larger than PROMETHEUS_VOLUME_SIZE, keep its size — otherwise the
+# helm upgrade fails ("field can not be less than status.capacity"). Gi sizes only;
+# anything else is left to the tier value.
+keep_vm_volume_size() {
+    [ "${METRICS_BACKEND:-prometheus}" = "victoriametrics" ] || return 0
+    local existing="$1" existing_gi tier_gi
+    existing_gi=$(echo "$existing" | sed -n 's/^\([0-9][0-9]*\)Gi$/\1/p')
+    tier_gi=$(echo "$PROMETHEUS_VOLUME_SIZE" | sed -n 's/^\([0-9][0-9]*\)Gi$/\1/p')
+    if [ -n "$existing_gi" ] && [ -n "$tier_gi" ] && [ "$existing_gi" -gt "$tier_gi" ]; then
+        echo "Existing VictoriaMetrics PVC ($existing) is larger than tier default ($PROMETHEUS_VOLUME_SIZE). Keeping existing size."
+        PROMETHEUS_VOLUME_SIZE="$existing"
+    fi
+}
 # --- End embedded content ---
 # END_EMBED
 
@@ -1348,6 +1364,7 @@ if [[ -n "$CURRENT_VALUES" ]] && command -v jq &>/dev/null; then
   PROXY_NO=$(_get '.["onelens-agent"].env.NO_PROXY')
   FULL_EVAL_INTERVAL_HOURS=$(_get '.["onelens-agent"].env.FULL_EVAL_INTERVAL_HOURS')
   METRICS_BACKEND=$(_get '.["onelens-agent"].env.METRICS_BACKEND')
+  NODE_EXPORTER_OPT_IN=$(_get '.["onelens-agent"].env.NODE_EXPORTER_ENABLED')
   # Read user-supplied values WITHOUT -a flag — chart defaults like "false" would
   # be mistaken for customer overrides with -a. Single call for GPU + NC fields.
   _user_vals=$(helm get values onelens-agent -n onelens-agent -o json 2>/dev/null || true)
@@ -1468,6 +1485,7 @@ else
   EXISTING_PVC_SIZE=""
   FULL_EVAL_INTERVAL_HOURS=""
   METRICS_BACKEND=""
+  NODE_EXPORTER_OPT_IN=""
 fi
 
 # Default METRICS_BACKEND to prometheus if not set (fresh installs or pre-VM clusters)
@@ -2131,19 +2149,28 @@ if [ "$NC_ENABLED" = "true" ]; then
     fi
 fi
 
-# --- Node Exporter: detect existing deployment ---
-# If node-exporter already runs in the cluster (customer monitoring stack),
-# skip deploying ours to avoid port 9100 conflicts. The scrape config
-# targets <node_ip>:9100 regardless — it'll scrape whatever is there.
+# --- Node Exporter: opt-in or already deployed, then detect existing deployment ---
+# Not deployed unless the cluster opted in at install (onelens-agent.env.NODE_EXPORTER_ENABLED=true):
+# nothing reads its metrics yet, and air-gapped registries don't carry its image.
+# A release that already deploys ours (2.1.113+) keeps it — decided from our own
+# release values, so existing clusters are left as they are.
+# When node-exporter already runs in the cluster (customer monitoring stack), skip
+# deploying ours to avoid port 9100 conflicts. The scrape config targets
+# <node_ip>:9100 regardless — it'll scrape whatever is there.
 NODE_EXPORTER_ENABLED="false"
-_NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
-    | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
-_NE_COUNT="${_NE_COUNT:-0}"
-if [ "$_NE_COUNT" -gt 0 ]; then
-    echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+_NE_IN_RELEASE=$(echo "${CURRENT_VALUES:-}" | jq -r '.prometheus["prometheus-node-exporter"].enabled // false' 2>/dev/null || true)
+if [ "${NODE_EXPORTER_OPT_IN:-}" != "true" ] && [ "$_NE_IN_RELEASE" != "true" ]; then
+    echo "Node exporter: disabled (default; set NODE_EXPORTER_ENABLED=true to deploy it)"
 else
-    NODE_EXPORTER_ENABLED="true"
-    echo "Node exporter: deploying (no existing node-exporter detected)"
+    _NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
+        | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
+    _NE_COUNT="${_NE_COUNT:-0}"
+    if [ "$_NE_COUNT" -gt 0 ]; then
+        echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+    else
+        NODE_EXPORTER_ENABLED="true"
+        echo "Node exporter: deploying (no existing node-exporter detected)"
+    fi
 fi
 
 # --- Agent OOM pre-helm detection ---
@@ -2536,6 +2563,12 @@ if [ -n "$EXISTING_PVC_SIZE" ]; then
         echo "Existing PVC size ($EXISTING_PVC_SIZE) is larger than tier default ($PROMETHEUS_VOLUME_SIZE). Keeping existing size."
         PROMETHEUS_VOLUME_SIZE="$EXISTING_PVC_SIZE"
     fi
+fi
+# VictoriaMetrics: EXISTING_PVC_SIZE is the Prometheus PVC (or its helm value); VM's own
+# volume can't shrink either
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    keep_vm_volume_size "$(kubectl get pvc onelens-agent-victoriametrics -n onelens-agent \
+        -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)"
 fi
 
 # Memory guard: usage-based sizing (above) replaces the old "never downsize" guard.
@@ -3700,9 +3733,13 @@ if [ -n "$REGISTRY_URL" ] && [ "$NC_ENABLED" = "true" ]; then
       --set onelens-agent.networkCosts.image.repository=onelens-network-costs"
 fi
 
-# Node exporter (auto-detected, skip if customer already has one)
+# Node exporter (opt-in; skip if customer already has one)
 HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.enabled=$NODE_EXPORTER_ENABLED"
 HELM_CMD="$HELM_CMD --set prometheus.prometheus-node-exporter.hostPID=false"
+if [ "${NODE_EXPORTER_OPT_IN:-}" = "true" ]; then
+    # --set-string: env values land in a ConfigMap, which only accepts strings
+    HELM_CMD="$HELM_CMD --set-string onelens-agent.env.NODE_EXPORTER_ENABLED=true"
+fi
 
 # Force-delete pods stuck in Terminating for >10 min before helm upgrade.
 # Pods on dead/unreachable nodes stay Terminating forever because kubelet can't
