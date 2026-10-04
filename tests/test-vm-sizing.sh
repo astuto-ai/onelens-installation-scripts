@@ -97,7 +97,7 @@ scan_loop=$(grep -c 'for component in "\$METRICS_COMPONENT" kube-state-metrics' 
 assert_eq "$scan_loop" "1" "failing-pod scan includes the metrics backend pod"
 
 ready_checks=$(grep -c 'awk -v p="\$METRICS_COMPONENT"' "$PATCHING" || true)
-assert_eq "$ready_checks" "3" "metrics readiness checks (scan, OpenCost dependency, agent trigger) use METRICS_COMPONENT"
+assert_eq "$ready_checks" "7" "metrics pod lookups (scan, OpenCost dependency, agent trigger, 4x PV health) use METRICS_COMPONENT"
 
 kubectl_fallback=$(grep -c '_kubectl_set_resources "\$METRICS_DEPLOYMENT" "\$METRICS_COMPONENT"' "$PATCHING" || true)
 assert_eq "$kubectl_fallback" "1" "kubectl resource fallback patches the metrics backend deployment"
@@ -134,12 +134,28 @@ reason_fn=$(sed -n '/^_get_pod_failure_reason() {/,/^}/p' "$PATCHING")
 assert_ne "$reason_fn" "" "patching.sh has _get_pod_failure_reason"
 eval "$reason_fn"
 
+# Pod snapshot (kubectl get pod -o json) with a healthy sidecar at index 0 and the
+# app container in the given terminated / waiting (+ lastState) state.
+_pod_json() {
+    jq -n --arg term "$1" --arg wait "$2" --arg last "$3" '{status: {
+        containerStatuses: [
+            {name: "sidecar", state: {running: {}}},
+            ({name: "victoriametrics",
+              state: (if $term != "" then {terminated: {reason: $term}}
+                      elif $wait != "" then {waiting: {reason: $wait}}
+                      else {running: {}} end)}
+             + (if $last != "" then {lastState: {terminated: {reason: $last}}} else {} end))
+        ],
+        conditions: [{type: "Ready", status: "False", reason: "ContainersNotReady"}]}}'
+}
+
 _reason() {
     local term="$1" wait="$2" clb_last="$3" backend="${4:-victoriametrics}"
     (
         METRICS_BACKEND="$backend"
         kubectl() {
             case "$*" in
+                *'-o json') _pod_json "$term" "$wait" "$clb_last" ;;
                 *'waiting.reason=="CrashLoopBackOff"'*) echo "$clb_last" ;;
                 *'?(@.state.terminated)]'*) echo "$term" ;;
                 *'?(@.state.waiting)]'*) echo "$wait" ;;
@@ -163,7 +179,26 @@ _calls() {
     wc -l < "$f" | tr -d ' '; rm -f "$f"
 }
 assert_eq "$(_calls prometheus)" "2" "Prometheus: classifier makes the same 2 kubectl calls as before"
-assert_eq "$(_calls victoriametrics)" "3" "VictoriaMetrics: classifier adds the lastState lookup"
+assert_eq "$(_calls victoriametrics)" "1" "VictoriaMetrics: classifier reads the pod once"
+
+# False CODE BUG alert seen on prod-gcp: the container restarted between separate reads,
+# so the CrashLoopBackOff read and the lastState read saw different states. Every read
+# after the first one here sees the restarted (running) container.
+_race() {
+    local f; f=$(mktemp)
+    (
+        METRICS_BACKEND=victoriametrics
+        kubectl() {
+            echo call >> "$f"
+            if [ "$(wc -l < "$f")" -eq 1 ]; then _pod_json "" CrashLoopBackOff OOMKilled; else _pod_json "" "" ""; fi
+        }
+        _get_pod_failure_reason "pod-x"
+    )
+    rm -f "$f"
+}
+assert_eq "$(_race)" "OOMKilled" "VictoriaMetrics: a restart between reads cannot hide the OOM (one snapshot)"
+assert_eq "$(_reason "" "" "")" "ContainersNotReady" "VictoriaMetrics: no failing container -> Ready condition reason from the snapshot"
+assert_eq "$(METRICS_BACKEND=victoriametrics; kubectl() { return 1; }; _get_pod_failure_reason "pod-x")" "Unknown" "VictoriaMetrics: pod gone -> Unknown"
 
 ###############################################################################
 # Test 9: OOMs are recorded for the 7-day hold even without usage data

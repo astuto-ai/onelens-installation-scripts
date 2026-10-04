@@ -123,9 +123,20 @@ elif [ "$deployment_type" = "cronjob" ]; then
     # Filter out terminal job/cronjob pods (Completed, Error) and DCGM exporter pods.
     # DCGM is a monitoring sidecar — its failures (PSA, image pull) should not
     # trigger full patching.sh remediation for core components.
-    NOT_READY=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
+    # Job pods that are still starting are skipped for their first 10 minutes: the
+    # agent CronJob fires at :00 together with this one, and its pod is often still
+    # ContainerCreating (image pull after a release or on a new node). A job pod stuck
+    # longer, or failing (OOMKilled, ImagePullBackOff), still counts.
+    # --show-labels appends LABELS as the last column, so AGE is $(NF-1).
+    NOT_READY=$(kubectl get pods -n onelens-agent --no-headers --show-labels 2>/dev/null \
         | grep -vE 'Completed|Error|Terminating|nvidia-dcgm-exporter' \
-        | awk '{split($2,a,"/"); if (a[1] != a[2] || $3 != "Running") print $1 " (" $3 ")"}' || true)
+        | awk '{
+            split($2,a,"/"); if (a[1] == a[2] && $3 == "Running") next
+            age = $(NF-1)
+            young = (age ~ /^[0-9]+s$/ || (age ~ /^[0-9]+m([0-9]+s)?$/ && age + 0 < 10))
+            if ($NF ~ /job-name=/ && $3 ~ /^(Pending|ContainerCreating|PodInitializing|Init:[0-9])/ && young) next
+            print $1 " (" $3 ")"
+        }' || true)
     if [ -n "$NOT_READY" ]; then
         UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Pods not ready: ${NOT_READY}\n"
     fi

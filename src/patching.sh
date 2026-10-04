@@ -1338,15 +1338,21 @@ if [ -n "$_agent_bump_reason" ]; then
     fi
 fi
 
-echo "Checking Prometheus persistent volume health..."
-PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+echo "Checking $METRICS_LABEL persistent volume health..."
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    # VM's PVC has a fixed name (victoriametrics-pvc.yaml). A Prometheus PVC left over
+    # from before the switch is unused and must not be checked in its place.
+    PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -o jsonpath='{.items[?(@.metadata.name=="onelens-agent-victoriametrics")].metadata.name}' 2>/dev/null || true)
+else
+    PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
-# Fallback: try common PVC name patterns if label selector found nothing
-if [ -z "$PROM_PVC_NAME" ]; then
-    PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -o jsonpath='{.items[?(@.metadata.name=="onelens-agent-prometheus-server")].metadata.name}' 2>/dev/null || true)
-fi
-if [ -z "$PROM_PVC_NAME" ]; then
-    PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+    # Fallback: try common PVC name patterns if label selector found nothing
+    if [ -z "$PROM_PVC_NAME" ]; then
+        PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent -o jsonpath='{.items[?(@.metadata.name=="onelens-agent-prometheus-server")].metadata.name}' 2>/dev/null || true)
+    fi
+    if [ -z "$PROM_PVC_NAME" ]; then
+        PROM_PVC_NAME=$(kubectl get pvc -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+    fi
 fi
 
 
@@ -1399,7 +1405,7 @@ _do_pv_recovery() {
     local pvc_name="$1" pv_name="$2" old_size="$3"
 
     echo ""
-    echo "ERROR: Prometheus PV recovery required — manual intervention needed."
+    echo "ERROR: $METRICS_LABEL PV recovery required — manual intervention needed."
     echo "The deployer does not have permissions to delete/patch PersistentVolumes (cluster-scoped security restriction)."
     echo ""
     echo "Manual remediation steps:"
@@ -1445,7 +1451,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
 
             # Check 2: Confirm PVC is in Lost state, or pod is not running due to volume issues
             # When PV is deleted, PVC goes to "Lost" and pod gets FailedScheduling (not even FailedMount).
-            PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+            PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk -v p="$METRICS_COMPONENT" '$0 ~ p {print $1; exit}' || true)
             POD_STATUS=""
             POD_ISSUES=""
             if [ -n "$PROM_POD" ]; then
@@ -1456,7 +1462,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
 
             # Recovery if: PVC is Lost, OR pod has volume/scheduling errors, OR pod is not Running
             if [ "$PVC_STATUS" = "Lost" ] || [ -n "$POD_ISSUES" ] || [ "$POD_STATUS" = "Pending" ]; then
-                echo "Prometheus pod: status=$POD_STATUS"
+                echo "$METRICS_LABEL pod: status=$POD_STATUS"
                 if [ -n "$POD_ISSUES" ]; then
                     echo "Pod issues:"
                     echo "$POD_ISSUES"
@@ -1492,7 +1498,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     # Look for FailedMount/FailedAttachVolume events to distinguish from slow image pulls.
                     # Single kubectl call to avoid race condition between name and status extraction.
                     _pod_line=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
-                        | awk '/prometheus-server/ && !/Terminating/{print; exit}' || true)
+                        | awk -v p="$METRICS_COMPONENT" '$0 ~ p && !/Terminating/{print; exit}' || true)
                     _new_pod_name=$(echo "$_pod_line" | awk '{print $1}')
                     _new_pod_status=$(echo "$_pod_line" | awk '{print $3}')
                     echo "Pod status after restart: ${_new_pod_status:-unknown}"
@@ -1515,7 +1521,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                             _auto_recover_pvc "$PROM_PVC_NAME" "$OLD_PVC_SIZE" || _PV_NEEDS_MANUAL_FIX=true
                         fi
                     else
-                        echo "No prometheus-server pod found after restart. Skipping auto-recovery."
+                        echo "No $METRICS_COMPONENT pod found after restart. Skipping auto-recovery."
                     fi
                 fi
             else
@@ -1530,7 +1536,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 echo "PV '$BOUND_PV' exists but is in '$PV_STATUS' state."
                 echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC"
 
-                PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+                PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk -v p="$METRICS_COMPONENT" '$0 ~ p {print $1; exit}' || true)
                 POD_STATUS=""
                 POD_ISSUES=""
                 if [ -n "$PROM_POD" ]; then
@@ -1540,7 +1546,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 fi
 
                 if [ -n "$POD_ISSUES" ] || [ "$POD_STATUS" = "Pending" ] || [ "$POD_STATUS" != "Running" ]; then
-                    echo "Prometheus pod: status=$POD_STATUS"
+                    echo "$METRICS_LABEL pod: status=$POD_STATUS"
                     if [ -n "$POD_ISSUES" ]; then
                         echo "Pod issues:"
                         echo "$POD_ISSUES"
@@ -1552,7 +1558,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
             else
                 # PV exists and status looks fine — but underlying disk may be deleted.
                 # Check if pod has FailedMount errors (EBS gone but PV/PVC still show Bound).
-                PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk '/prometheus-server/{print $1; exit}' || true)
+                PROM_POD=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null | awk -v p="$METRICS_COMPONENT" '$0 ~ p {print $1; exit}' || true)
                 POD_STATUS=""
                 MOUNT_ERRORS=""
                 if [ -n "$PROM_POD" ]; then
@@ -1566,7 +1572,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                     OLD_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
                     echo "PV '$BOUND_PV' exists (status: $PV_STATUS) but underlying disk is gone."
                     echo "Old PVC: size=$OLD_PVC_SIZE storageClass=$OLD_PVC_SC"
-                    echo "Prometheus pod: status=$POD_STATUS"
+                    echo "$METRICS_LABEL pod: status=$POD_STATUS"
                     echo "Mount errors:"
                     echo "$MOUNT_ERRORS"
 
@@ -1574,7 +1580,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
                 else
                     CURRENT_PVC_SIZE=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
                     CURRENT_PVC_SC=$(kubectl get pvc "$PROM_PVC_NAME" -n onelens-agent -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
-                    echo "Prometheus PV '$BOUND_PV' is healthy (status: $PV_STATUS)."
+                    echo "$METRICS_LABEL PV '$BOUND_PV' is healthy (status: $PV_STATUS)."
                     echo "PVC: name=$PROM_PVC_NAME size=$CURRENT_PVC_SIZE storageClass=$CURRENT_PVC_SC"
                 fi
             fi
@@ -1583,7 +1589,7 @@ if [ -n "$PROM_PVC_NAME" ]; then
         echo "PVC '$PROM_PVC_NAME' has no bound PV (may be Pending). Helm upgrade will handle provisioning."
     fi
 else
-    echo "No Prometheus PVC found in onelens-agent namespace. PV may not be enabled."
+    echo "No $METRICS_LABEL PVC found in onelens-agent namespace. PV may not be enabled."
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1771,7 +1777,7 @@ else
 fi
 
 if [ "$_PV_NEEDS_MANUAL_FIX" = "true" ]; then
-    echo "Skipping helm upgrade — Prometheus PV requires manual recovery first."
+    echo "Skipping helm upgrade — $METRICS_LABEL PV requires manual recovery first."
     echo "After manual recovery, re-run patching to apply resource updates."
     exit 1
 fi
@@ -2080,18 +2086,27 @@ _get_pod_failure_reason() {
     # ANY container that is terminated or waiting (skips healthy sidecars at
     # index 0). If multiple containers are failing, jsonpath returns reasons
     # space-separated — prefer OOMKilled over other reasons.
-    local term_reasons waiting_reasons crashloop_last_reasons=""
-    term_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[?(@.state.terminated)].state.terminated.reason}' 2>/dev/null)
-    waiting_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
-        -o jsonpath='{.status.containerStatuses[?(@.state.waiting)].state.waiting.reason}' 2>/dev/null)
+    local term_reasons waiting_reasons crashloop_last_reasons="" pod_json=""
     # A crash-looping container killed by the kernel OOM killer is waiting=CrashLoopBackOff;
     # the OOM is only in lastState (the app's own logs never mention it). VictoriaMetrics
     # clusters only: on Prometheus this would add kubectl bump+restart cycles (WAL replays)
     # on top of the helm OOM retry, which helm then reverts.
+    # All reasons come from one pod snapshot: separate reads can straddle a container
+    # restart (CrashLoopBackOff on one read, Running on the next), which hid the OOM
+    # and raised a false CODE BUG alert.
     if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
-        crashloop_last_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
-            -o jsonpath='{.status.containerStatuses[?(@.state.waiting.reason=="CrashLoopBackOff")].lastState.terminated.reason}' 2>/dev/null)
+        pod_json=$(kubectl get pod "$pod_name" -n onelens-agent -o json 2>/dev/null || true)
+        term_reasons=$(echo "$pod_json" | jq -r \
+            '[.status.containerStatuses[]? | .state.terminated.reason // empty] | join(" ")' 2>/dev/null || true)
+        waiting_reasons=$(echo "$pod_json" | jq -r \
+            '[.status.containerStatuses[]? | .state.waiting.reason // empty] | join(" ")' 2>/dev/null || true)
+        crashloop_last_reasons=$(echo "$pod_json" | jq -r \
+            '[.status.containerStatuses[]? | select(.state.waiting.reason == "CrashLoopBackOff") | .lastState.terminated.reason // empty] | join(" ")' 2>/dev/null || true)
+    else
+        term_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[?(@.state.terminated)].state.terminated.reason}' 2>/dev/null)
+        waiting_reasons=$(kubectl get pod "$pod_name" -n onelens-agent \
+            -o jsonpath='{.status.containerStatuses[?(@.state.waiting)].state.waiting.reason}' 2>/dev/null)
     fi
 
     if [ -n "$term_reasons" ]; then
@@ -2106,6 +2121,10 @@ _get_pod_failure_reason() {
     elif [ -n "$waiting_reasons" ]; then
         # Return the first waiting reason (sidecar-order-independent)
         echo "$waiting_reasons" | awk '{print $1}'
+    elif [ -n "$pod_json" ]; then
+        # Fallback: check pod conditions (same snapshot)
+        echo "$pod_json" | jq -r \
+            '[.status.conditions[]? | select(.type == "Ready") | .reason // empty] | join(" ")' 2>/dev/null || true
     else
         # Fallback: check pod conditions
         kubectl get pod "$pod_name" -n onelens-agent \
