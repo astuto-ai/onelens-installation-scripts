@@ -517,19 +517,31 @@ if [ "${GPU_MONITORING_ENABLED:-}" = "true" ]; then
     fi
 fi
 
-# --- Node Exporter: detect existing deployment ---
-# If node-exporter already runs in the cluster (customer monitoring stack),
-# skip deploying ours to avoid port 9100 conflicts. The scrape config
-# targets <node_ip>:9100 regardless — it'll scrape whatever is there.
+# --- Node Exporter: opt-in or already deployed, then detect existing deployment ---
+# New installs don't deploy ours unless NODE_EXPORTER_ENABLED=true (deployer job env):
+# nothing reads its metrics yet, and air-gapped registries don't carry its image.
+# The opt-in is persisted in onelens-agent.env so patching.sh keeps it. A release that
+# already deploys ours (2.1.113+) keeps it — decided from our own release values, so a
+# re-install never changes what is running.
+# When node-exporter already runs in the cluster (customer monitoring stack), skip
+# deploying ours to avoid port 9100 conflicts. The scrape config targets
+# <node_ip>:9100 regardless — it'll scrape whatever is there.
+NODE_EXPORTER_OPT_IN="${NODE_EXPORTER_ENABLED:-false}"
 NODE_EXPORTER_ENABLED="false"
-_NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
-    | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
-_NE_COUNT="${_NE_COUNT:-0}"
-if [ "$_NE_COUNT" -gt 0 ]; then
-    echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+_NE_IN_RELEASE=$(helm get values onelens-agent -n onelens-agent -a -o json 2>/dev/null \
+    | jq -r '.prometheus["prometheus-node-exporter"].enabled // false' 2>/dev/null || true)
+if [ "$NODE_EXPORTER_OPT_IN" != "true" ] && [ "$_NE_IN_RELEASE" != "true" ]; then
+    echo "Node exporter: disabled (default; set NODE_EXPORTER_ENABLED=true to deploy it)"
 else
-    NODE_EXPORTER_ENABLED="true"
-    echo "Node exporter: deploying (no existing node-exporter detected)"
+    _NE_COUNT=$(kubectl get ds --all-namespaces -o json 2>/dev/null \
+        | jq '[.items[] | select(.metadata.name | test("node-exporter"; "i")) | select(.metadata.namespace | test("onelens-agent"; "i") | not)] | length' 2>/dev/null)
+    _NE_COUNT="${_NE_COUNT:-0}"
+    if [ "$_NE_COUNT" -gt 0 ]; then
+        echo "Node exporter: using existing deployment (detected $_NE_COUNT DaemonSet(s) outside onelens-agent)"
+    else
+        NODE_EXPORTER_ENABLED="true"
+        echo "Node exporter: deploying (no existing node-exporter detected)"
+    fi
 fi
 
 # --- Air-gapped self-detection ---
@@ -608,6 +620,11 @@ PROMETHEUS_CONFIGMAP_RELOAD_MEMORY_LIMIT="32Mi"
 
 # --- Retention and volume sizing ---
 select_retention_tier "$TOTAL_PODS"
+# Re-install over an existing VictoriaMetrics volume (patching.sh may have kept it larger)
+if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
+    keep_vm_volume_size "$(kubectl get pvc onelens-agent-victoriametrics -n onelens-agent \
+        -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)"
+fi
 
 # Phase 8: Helm Deployment
 check_var() {
@@ -860,9 +877,13 @@ if [ "${NETWORK_COSTS_ENABLED:-}" = "true" ]; then
     fi
 fi
 
-# Node exporter (auto-detected, skip if customer already has one)
+# Node exporter (opt-in; skip if customer already has one)
 CMD+=" --set prometheus.prometheus-node-exporter.enabled=$NODE_EXPORTER_ENABLED"
 CMD+=" --set prometheus.prometheus-node-exporter.hostPID=false"
+if [ "$NODE_EXPORTER_OPT_IN" = "true" ]; then
+    # --set-string: env values land in a ConfigMap, which only accepts strings
+    CMD+=" --set-string onelens-agent.env.NODE_EXPORTER_ENABLED=true"
+fi
 
 # Multi-AZ storage overrides (EFS for AWS, Azure Files for Azure)
 # These override the default block-storage provisioner with a multi-AZ file-storage provisioner,

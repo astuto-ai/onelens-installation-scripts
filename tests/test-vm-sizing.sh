@@ -229,5 +229,26 @@ assert_eq "$(echo "$pgw_rec" | jq -r '.data["prometheus-server.last_oom_at"]')" 
 assert_eq "$(_record "" victoriametrics)" "" "nothing written when no OOMs detected"
 assert_eq "$(_record "prometheus-server" prometheus-server prometheus)" "" "Prometheus: no-data OOM recording not applied (behavior unchanged)"
 
+###############################################################################
+# Test 10: re-install keeps a larger existing VictoriaMetrics volume
+###############################################################################
+# prod-aws: patching kept VM's PVC at 10Gi; a re-install computed the tiny-tier 8Gi
+# and the helm upgrade failed ("field can not be less than status.capacity").
+_vol() {
+    local backend="$1" tier="$2" existing="$3"
+    ( METRICS_BACKEND="$backend" PROMETHEUS_VOLUME_SIZE="$tier"
+      keep_vm_volume_size "$existing" >/dev/null; echo "$PROMETHEUS_VOLUME_SIZE" )
+}
+assert_eq "$(_vol victoriametrics 8Gi 10Gi)" "10Gi" "VM: larger existing volume kept"
+assert_eq "$(_vol victoriametrics 20Gi 10Gi)" "20Gi" "VM: tier grows past the existing volume"
+assert_eq "$(_vol victoriametrics 10Gi 10Gi)" "10Gi" "VM: equal size unchanged"
+assert_eq "$(_vol victoriametrics 8Gi "")" "8Gi" "VM: no existing PVC -> tier size"
+assert_eq "$(_vol victoriametrics 8Gi 10737418240)" "8Gi" "VM: non-Gi size left to the tier value"
+assert_eq "$(_vol prometheus 8Gi 10Gi)" "8Gi" "Prometheus: untouched (its PVC is reused via existingClaim)"
+for f in "$ROOT/install.sh" "$PATCHING"; do
+    calls=$(grep -A2 'METRICS_BACKEND" = "victoriametrics" \]; then' "$f" | grep -c 'keep_vm_volume_size' || true)
+    assert_eq "$calls" "1" "$(basename "$f") applies keep_vm_volume_size to the VM PVC"
+done
+
 test_summary
 exit $?

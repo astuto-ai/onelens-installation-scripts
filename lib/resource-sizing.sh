@@ -864,3 +864,19 @@ select_retention_tier() {
         PROMETHEUS_VOLUME_SIZE="50Gi"
     fi
 }
+
+# keep_vm_volume_size "$existing_vm_pvc_size"
+# VictoriaMetrics only. Our chart templates VM's PVC and a PVC can't shrink, so when the
+# existing VM volume is larger than PROMETHEUS_VOLUME_SIZE, keep its size — otherwise the
+# helm upgrade fails ("field can not be less than status.capacity"). Gi sizes only;
+# anything else is left to the tier value.
+keep_vm_volume_size() {
+    [ "${METRICS_BACKEND:-prometheus}" = "victoriametrics" ] || return 0
+    local existing="$1" existing_gi tier_gi
+    existing_gi=$(echo "$existing" | sed -n 's/^\([0-9][0-9]*\)Gi$/\1/p')
+    tier_gi=$(echo "$PROMETHEUS_VOLUME_SIZE" | sed -n 's/^\([0-9][0-9]*\)Gi$/\1/p')
+    if [ -n "$existing_gi" ] && [ -n "$tier_gi" ] && [ "$existing_gi" -gt "$tier_gi" ]; then
+        echo "Existing VictoriaMetrics PVC ($existing) is larger than tier default ($PROMETHEUS_VOLUME_SIZE). Keeping existing size."
+        PROMETHEUS_VOLUME_SIZE="$existing"
+    fi
+}
