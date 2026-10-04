@@ -229,6 +229,21 @@ else
     echo "  WARNING: Skipping pushgateway — could not determine tag."
 fi
 
+# node-exporter (deployed only on clusters that opt in with NODE_EXPORTER_ENABLED=true;
+# no tag in globalvalues — the sub-chart tags it v<appVersion>)
+_repo="quay.io/prometheus/node-exporter"
+_tag=""
+if [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" ]; then
+    _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" | awk '{print $2}' | tr -d '"')"
+fi
+if [ -n "$_tag" ] && [ "$_tag" != "v" ]; then
+    IMAGES="${IMAGES}
+${_repo}:${_tag} node-exporter:${_tag}"
+    echo "  node-exporter: ${_repo}:${_tag}"
+else
+    echo "  WARNING: Skipping node-exporter — could not determine tag."
+fi
+
 # dcgm-exporter (GPU monitoring — only deployed on GPU clusters)
 _repo="nvcr.io/nvidia/k8s/dcgm-exporter"
 _tag=$(grep 'dcgmExporter' "$_V" -A1 | grep 'image:' | head -1 | awk -F: '{print $NF}' | tr -d ' "' || true)
