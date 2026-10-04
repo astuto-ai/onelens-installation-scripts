@@ -198,6 +198,42 @@ assert_gt "$dcgm_excluded" "0" "entrypoint.sh excludes DCGM pods from NOT_READY 
 dcgm_lifecycle=$(grep -c 'GPU: DCGM exporter lifecycle' "$ENTRYPOINT" || true)
 assert_gt "$dcgm_lifecycle" "0" "entrypoint.sh has DCGM lifecycle block in healthcheck"
 
+###############################################################################
+# Healthcheck pod readiness: CronJob pods that are still starting
+###############################################################################
+# The agent CronJob fires at :00 together with the updater. Its pod still in
+# ContainerCreating (image pull after a release / on a new node) used to fail the
+# healthcheck and trigger a full patching run.
+nr_block=$(sed -n '/NOT_READY=\$(kubectl/,/|| true)/p' "$ENTRYPOINT")
+assert_ne "$nr_block" "" "NOT_READY block found"
+
+# _not_ready <kubectl get pods --no-headers --show-labels output>
+_not_ready() {
+    local pods="$1"
+    (
+        kubectl() { printf '%s\n' "$pods"; }
+        eval "$nr_block"
+        echo "$NOT_READY"
+    )
+}
+JOB_LABELS="batch.kubernetes.io/job-name=onelens-agent-29848560,controller-uid=abc,job-name=onelens-agent-29848560"
+DEP_LABELS="app.kubernetes.io/name=prometheus-opencost-exporter,pod-template-hash=7d9f"
+_job()  { echo "onelens-agent-29848560-x1    $1   $2   0   $3   $JOB_LABELS"; }
+_dep()  { echo "onelens-agent-prometheus-opencost-exporter-7d9f-x2   $1   $2   $3   $4   $DEP_LABELS"; }
+HEALTHY=$(_dep 1/1 Running "3 (5m ago)" 2d)
+
+assert_eq "$(_not_ready "$HEALTHY")" "" "healthy Deployment pod (restarts with '(5m ago)') passes"
+assert_eq "$(_not_ready "$HEALTHY"$'\n'"$(_job 0/1 ContainerCreating 8s)")" "" "agent job pod ContainerCreating 8s is skipped"
+assert_eq "$(_not_ready "$(_job 0/1 Pending 5m30s)")" "" "agent job pod Pending 5m30s is skipped"
+assert_eq "$(_not_ready "$(_job 0/1 Init:0/1 119s)")" "" "agent job pod Init 119s is skipped"
+assert_contains "$(_not_ready "$(_job 0/1 ContainerCreating 10m)")" "ContainerCreating" "agent job pod still ContainerCreating at 10m is reported"
+assert_contains "$(_not_ready "$(_job 0/1 Pending 1h)")" "Pending" "agent job pod Pending for 1h is reported"
+assert_contains "$(_not_ready "$(_job 0/1 OOMKilled 30s)")" "OOMKilled" "agent job pod OOMKilled is reported (agent OOM bump still triggers)"
+assert_contains "$(_not_ready "$(_job 0/1 ImagePullBackOff 2m)")" "ImagePullBackOff" "agent job pod ImagePullBackOff is reported"
+assert_eq "$(_not_ready "$(_job 0/1 Completed 50m)")" "" "completed agent job pod is ignored"
+assert_contains "$(_not_ready "$(_dep 0/1 ContainerCreating 0 8s)")" "ContainerCreating" "Deployment pod ContainerCreating is reported (unchanged)"
+assert_contains "$(_not_ready "$(_dep 0/1 Running "3 (2m ago)" 1h)")" "(Running)" "Deployment pod Running 0/1 is reported (unchanged)"
+
 # DCGM detection uses same GPU capacity check as patching.sh
 dcgm_gpu_detect=$(grep -c 'status.capacity.nvidia' "$ENTRYPOINT" || true)
 assert_gt "$dcgm_gpu_detect" "0" "entrypoint.sh detects GPU nodes via capacity"

@@ -79,9 +79,9 @@ assert_gt "$bsd_date" "0" "Pod age falls back to BSD date -j -f for macOS"
 # that feeds both name and status extraction.
 
 # Extract the PV restart validation block specifically (between "surface volume failure"
-# and "No prometheus-server pod found after restart") — avoid matching the earlier
+# and "No $METRICS_COMPONENT pod found after restart") — avoid matching the earlier
 # pod restart block at ~line 472 which is unrelated.
-restart_block=$(sed -n '/surface volume failure/,/No prometheus-server pod found after restart/p' "$PATCHING")
+restart_block=$(sed -n '/surface volume failure/,/pod found after restart/p' "$PATCHING")
 
 # Count kubectl get pods calls in that block (should be 1: the single-call pattern)
 kubectl_calls=$(echo "$restart_block" | grep -c 'kubectl get pods' || true)
@@ -105,7 +105,7 @@ assert_gt "$skip_flag_check" "0" "_skip_restart flag controls pod restart"
 
 # The delete pod command must be inside the skip_restart=false guard.
 # Extract lines between the guard check and the end of the restart block.
-guard_block=$(sed -n '/skip_restart.*=.*"false"/,/No prometheus-server pod found after restart/p' "$PATCHING")
+guard_block=$(sed -n '/skip_restart.*=.*"false"/,/pod found after restart/p' "$PATCHING")
 delete_in_block=$(echo "$guard_block" | grep -c 'kubectl delete pod' || true)
 assert_gt "$delete_in_block" "0" "kubectl delete pod is inside the _skip_restart=false guard"
 
@@ -138,7 +138,7 @@ pv_confirmed_msg=$(grep -c 'PV is confirmed missing and pod did not recover' "$P
 assert_gt "$pv_confirmed_msg" "0" "Auto-recovery proceeds when PV confirmed missing and pod not Running"
 
 # Verify the auto-recovery call exists in both the mount-events path AND the no-events path
-recover_block=$(sed -n '/Volume mount failure confirmed/,/No prometheus-server pod found/p' "$PATCHING")
+recover_block=$(sed -n '/Volume mount failure confirmed/,/pod found after restart/p' "$PATCHING")
 recover_calls=$(echo "$recover_block" | grep -c '_auto_recover_pvc' || true)
 assert_eq "$recover_calls" "2" "Auto-recovery called in both mount-events and no-events paths"
 
@@ -164,6 +164,47 @@ fi
 az_diag=$(grep 'PV_AZ_MISMATCH' "$PATCHING" | head -1)
 assert_contains "$az_diag" "EFS for AWS" "AZ mismatch diagnostic mentions EFS"
 assert_contains "$az_diag" "Azure Files for Azure" "AZ mismatch diagnostic mentions Azure Files"
+
+###############################################################################
+# Test 12b: PV health check follows the metrics backend
+###############################################################################
+# On VictoriaMetrics clusters the check used to find only the (unused) Prometheus PVC
+# left over from before the switch, report it healthy, and never look at VM's volume.
+pvc_lookup=$(sed -n '/^echo "Checking \$METRICS_LABEL persistent volume health/,/^fi$/p' "$PATCHING")
+assert_ne "$pvc_lookup" "" "PV health check PVC lookup block found"
+
+# _pvc_for <backend> <PVCs present...>
+_pvc_for() {
+    local backend="$1"; shift
+    local present="$*"
+    (
+        METRICS_BACKEND="$backend"; METRICS_LABEL=x
+        kubectl() {
+            case "$*" in
+                *'@.metadata.name=="onelens-agent-victoriametrics"'*)
+                    case " $present " in *" onelens-agent-victoriametrics "*) echo onelens-agent-victoriametrics ;; esac ;;
+                *'app.kubernetes.io/name=prometheus'*|*'@.metadata.name=="onelens-agent-prometheus-server"'*)
+                    case " $present " in *" onelens-agent-prometheus-server "*) echo onelens-agent-prometheus-server ;; esac ;;
+                *) echo "$present" | tr ' ' '\n' ;;
+            esac
+        }
+        eval "$pvc_lookup" >/dev/null
+        echo "$PROM_PVC_NAME"
+    )
+}
+assert_eq "$(_pvc_for victoriametrics onelens-agent-prometheus-server onelens-agent-victoriametrics)" "onelens-agent-victoriametrics" \
+    "VM: PV health check targets the VM PVC, not the leftover Prometheus PVC"
+assert_eq "$(_pvc_for victoriametrics onelens-agent-prometheus-server)" "" \
+    "VM: no VM PVC -> nothing checked (never falls back to the Prometheus PVC)"
+assert_eq "$(_pvc_for prometheus onelens-agent-prometheus-server onelens-agent-victoriametrics)" "onelens-agent-prometheus-server" \
+    "Prometheus: PV health check still targets the Prometheus PVC"
+
+# Pod lookups in the PV block follow METRICS_COMPONENT (prometheus-server on Prometheus)
+pv_block=$(sed -n '/persistent volume health/,/FailedAttachVolume Remediation/p' "$PATCHING")
+hardcoded_pod=$(echo "$pv_block" | grep 'kubectl get pods' | grep -c "/prometheus-server/" || true)
+assert_eq "$hardcoded_pod" "0" "PV health check pod lookups are not hardcoded to prometheus-server"
+component_pod=$(echo "$pv_block" | grep -c 'awk -v p="\$METRICS_COMPONENT"' || true)
+assert_eq "$component_pod" "4" "PV health check pod lookups use METRICS_COMPONENT"
 
 ###############################################################################
 # Test 13: Syntax check — src/patching.sh has valid bash syntax
