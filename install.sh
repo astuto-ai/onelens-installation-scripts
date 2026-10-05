@@ -1283,7 +1283,7 @@ _version_lt() {
 # the install.
 _sync_target_version() {
     if [ "$IS_UPGRADE" != "true" ]; then return 0; fi
-    local installed="v$RELEASE_VERSION" resp current target update payload code
+    local installed="v${RELEASE_VERSION#v}" resp current target update payload code
     resp=$(curl -s --max-time 10 -X POST "$API_BASE_URL/v1/kubernetes/cluster-version" \
         -H "Content-Type: application/json" \
         -d "$(jq -n --arg id "$REGISTRATION_ID" --arg tk "$CLUSTER_TOKEN" '{registration_id: $id, cluster_token: $tk}')" \

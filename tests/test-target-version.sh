@@ -33,13 +33,14 @@ assert_eq "$(_lt "" v2.1.121)" "no" "empty is handled by the caller, not here"
 ###############################################################################
 # Test 2: what the install sends to the API
 ###############################################################################
-# _sync <is_upgrade> <POST response JSON or ""> [PUT http code] -> "<calls>|<update_data JSON or ->"
+# _sync <is_upgrade> <POST response JSON or ""> [PUT http code] [release version]
+#   -> "<calls>|<update_data JSON or ->|after"
 _sync() {
-    local is_upgrade="$1" post_resp="$2" put_code="${3:-200}" log
+    local is_upgrade="$1" post_resp="$2" put_code="${3:-200}" release="${4:-2.1.121}" log
     log=$(mktemp)
     (
         set -e
-        IS_UPGRADE="$is_upgrade" RELEASE_VERSION="2.1.121" API_BASE_URL="https://api.example"
+        IS_UPGRADE="$is_upgrade" RELEASE_VERSION="$release" API_BASE_URL="https://api.example"
         REGISTRATION_ID="reg-1" CLUSTER_TOKEN="tok-1"
         curl() {
             local method="" data="" prev=""
@@ -87,6 +88,9 @@ assert_eq "$(_sync true '{"error":"Invalid cluster token"}')" "POST,|-|after" "A
 assert_eq "$(_sync true "$(resp v2.1.110 v2.1.110)" 500)" \
     'POST,PUT,|{"patching_version":"v2.1.121","current_version":"v2.1.121","prev_version":"v2.1.110"}|after' \
     "PUT fails: install continues"
+assert_eq "$(_sync true "$(resp v2.1.110 v2.1.110)" 200 v2.1.121)" \
+    'POST,PUT,|{"patching_version":"v2.1.121","current_version":"v2.1.121","prev_version":"v2.1.110"}|after' \
+    "RELEASE_VERSION given with a v: no double prefix"
 
 ###############################################################################
 # Test 3: wiring
