@@ -1257,6 +1257,68 @@ if [ "$_connected" != "true" ]; then
     echo "Manual fix: re-run install.sh or contact support."
 fi
 
+# _version_lt A B — succeeds when version A is lower than B. Dotted numbers only
+# ("v" / "release/" prefixes ignored); anything else is never "lower".
+_version_lt() {
+    local a b i x y
+    a=$(echo "$1" | sed 's|^release/||; s|^v||')
+    b=$(echo "$2" | sed 's|^release/||; s|^v||')
+    if ! echo "$a" | grep -qE '^[0-9]+(\.[0-9]+)*$' || ! echo "$b" | grep -qE '^[0-9]+(\.[0-9]+)*$'; then
+        return 1
+    fi
+    local -a A B
+    IFS=. read -r -a A <<< "$a"
+    IFS=. read -r -a B <<< "$b"
+    for i in 0 1 2 3; do
+        x=$((10#${A[$i]:-0})); y=$((10#${B[$i]:-0}))
+        if [ "$x" -lt "$y" ]; then return 0; fi
+        if [ "$x" -gt "$y" ]; then return 1; fi
+    done
+    return 1
+}
+
+# Re-install of an existing cluster: registration (which records the installed version
+# as the target for new clusters) was skipped, so record it here. The target is only
+# raised, never lowered — a newer target set in OneLens stays. Best effort: never fails
+# the install.
+_sync_target_version() {
+    if [ "$IS_UPGRADE" != "true" ]; then return 0; fi
+    local installed="v$RELEASE_VERSION" resp current target update payload code
+    resp=$(curl -s --max-time 10 -X POST "$API_BASE_URL/v1/kubernetes/cluster-version" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg id "$REGISTRATION_ID" --arg tk "$CLUSTER_TOKEN" '{registration_id: $id, cluster_token: $tk}')" \
+        2>/dev/null || true)
+    if ! echo "$resp" | jq -e '.data' >/dev/null 2>&1; then
+        echo "Target version: could not read it from OneLens; left unchanged."
+        return 0
+    fi
+    current=$(echo "$resp" | jq -r '.data.current_version // empty')
+    target=$(echo "$resp" | jq -r '.data.patching_version // empty')
+    update='{}'
+    if [ -z "$target" ] || _version_lt "$target" "$installed"; then
+        update=$(echo "$update" | jq --arg v "$installed" '. + {patching_version: $v}')
+        echo "Target version: ${target:-none} -> $installed"
+    else
+        echo "Target version: $target (not lower than $installed; left unchanged)"
+    fi
+    # Same bookkeeping as the updater after a version change
+    if [ "$current" != "$installed" ]; then
+        update=$(echo "$update" | jq --arg p "$current" --arg c "$installed" \
+            '. + {current_version: $c} + (if $p != "" then {prev_version: $p} else {} end)')
+    fi
+    if [ "$update" = "{}" ]; then return 0; fi
+    payload=$(jq -n --arg id "$REGISTRATION_ID" --arg tk "$CLUSTER_TOKEN" --argjson u "$update" \
+        '{registration_id: $id, cluster_token: $tk, update_data: $u}')
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X PUT \
+        "$API_BASE_URL/v1/kubernetes/cluster-version" \
+        -H "Content-Type: application/json" -d "$payload" 2>/dev/null || echo "000")
+    if [ "$code" != "200" ]; then
+        echo "Target version: update failed (HTTP $code); it can be set in OneLens."
+    fi
+    return 0
+}
+_sync_target_version || true
+
 # Quick pod status check — informational only, does not block installation.
 echo ""
 echo "Checking initial pod status..."
