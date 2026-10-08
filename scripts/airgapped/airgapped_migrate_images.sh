@@ -99,6 +99,9 @@ echo ""
 # --- Authenticate to ECR ---
 echo "Authenticating to ECR..."
 aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin "$ECR_DOMAIN"
+# helm push uses helm's own registry login before Docker's, so a stale one from an
+# earlier run fails the chart push with 403. Refresh it too.
+aws ecr get-login-password --region "$ECR_REGION" | helm registry login --username AWS --password-stdin "$ECR_DOMAIN"
 echo ""
 
 # --- Fetch globalvalues.yaml for the target version ---
