@@ -188,7 +188,7 @@ assert_gt "$migrate_login" "0" "migration script docker login uses ECR_DOMAIN, n
 # Test 24b: Helm registry login is refreshed before the chart push
 # ---------------------------------------------------------------------------
 migrate_helm_login_line=$(grep -n 'helm registry login' "$MIGRATE" | grep 'ECR_DOMAIN' | head -1 | cut -d: -f1)
-migrate_helm_push_line=$(grep -n '^helm push' "$MIGRATE" | head -1 | cut -d: -f1)
+migrate_helm_push_line=$(grep -nE '^[[:space:]]*helm push' "$MIGRATE" | head -1 | cut -d: -f1)
 assert_gt "${migrate_helm_login_line:-0}" "0" "migration script logs helm in to ECR_DOMAIN"
 assert_gt "${migrate_helm_push_line:-0}" "${migrate_helm_login_line:-0}" "helm registry login runs before helm push"
 
