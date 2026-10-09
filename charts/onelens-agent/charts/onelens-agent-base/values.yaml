@@ -117,7 +117,17 @@ victoriaMetrics:
       cpu: "1"
       memory: "1536Mi"
   retentionPeriod: "30d"
-  maxLabelsPerTimeseries: 50
+  # VictoriaMetrics drops a whole series with more labels than this (Prometheus has
+  # no limit). Node labels are copied onto cadvisor and node series, so busy
+  # clusters already reach 45-50.
+  maxLabelsPerTimeseries: 200
+  # Largest scrape response VictoriaMetrics accepts; a bigger one is dropped whole.
+  # VM's default is 16MB, which kube-state-metrics passes at about 1,000 pods.
+  # Prometheus has no limit. 128MiB covers about 8,000 pods.
+  maxScrapeSize: "128MiB"
+  # Re-read the scrape config when its ConfigMap changes, so a config-only change
+  # takes effect without a restart. 0 reads it only at startup.
+  configCheckInterval: "1m"
   persistentVolume:
     enabled: false
     storageClass: onelens-sc

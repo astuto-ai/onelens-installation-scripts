@@ -17,4 +17,54 @@ data:
     {{- if .Values.victoriaMetrics.extraScrapeConfigs }}
       {{- .Values.victoriaMetrics.extraScrapeConfigs | nindent 6 }}
     {{- end }}
+    {{- /*
+    Jobs for optional exporters, rendered only when that exporter is deployed.
+    VictoriaMetrics logs every failed scrape and every failed DNS lookup, so an
+    always-on job for an absent exporter fills its log with errors (one per
+    node per minute for node-exporter).
+    */}}
+    {{- if eq (toString .Values.env.NODE_EXPORTER_ENABLED) "true" }}
+      - job_name: 'node-exporter'
+        scheme: http
+        scrape_interval: 1m
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_address_InternalIP]
+            target_label: __address__
+            replacement: $1:9100
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_memory_MemFree_bytes|node_memory_Cached_bytes|node_memory_Buffers_bytes'
+            action: keep
+    {{- end }}
+    {{- if eq (toString .Values.gpu.enabled) "true" }}
+      - job_name: dcgm-gpu-metrics
+        honor_labels: true
+        scrape_interval: 30s
+        scrape_timeout: 10s
+        metrics_path: /metrics
+        scheme: http
+        dns_sd_configs:
+          - names:
+              - nvidia-dcgm-exporter.onelens-agent
+            type: A
+            port: 9400
+    {{- end }}
+    {{- if and .Values.networkCosts .Values.networkCosts.enabled }}
+      - job_name: network-costs
+        honor_labels: true
+        scrape_interval: 1m
+        scrape_timeout: 10s
+        metrics_path: /metrics
+        scheme: http
+        dns_sd_configs:
+          - names:
+              - opencost-network-costs.onelens-agent
+            type: A
+            port: 3001
+    {{- end }}
 {{- end }}
