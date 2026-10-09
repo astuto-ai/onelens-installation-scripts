@@ -42,6 +42,8 @@ assert_contains "$dep" '"-promscrape.maxScrapeSize=256MiB"' "maxScrapeSize can b
 dep=$(render_vm | doc victoriametrics-deployment.yaml)
 assert_contains "$dep" '"-maxLabelsPerTimeseries=200"' "VM deployment raises -maxLabelsPerTimeseries to 200"
 assert_contains "$dep" '"-promscrape.configCheckInterval=1m"' "VM re-reads its scrape config every minute"
+dep=$(render_vm --set onelens-agent.victoriaMetrics.configCheckInterval=0 | doc victoriametrics-deployment.yaml)
+assert_contains "$dep" '"-promscrape.configCheckInterval=0"' "configCheckInterval=0 is kept (read config only at startup)"
 
 # ---------------------------------------------------------------------------
 # Test 2: optional exporters are scraped only when deployed
