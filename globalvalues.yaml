@@ -98,7 +98,9 @@ onelens-agent:
         cpu: "1"
         memory: "1536Mi"
     retentionPeriod: "30d"
-    maxLabelsPerTimeseries: 50
+    maxLabelsPerTimeseries: 200
+    maxScrapeSize: "128MiB"
+    configCheckInterval: "1m"
     persistentVolume:
       enabled: false
       storageClass: onelens-sc
@@ -198,22 +200,6 @@ onelens-agent:
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_custom_probe]
             action: keep
             regex: pushgateway
-      - job_name: 'node-exporter'
-        scheme: http
-        scrape_interval: 1m
-        scrape_timeout: 10s
-        kubernetes_sd_configs:
-          - role: node
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_node_address_InternalIP]
-            target_label: __address__
-            replacement: $1:9100
-          - source_labels: [__meta_kubernetes_node_name]
-            target_label: node
-        metric_relabel_configs:
-          - source_labels: [__name__]
-            regex: 'node_cpu_seconds_total|node_memory_MemTotal_bytes|node_memory_MemAvailable_bytes|node_memory_MemFree_bytes|node_memory_Cached_bytes|node_memory_Buffers_bytes'
-            action: keep
     extraScrapeConfigs: |
       - job_name: opencost
         honor_labels: true
@@ -226,28 +212,6 @@ onelens-agent:
               - onelens-agent-prometheus-opencost-exporter
             type: 'A'
             port: 9003
-      - job_name: dcgm-gpu-metrics
-        honor_labels: true
-        scrape_interval: 30s
-        scrape_timeout: 10s
-        metrics_path: /metrics
-        scheme: http
-        dns_sd_configs:
-          - names:
-              - nvidia-dcgm-exporter.onelens-agent
-            type: A
-            port: 9400
-      - job_name: network-costs
-        honor_labels: true
-        scrape_interval: 1m
-        scrape_timeout: 10s
-        metrics_path: /metrics
-        scheme: http
-        dns_sd_configs:
-          - names:
-              - opencost-network-costs.onelens-agent
-            type: A
-            port: 3001
 prometheus:
   enabled: true
   rbac:

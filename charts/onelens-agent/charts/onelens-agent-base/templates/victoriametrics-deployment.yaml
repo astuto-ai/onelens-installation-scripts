@@ -50,6 +50,8 @@ spec:
             - "-promscrape.config.strictParse=false"
             - "-retentionPeriod={{ .Values.victoriaMetrics.retentionPeriod }}"
             - "-maxLabelsPerTimeseries={{ .Values.victoriaMetrics.maxLabelsPerTimeseries }}"
+            - "-promscrape.maxScrapeSize={{ .Values.victoriaMetrics.maxScrapeSize | default "128MiB" }}"
+            - "-promscrape.configCheckInterval={{ .Values.victoriaMetrics.configCheckInterval | default "1m" }}"
             - "-storageDataPath=/victoria-metrics-data"
           ports:
             - name: http
