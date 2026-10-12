@@ -179,6 +179,8 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer \
   --set job.env.EBS_ENCRYPTION_KEY=arn:aws:kms:us-east-1:123456789012:key/your-key-id
 ```
 
+Encryption is applied at install time only. For KMS key permissions, encrypting an existing installation, and verification, see [EBS Volume Encryption](docs/ebs-encryption.md).
+
 </details>
 
 <details>
