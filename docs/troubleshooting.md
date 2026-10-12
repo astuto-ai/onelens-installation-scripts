@@ -178,17 +178,15 @@ Common causes:
 
 ## Registration failed
 
-**Symptom:** Deployer logs show registration API errors or empty `REGISTRATION_ID`.
+**Symptom:** The deployer logs show `Error: REGISTRATION_TOKEN is not set` or `One or both of REGISTRATION_ID and CLUSTER_TOKEN are empty or null.`
 
-This happens when the cluster is already registered with OneLens. Re-running the install command on an already-connected cluster will fail because the registration API returns an empty response.
+Reinstalling on a cluster that is already registered does not cause this. The registration API returns the cluster's existing registration, and the cluster stays the same in the OneLens console.
 
-**To reinstall on an already-registered cluster:**
+Common causes:
+- **Token missing or wrong.** Copy the install command again from the OneLens console, where `REGISTRATION_TOKEN` is pre-filled.
+- **The deployer can't reach the OneLens API.** Egress from the cluster is blocked, or traffic must go through a proxy. Run the [pre-requisite checker](../README.md#prerequisites) to test connectivity. If the cluster uses a proxy, set `proxy.httpProxy`, `proxy.httpsProxy`, and `proxy.noProxy` on the `onelensdeployer` chart.
 
-1. The cluster must first be marked as **Disconnected** in the OneLens platform
-2. Currently, this can only be done by contacting [OneLens support](mailto:support@astuto.ai) — self-service disconnect from the OneLens console is coming soon
-3. Once disconnected, re-run the helm install command with a new `REGISTRATION_TOKEN` from the console
-
-**To verify:** Check the cluster's connection status in the OneLens console. If it shows as connected, it's already registered and cannot be re-registered until disconnected.
+The install Job runs only when the deployer is first installed. After fixing the cause, uninstall the deployer (`helm uninstall onelensdeployer -n onelens-agent`) and run the install command again.
 
 ---
 
