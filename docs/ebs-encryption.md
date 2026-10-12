@@ -140,6 +140,23 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer \
 
 With the AWS-managed key, leave out the `EBS_ENCRYPTION_KEY` line.
 
+**Air-gapped installs:**
+
+- **URL whitelisting** ([Option 1](airgapped-deployment-guide.md#option-1-url-whitelisting-recommended)): use the command above as-is.
+- **Private registry** ([Option 2](airgapped-deployment-guide.md#option-2-private-registry-full-air-gap)): skip the `helm repo` commands and install from your registry, as in [Step 4](airgapped-deployment-guide.md#step-4-deploy-onelens-on-each-cluster) of the air-gapped guide. Encryption works the same way.
+
+```bash
+helm upgrade --install onelensdeployer \
+  oci://<your-registry>/charts/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  --set job.env.CLUSTER_NAME=<cluster-name> \
+  --set job.env.REGION=<region> \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.REGISTRATION_TOKEN=<token> \
+  --set job.env.EBS_ENCRYPTION_ENABLED=true \
+  --set job.env.EBS_ENCRYPTION_KEY=arn:aws:kms:<region>:<account-id>:key/<key-id>
+```
+
 Then [verify](#verify).
 
 ---
@@ -218,6 +235,18 @@ helm upgrade --install onelensdeployer onelens/onelensdeployer \
 ```
 
 With the AWS-managed key, leave out the `EBS_ENCRYPTION_KEY` line. Keep the `--set-string job.env.ACCOUNT` line. Without it, an account ID stored unquoted in `deployer-values.yaml` is passed as `1.23456789012e+11`.
+
+For a private-registry air-gapped install ([Option 2](airgapped-deployment-guide.md#option-2-private-registry-full-air-gap)), skip the `helm repo` commands and install from your registry:
+
+```bash
+helm upgrade --install onelensdeployer \
+  oci://<your-registry>/charts/onelensdeployer \
+  -n onelens-agent --create-namespace \
+  -f deployer-values.yaml \
+  --set-string job.env.ACCOUNT=<account-id> \
+  --set job.env.EBS_ENCRYPTION_ENABLED=true \
+  --set job.env.EBS_ENCRYPTION_KEY=arn:aws:kms:<region>:<account-id>:key/<key-id>
+```
 
 Watch the install:
 
