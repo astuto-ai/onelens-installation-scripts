@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Only agentOverrides is constrained; every other value is accepted as before.",
+  "type": "object",
+  "properties": {
+    "agentOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agent": { "$ref": "#/definitions/imageRepository" },
+            "prometheus": { "$ref": "#/definitions/imageRepository" },
+            "configReloader": { "$ref": "#/definitions/imageRepository" },
+            "pushgateway": { "$ref": "#/definitions/imageRepository" },
+            "kubeStateMetrics": { "$ref": "#/definitions/imageRepository" },
+            "opencost": { "$ref": "#/definitions/imageRepository" },
+            "victoriaMetrics": { "$ref": "#/definitions/imageRepository" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prometheus": { "$ref": "#/definitions/resources" },
+            "agent": { "$ref": "#/definitions/resources" },
+            "opencost": { "$ref": "#/definitions/resources" },
+            "kubeStateMetrics": { "$ref": "#/definitions/resources" },
+            "pushgateway": { "$ref": "#/definitions/resources" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "imageRepository": {
+      "description": "Repository without a tag or digest, e.g. us-docker.pkg.dev/my-project/mirror/prometheus. Empty lets OneLens manage it.",
+      "type": "string",
+      "pattern": "^$|^[A-Za-z0-9.-]+(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)+$"
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceList" },
+        "limits": { "$ref": "#/definitions/resourceList" }
+      }
+    },
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "description": "CPU quantity, e.g. 500m or 2. Empty lets OneLens manage it.",
+          "type": ["string", "number"],
+          "pattern": "^$|^[0-9]+(\\.[0-9]+)?m?$",
+          "exclusiveMinimum": 0
+        },
+        "memory": {
+          "description": "Memory quantity, e.g. 512Mi or 24Gi. Empty lets OneLens manage it.",
+          "type": ["string", "number"],
+          "pattern": "^$|^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$",
+          "exclusiveMinimum": 0
+        }
+      }
+    }
+  }
+}

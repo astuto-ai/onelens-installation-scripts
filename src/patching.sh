@@ -1720,6 +1720,197 @@ if [ "$USAGE_BASED_APPLIED" != "true" ] && [[ -n "$CURRENT_VALUES" ]] && command
     _guard_memory "Agent limit" '.["onelens-agent"].resources.limits.memory' ONELENS_MEMORY_LIMIT
 fi
 
+# --- Customer overrides (deployer chart value agentOverrides) ---
+# The deployer chart renders the customer's agentOverrides into ConfigMap
+# onelens-agent-overrides, one key per setting:
+#   images.<name>                                     repository only; the tag still comes from globalvalues.yaml
+#   resources.<component>.<requests|limits>.<cpu|memory>
+# Without this, every run rebuilt values from globalvalues.yaml and sizing, so a
+# customer's mirrored images and memory settings were undone within 5 minutes.
+# They are applied exactly as given, after all sizing above, so tier, usage-based, OOM
+# and guard logic can't change them; pod remediation and the retry loop leave them
+# alone too. An invalid entry is reported and skipped, and OneLens keeps managing that
+# setting. The outcome is written to ConfigMap onelens-agent-overrides-status.
+OVERRIDE_IMAGE_NAMES="agent prometheus configReloader pushgateway kubeStateMetrics opencost victoriaMetrics"
+OVERRIDE_RESOURCE_COMPONENTS="prometheus agent opencost kubeStateMetrics pushgateway"
+
+# _override_quantity "$value" cpu|memory — millicores or bytes; empty unless the value is
+# a positive Kubernetes quantity
+_override_quantity() {
+    awk -v v="$1" -v r="$2" 'BEGIN {
+        if (r == "cpu") {
+            if (v !~ /^[0-9]+(\.[0-9]+)?m?$/) exit
+            n = (v ~ /m$/) ? v + 0 : (v + 0) * 1000
+        } else {
+            if (v !~ /^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$/) exit
+            u = v; sub(/^[0-9.]+/, "", u)
+            f["Ki"] = 1024; f["Mi"] = 1048576; f["Gi"] = 1073741824; f["Ti"] = 1099511627776
+            f["k"] = 1e3; f["M"] = 1e6; f["G"] = 1e9; f["T"] = 1e12; f[""] = 1
+            n = (v + 0) * f[u]
+        }
+        if (n >= 1) printf "%.0f", n
+    }'
+}
+
+# _override_check "$key" "$value" — prints why an entry is invalid; prints nothing when valid
+_override_check() {
+    local key="$1" value="$2" res
+    case "$key" in
+        images.*)
+            if ! echo " $OVERRIDE_IMAGE_NAMES " | grep -qF " ${key#images.} "; then
+                echo "unknown image (supported: $OVERRIDE_IMAGE_NAMES)"
+            elif ! echo "$value" | grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)+$'; then
+                echo "not an image repository; give registry/path/name without a tag or digest"
+            fi
+            ;;
+        resources.*)
+            res="${key##*.}"
+            if ! echo "$key" | grep -Eq "^resources\.($(echo $OVERRIDE_RESOURCE_COMPONENTS | tr ' ' '|'))\.(requests|limits)\.(cpu|memory)$"; then
+                echo "unknown setting (supported: resources.<$(echo $OVERRIDE_RESOURCE_COMPONENTS | tr ' ' '|')>.<requests|limits>.<cpu|memory>)"
+            elif [ -z "$(_override_quantity "$value" "$res")" ]; then
+                if [ "$res" = "cpu" ]; then echo "not a CPU quantity (e.g. 500m or 2)"; else echo "not a memory quantity (e.g. 512Mi or 24Gi)"; fi
+            fi
+            ;;
+        *)
+            echo "unknown setting"
+            ;;
+    esac
+}
+
+# _override_get "$key" — the accepted override value, or nothing
+_override_get() {
+    echo "$OVERRIDES_ACCEPTED" | jq -r --arg k "$1" '.[$k] // empty' 2>/dev/null
+}
+
+# _override_var_prefix "$component" — the sizing variable prefix for an override component
+_override_var_prefix() {
+    case "$1" in
+        prometheus) echo PROMETHEUS ;;
+        agent) echo ONELENS ;;
+        opencost) echo OPENCOST ;;
+        kubeStateMetrics) echo KSM ;;
+        pushgateway) echo PROMETHEUS_PUSHGATEWAY ;;
+    esac
+}
+
+# _override_holds "$deployment_or_container" cpu|memory — true when the customer set that
+# resource's request or limit. Every bump sets request and limit together, so it would
+# change an override either way; callers skip the bump instead.
+_override_holds() {
+    local comp
+    case "${1#onelens-agent-}" in
+        prometheus-server|victoriametrics) comp=prometheus ;;
+        kube-state-metrics) comp=kubeStateMetrics ;;
+        prometheus-opencost-exporter) comp=opencost ;;
+        prometheus-pushgateway) comp=pushgateway ;;
+        onelens-agent) comp=agent ;;
+        *) return 1 ;;
+    esac
+    [ -n "$(_override_get "resources.$comp.requests.$2")$(_override_get "resources.$comp.limits.$2")" ]
+}
+
+# apply_customer_overrides "$configmap_data_json"
+# Sets OVERRIDES_ACCEPTED, the sizing variables, OVERRIDE_IMAGE_FLAGS (appended to the
+# helm command after the air-gapped image settings, so they win), OVERRIDES_REPORT and
+# OVERRIDES_REJECTED.
+apply_customer_overrides() {
+    local data="$1" key value reason comp res up prefix req lim cur_req cur_lim name repo
+    OVERRIDES_ACCEPTED="{}"; OVERRIDES_REPORT=""; OVERRIDES_REJECTED=""; OVERRIDE_IMAGE_FLAGS=""
+    if [ -z "$data" ] || [ "$data" = "{}" ] || [ "$data" = "null" ]; then
+        return 0
+    fi
+
+    while IFS=$'\t' read -r key value; do
+        [ -n "$key" ] || continue
+        reason=$(_override_check "$key" "$value")
+        if [ -n "$reason" ]; then
+            OVERRIDES_REJECTED="${OVERRIDES_REJECTED}${key}=${value}: ${reason}"$'\n'
+        else
+            OVERRIDES_ACCEPTED=$(echo "$OVERRIDES_ACCEPTED" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
+        fi
+    done <<EOF
+$(echo "$data" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
+EOF
+
+    for comp in $OVERRIDE_RESOURCE_COMPONENTS; do
+        prefix=$(_override_var_prefix "$comp")
+        for res in cpu memory; do
+            req=$(_override_get "resources.$comp.requests.$res")
+            lim=$(_override_get "resources.$comp.limits.$res")
+            [ -n "$req$lim" ] || continue
+            up=$(echo "$res" | tr '[:lower:]' '[:upper:]')
+            cur_req="${prefix}_${up}_REQUEST"; cur_req="${!cur_req}"
+            cur_lim="${prefix}_${up}_LIMIT"; cur_lim="${!cur_lim}"
+            if [ -n "$req" ] && [ -n "$lim" ] && \
+               [ "$(_override_quantity "$req" "$res")" -gt "$(_override_quantity "$lim" "$res")" ]; then
+                OVERRIDES_REJECTED="${OVERRIDES_REJECTED}resources.$comp.requests.$res=$req, resources.$comp.limits.$res=$lim: the request is above the limit"$'\n'
+                OVERRIDES_ACCEPTED=$(echo "$OVERRIDES_ACCEPTED" | jq -c \
+                    --arg a "resources.$comp.requests.$res" --arg b "resources.$comp.limits.$res" 'del(.[$a], .[$b])')
+                continue
+            fi
+            # Only a limit given: the request matches it, as Kubernetes does for a container
+            # with only a limit. Keeping OneLens's request doesn't hold: the next run's
+            # sizing starts from the release's values, which carry this limit, and sets
+            # request = limit, so the request drifted up to the limit one run later.
+            if [ -z "$req" ]; then
+                req="$lim"
+            fi
+            # Only a request given: OneLens keeps the limit, raised to the request if needed
+            if [ -z "$lim" ]; then
+                lim="$cur_lim"
+                if [ -z "$lim" ] || [ "$(_override_quantity "$req" "$res")" -gt "$(_override_quantity "$lim" "$res")" ] 2>/dev/null; then
+                    lim="$req"
+                fi
+            fi
+            OVERRIDES_REPORT="${OVERRIDES_REPORT}${comp} ${res}: request ${req}, limit ${lim} (sizing would have set ${cur_req:-none} / ${cur_lim:-none})"$'\n'
+            printf -v "${prefix}_${up}_REQUEST" '%s' "$req"
+            printf -v "${prefix}_${up}_LIMIT" '%s' "$lim"
+        done
+    done
+
+    for name in $OVERRIDE_IMAGE_NAMES; do
+        repo=$(_override_get "images.$name")
+        [ -n "$repo" ] || continue
+        case "$name" in
+            agent) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set onelens-agent.image.repository=$repo" ;;
+            prometheus) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set prometheus.server.image.repository=$repo" ;;
+            configReloader) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set prometheus.configmapReload.prometheus.image.repository=$repo" ;;
+            pushgateway) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set prometheus.prometheus-pushgateway.image.repository=$repo" ;;
+            victoriaMetrics) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set onelens-agent.victoriaMetrics.image.repository=$repo" ;;
+            # These two charts build the image as {registry}/{repository}:{tag}
+            kubeStateMetrics) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set prometheus.kube-state-metrics.image.registry=${repo%/*} --set prometheus.kube-state-metrics.image.repository=${repo##*/}" ;;
+            opencost) OVERRIDE_IMAGE_FLAGS="$OVERRIDE_IMAGE_FLAGS --set prometheus-opencost-exporter.opencost.exporter.image.registry=${repo%/*} --set prometheus-opencost-exporter.opencost.exporter.image.repository=${repo##*/}" ;;
+        esac
+        OVERRIDES_REPORT="${OVERRIDES_REPORT}${name} image: ${repo} (tag from OneLens)"$'\n'
+    done
+
+    echo ""
+    echo "=== CUSTOMER OVERRIDES (onelens-agent-overrides) ==="
+    if [ -n "$OVERRIDES_REPORT" ]; then printf '%s' "$OVERRIDES_REPORT" | sed 's/^/  Applied: /'; fi
+    if [ -n "$OVERRIDES_REJECTED" ]; then printf '%s' "$OVERRIDES_REJECTED" | sed 's/^/  REJECTED (OneLens keeps managing it): /'; fi
+    return 0
+}
+
+# A transient read error must not be treated as "no overrides": this run would then put
+# back OneLens's values and undo the customer's settings. Stop and let the next run
+# (5 minutes) try again. Forbidden is not transient: an updater that can't read
+# ConfigMaps in its own namespace (broken RBAC from an old deployer) can't have working
+# overrides, and stopping would end every run on that cluster, so carry on without them.
+OVERRIDES_DATA="{}"
+_overrides_out=$(kubectl get configmap onelens-agent-overrides -n onelens-agent -o json 2>&1)
+if [ $? -eq 0 ]; then
+    OVERRIDES_DATA=$(echo "$_overrides_out" | jq -cS '.data // {}' 2>/dev/null || echo "{}")
+elif echo "$_overrides_out" | grep -q 'Forbidden'; then
+    echo "WARNING: not allowed to read ConfigMap onelens-agent-overrides; continuing without customer overrides"
+elif ! echo "$_overrides_out" | grep -q 'NotFound'; then
+    echo "ERROR: could not read ConfigMap onelens-agent-overrides: $_overrides_out"
+    echo "Stopping before helm upgrade so the customer's overrides are not undone. Next run retries."
+    exit 1
+fi
+# Same hash as entrypoint.sh's healthcheck computes, so it can tell when overrides changed
+OVERRIDES_HASH=$(printf '%s' "$OVERRIDES_DATA" | sha256sum | awk '{print $1}')
+apply_customer_overrides "$OVERRIDES_DATA"
+
 # Check for existing bound PVC to preserve data across upgrades
 EXISTING_CLAIM_FLAG=""
 PVC_NAME="onelens-agent-prometheus-server"
@@ -2156,6 +2347,12 @@ _remediate_oomkilled_pod() {
     local component="$2"   # deployment name, e.g. onelens-agent-prometheus-server
     local current_memory
 
+    if _override_holds "$component" memory; then
+        echo ""
+        echo "Pod $pod_name was OOMKilled, but its memory is set by agentOverrides; not changing it."
+        return 1
+    fi
+
     echo ""
     echo "🔧 Attempting remediation: OOMKilled pod $pod_name"
 
@@ -2236,6 +2433,11 @@ _remediate_cpu_starved_pod() {
     # Resolve deployment name from pod (strip pod-template hash + random suffix)
     local deploy_name
     deploy_name=$(echo "$pod_name" | sed 's/-[a-z0-9]*-[a-z0-9]*$//')
+
+    if _override_holds "$deploy_name" cpu; then
+        echo "  OpenCost CPU is set by agentOverrides; not changing it."
+        return 1
+    fi
 
     # Resolve container name from pod spec — sidecar injectors may insert containers.
     # Try the short chart name first, then the full deployment name.
@@ -2818,6 +3020,12 @@ if [ -n "$REGISTRY_URL" ]; then
     fi
 fi
 
+# Customer image overrides (agentOverrides.images) come after the defaults and the
+# air-gapped registry, so they win
+if [ -n "$OVERRIDE_IMAGE_FLAGS" ]; then
+    HELM_CMD="$HELM_CMD $OVERRIDE_IMAGE_FLAGS"
+fi
+
 # Sizing interval: always pass to ensure value is correctly applied or reset across upgrades
 HELM_CMD="$HELM_CMD --set-string onelens-agent.env.FULL_EVAL_INTERVAL_HOURS=\"$FULL_EVAL_INTERVAL_HOURS\""
 
@@ -3159,6 +3367,15 @@ while true; do
         break
     fi
 
+    # A customer override is applied exactly as given; don't raise it
+    _ovr_res=memory
+    [ "$_FAIL_REASON" = "cpu_starved" ] && _ovr_res=cpu
+    if _override_holds "$_FAIL_COMPONENT" "$_ovr_res"; then
+        echo "$_FAIL_COMPONENT ${_FAIL_REASON}: its $_ovr_res is set by agentOverrides, so it is not raised. Raise it in agentOverrides if the pod keeps failing."
+        UPGRADE_FAILED=true
+        break
+    fi
+
     # Bump the failing component's resource (CPU for starvation, memory for OOM)
     if [ "$_FAIL_REASON" = "cpu_starved" ]; then
         _bump_result=$(_bump_component_cpu "$_FAIL_COMPONENT")
@@ -3220,6 +3437,33 @@ fi
 if [ "$UPGRADE_FAILED" = "true" ] && [ "$STABLE" = "true" ]; then
     echo "Upgrade was flagged failed but all pods recovered. Resetting upgrade status."
     UPGRADE_FAILED=false
+fi
+
+# Report the customer overrides' outcome where the customer can read it:
+#   kubectl -n onelens-agent get configmap onelens-agent-overrides-status -o yaml
+# Written only when overrides exist, or existed (to show they were removed). Merge patch,
+# so entrypoint.sh's requested_hash key is kept.
+if [ "$OVERRIDES_DATA" != "{}" ] || kubectl get configmap onelens-agent-overrides-status -n onelens-agent >/dev/null 2>&1; then
+    if [ "$SKIP_HELM_UPGRADE" = "true" ]; then
+        _ovr_result="not applied: helm upgrade was skipped this run (resources were set with kubectl; images were not changed)"
+    elif [ "$UPGRADE_FAILED" = "true" ]; then
+        _ovr_result="helm upgrade failed; see patching logs"
+    elif [ "$OVERRIDES_DATA" = "{}" ]; then
+        _ovr_result="no overrides; OneLens manages all settings"
+    else
+        _ovr_result="applied"
+    fi
+    _ovr_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    _ovr_patch=$(jq -cn --arg a "$OVERRIDES_REPORT" --arg r "$OVERRIDES_REJECTED" --arg res "$_ovr_result" \
+        --arg h "$OVERRIDES_HASH" --arg ts "$_ovr_ts" \
+        '{data: {applied: $a, rejected: $r, result: $res, overrides_hash: $h, updated_at: $ts}}')
+    kubectl patch configmap onelens-agent-overrides-status -n onelens-agent --type merge -p "$_ovr_patch" >/dev/null 2>&1 || \
+        kubectl create configmap onelens-agent-overrides-status -n onelens-agent \
+            --from-literal=applied="$OVERRIDES_REPORT" --from-literal=rejected="$OVERRIDES_REJECTED" \
+            --from-literal=result="$_ovr_result" --from-literal=overrides_hash="$OVERRIDES_HASH" \
+            --from-literal=updated_at="$_ovr_ts" >/dev/null 2>&1 || \
+        echo "WARNING: could not write ConfigMap onelens-agent-overrides-status"
+    echo "Customer overrides: $_ovr_result"
 fi
 
 # Deployer chart is NOT self-upgraded here. The deployer SA cannot grant itself
@@ -3411,7 +3655,9 @@ if [ -n "$AGENT_CJ_EXISTS" ]; then
                     AGENT_CPU_LIMIT=$(kubectl get pod "$AGENT_FAIL_POD" -n onelens-agent \
                         -o jsonpath="{.spec.containers[?(@.name==\"$AGENT_CONTAINER_NAME\")].resources.limits.cpu}" 2>/dev/null || true)
                     AGENT_CPU_MC=$(_cpu_to_millicores "${AGENT_CPU_LIMIT:-400m}")
-                    if [ "$AGENT_CPU_MC" -ge "$_USAGE_CAP_CPU" ] 2>/dev/null; then
+                    if _override_holds onelens-agent cpu; then
+                        echo "Agent cgroup CPU error, but agent CPU is set by agentOverrides; not changing it."
+                    elif [ "$AGENT_CPU_MC" -ge "$_USAGE_CAP_CPU" ] 2>/dev/null; then
                         echo "Agent cgroup CPU error but already at cap (${AGENT_CPU_LIMIT}). Manual investigation needed."
                     else
                         # Round up to next 100m

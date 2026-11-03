@@ -175,6 +175,39 @@ elif [ "$deployment_type" = "cronjob" ]; then
         fi
     fi
 
+    # Check 6: customer overrides changed. The deployer chart renders agentOverrides into
+    # ConfigMap onelens-agent-overrides and patching.sh applies it, but a healthy cluster
+    # never runs patching.sh, so a change would wait for the next failure. Compare a hash
+    # of the overrides with the one recorded when a run was last started for them
+    # (requested_hash, written below just before patching.sh runs). Recording it before
+    # the run means each change triggers one run: an override that can't be applied, or a
+    # patching.sh too old to know overrides, doesn't re-trigger every 5 minutes. A read
+    # error other than "not found" skips the check rather than guessing.
+    _OVERRIDES_CHANGED=false
+    _ovr_out=$(kubectl get configmap onelens-agent-overrides -n onelens-agent -o json 2>&1)
+    if [ $? -eq 0 ]; then
+        _ovr_data=$(echo "$_ovr_out" | jq -cS '.data // {}' 2>/dev/null || true)
+    elif echo "$_ovr_out" | grep -q 'NotFound'; then
+        _ovr_data='{}'
+    else
+        _ovr_data=""
+    fi
+    _ovr_prev_out=$(kubectl get configmap onelens-agent-overrides-status -n onelens-agent -o jsonpath='{.data.requested_hash}' 2>&1)
+    if [ $? -eq 0 ]; then
+        _ovr_prev="$_ovr_prev_out"
+    elif echo "$_ovr_prev_out" | grep -q 'NotFound'; then
+        _ovr_prev=""
+    else
+        _ovr_data=""
+    fi
+    if [ -n "$_ovr_data" ] && { [ "$_ovr_data" != "{}" ] || [ -n "$_ovr_prev" ]; }; then
+        OVERRIDES_HASH=$(printf '%s' "$_ovr_data" | sha256sum | awk '{print $1}')
+        if [ "$OVERRIDES_HASH" != "$_ovr_prev" ]; then
+            UNHEALTHY_REASONS="${UNHEALTHY_REASONS}Overrides changed (onelens-agent-overrides)\n"
+            _OVERRIDES_CHANGED=true
+        fi
+    fi
+
     # ─── Routing: healthy vs unhealthy ────────────────────────────────
     if [ -z "$UNHEALTHY_REASONS" ]; then
         # ALL HEALTHY — check if sizing evaluation is overdue before final verdict
@@ -388,7 +421,8 @@ DCGM_EOF
       echo "Could not fetch patching script for version $patching_version"
       # Determine if the cluster is operationally healthy (only version mismatch)
       # or genuinely unhealthy (pods down, services failing)
-      _non_version_reasons=$(printf "%b" "$UNHEALTHY_REASONS" | grep -v "Version mismatch" || true)
+      # A pending overrides change also leaves the cluster operationally healthy
+      _non_version_reasons=$(printf "%b" "$UNHEALTHY_REASONS" | grep -v "Version mismatch" | grep -v "Overrides changed" || true)
       if [ -z "$_non_version_reasons" ]; then
           # Only version mismatch — pods and services are healthy
           echo "  Cluster is operationally healthy on $current_version. Version upgrade will retry on next run."
@@ -426,6 +460,15 @@ DCGM_EOF
 
     echo "Patching script downloaded, executing for remediation..."
     chmod +x "./$SCRIPT_NAME"
+
+    # Record that a run was started for these overrides (see Check 6)
+    if [ "$_OVERRIDES_CHANGED" = "true" ]; then
+        kubectl patch configmap onelens-agent-overrides-status -n onelens-agent --type merge \
+            -p "{\"data\":{\"requested_hash\":\"$OVERRIDES_HASH\"}}" >/dev/null 2>&1 || \
+            kubectl create configmap onelens-agent-overrides-status -n onelens-agent \
+                --from-literal=requested_hash="$OVERRIDES_HASH" >/dev/null 2>&1 || \
+            echo "WARNING: could not record the overrides hash; the next run will apply them again"
+    fi
 
     # Export patching_version so patching.sh can pin chart version (not latest)
     export PATCHING_VERSION="$patching_version"

@@ -1,0 +1,37 @@
+{{- /*
+agentOverrides → ConfigMap onelens-agent-overrides, one key per non-empty setting
+(images.<name>, resources.<component>.<requests|limits>.<cpu|memory>). patching.sh
+applies it on every run. Rendered only when at least one value is set, so clusters
+without overrides get no extra object, and clearing every value removes it.
+*/ -}}
+{{- $data := dict }}
+{{- $o := .Values.agentOverrides | default dict }}
+{{- range $name, $repo := ($o.images | default dict) }}
+  {{- if $repo }}
+    {{- $_ := set $data (printf "images.%s" $name) (toString $repo) }}
+  {{- end }}
+{{- end }}
+{{- range $component, $kinds := ($o.resources | default dict) }}
+  {{- range $kind, $values := ($kinds | default dict) }}
+    {{- range $resource, $quantity := ($values | default dict) }}
+      {{- if $quantity }}
+        {{- $_ := set $data (printf "resources.%s.%s.%s" $component $kind $resource) (toString $quantity) }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if $data }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onelens-agent-overrides
+  labels:
+    {{- with (default dict .Values.globals).labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  {{- range $key, $value := $data }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

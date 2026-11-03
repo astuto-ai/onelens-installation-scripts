@@ -198,6 +198,51 @@ proxy:
 podCountOverride: ""
 
 # ==================================================================================
+# AGENT OVERRIDES (optional)
+# ==================================================================================
+# Settings the updater applies to the OneLens agent stack exactly as given, on every
+# run. Leave a value empty to let OneLens manage it. The chart stores them in ConfigMap
+# onelens-agent-overrides; the updater applies a change within about 5 minutes and
+# reports the result in ConfigMap onelens-agent-overrides-status.
+#
+# images: repository only (registry/path/name, no tag). OneLens still supplies the tag,
+#   so mirror each new tag before an upgrade. Use this to pull from a private registry.
+# resources: Kubernetes quantities (memory 512Mi, 24Gi; cpu 500m, 2). If you set only a
+#   limit, the request is set to the same value, as Kubernetes does; if you set only a
+#   request, OneLens keeps the limit and raises it to the request when needed.
+#   "prometheus" also applies to VictoriaMetrics when that is the metrics backend.
+#
+# Example:
+#   --set agentOverrides.images.prometheus=us-docker.pkg.dev/my-project/mirror/prometheus
+#   --set agentOverrides.resources.prometheus.requests.memory=20Gi
+#   --set agentOverrides.resources.prometheus.limits.memory=24Gi
+agentOverrides:
+  images:
+    agent: ""
+    prometheus: ""
+    configReloader: ""
+    pushgateway: ""
+    kubeStateMetrics: ""
+    opencost: ""
+    victoriaMetrics: ""
+  resources:
+    prometheus:
+      requests: { cpu: "", memory: "" }
+      limits: { cpu: "", memory: "" }
+    agent:
+      requests: { cpu: "", memory: "" }
+      limits: { cpu: "", memory: "" }
+    opencost:
+      requests: { cpu: "", memory: "" }
+      limits: { cpu: "", memory: "" }
+    kubeStateMetrics:
+      requests: { cpu: "", memory: "" }
+      limits: { cpu: "", memory: "" }
+    pushgateway:
+      requests: { cpu: "", memory: "" }
+      limits: { cpu: "", memory: "" }
+
+# ==================================================================================
 # INSTALLATION JOB
 # ==================================================================================
 # One-time job that performs initial installation using shared RBAC permissions
