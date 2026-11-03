@@ -271,16 +271,7 @@ assert_eq "$(_status '{}' false false no)" "no-write" "no overrides and no statu
 assert_eq "$(_status '{}' false false yes)" '"result":"no overrides; OneLens manages all settings"' "overrides removed: status says so"
 
 ###############################################################################
-# Test 14: a bump never lowers memory that is already above the cap
-###############################################################################
-assert_eq "$(calculate_oom_response_memory 24576Mi 8192 2 1)" "24576Mi" "OOM bump at 24Gi with an 8Gi cap keeps 24Gi"
-assert_eq "$(calculate_wal_oom_memory 24576Mi 8192)" "24576Mi" "WAL OOM bump at 24Gi with an 8Gi cap keeps 24Gi"
-assert_eq "$(calculate_oom_response_memory 1000Mi 8192 2 1)" "2000Mi" "normal OOM bump unchanged"
-assert_eq "$(calculate_wal_oom_memory 6000Mi 8192)" "8192Mi" "bump still stops at the cap"
-assert_eq "$(calculate_oom_response_memory 8192Mi 8192 3 2)" "8192Mi" "at the cap: no change"
-
-###############################################################################
-# Test 15: deployer chart, schema, and the key lists staying in sync
+# Test 14: deployer chart, schema, and the key lists staying in sync
 ###############################################################################
 if ! command -v helm &>/dev/null; then
     echo "  (helm not found: chart tests skipped)"

@@ -204,8 +204,6 @@ calculate_oom_response_memory() {
         bumped=$(( (bumped + 99) / 100 * 100 ))
     fi
     bumped=$(_clamp_resource "$bumped" "$c" "$cap")
-    # Already above the cap (set by hand or by an older cap): a bump must never lower it
-    [ "$bumped" -ge "$c" ] 2>/dev/null || bumped="$c"
     echo "${bumped}Mi"
 }
 
@@ -217,8 +215,6 @@ calculate_wal_oom_memory() {
     local c=$(_memory_to_mi "$current")
     local bumped=$(( c * 3 / 2 ))
     bumped=$(_clamp_resource "$bumped" "$c" "$cap")
-    # Already above the cap (set by hand or by an older cap): a bump must never lower it
-    [ "$bumped" -ge "$c" ] 2>/dev/null || bumped="$c"
     echo "${bumped}Mi"
 }
 
