@@ -161,6 +161,13 @@ assert_eq "$(calculate_oom_response_memory "64Mi" 4800 3 2)" "100Mi" \
 assert_eq "$(calculate_oom_response_memory "400Mi" 4800)" "800Mi" \
     "calculate_oom_response_memory default: 400Mi → 800Mi (2x)"
 
+# Already above the cap (raised by hand): the bump keeps it instead of cutting it to the cap.
+# A 16Gi Prometheus with the 8Gi cap was cut to 8Gi, which put it back into an OOM loop.
+assert_eq "$(calculate_oom_response_memory "16384Mi" 8192)" "16384Mi" \
+    "calculate_oom_response_memory: 16384Mi above an 8192Mi cap stays 16384Mi"
+assert_eq "$(calculate_oom_response_memory "6000Mi" 4800 3 2)" "6000Mi" \
+    "calculate_oom_response_memory 1.5x: 6000Mi above a 4800Mi cap stays 6000Mi"
+
 ###############################################################################
 # v2.1.66: agent memory cap raised to 8192Mi
 # Previous cap (4096Mi) was insufficient — 5 customer clusters were OOMing at

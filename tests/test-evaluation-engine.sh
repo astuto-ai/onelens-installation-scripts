@@ -209,6 +209,24 @@ assert_eq "$(calculate_wal_oom_memory "600Mi" 4800)" "900Mi" "WAL OOM chain: 600
 # Convergence chain: 900→1350
 assert_eq "$(calculate_wal_oom_memory "900Mi" 4800)" "1350Mi" "WAL OOM chain: 900Mi → 1350Mi"
 
+# Already above the cap: kept, not cut to the cap
+assert_eq "$(calculate_wal_oom_memory "16384Mi" 8192)" "16384Mi" "WAL OOM: 16384Mi above an 8192Mi cap stays 16384Mi"
+
+###############################################################################
+# Memory already above the cap (raised by hand) is never lowered by a bump
+###############################################################################
+echo ""
+echo "--- above the cap ---"
+
+# A 16Gi Prometheus with the 8Gi cap, peaking at 16017Mi: both bump paths used to return the cap
+# (8192Mi), halving it and putting it back into an OOM loop.
+assert_eq "$(_eval_mem "prometheus-server" "16384Mi" "2000m" "$((16017*1048576))" "1.5" "true" "false" "false" "false" 1.3 1.3 420 8192 50 1200)" \
+    "16384Mi" "OOM now, 16384Mi above an 8192Mi cap: kept"
+assert_eq "$(_eval_mem "prometheus-server" "16384Mi" "2000m" "$((16017*1048576))" "1.5" "false" "false" "false" "false" 1.3 1.3 420 8192 50 1200 "$((16017*1048576))")" \
+    "16384Mi" "usage at 98% of 16384Mi above an 8192Mi cap: kept"
+assert_eq "$(_eval_mem "opencost" "6000Mi" "350m" "$((5900*1048576))" "0.3" "true" "false" "false" "false" 1.3 1.3 192 4800 100 1200)" \
+    "6000Mi" "OpenCost OOM at 6000Mi above a 4800Mi cap: kept"
+
 ###############################################################################
 test_summary
 exit $?
