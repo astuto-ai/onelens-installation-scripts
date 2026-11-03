@@ -24,7 +24,7 @@
 
 OneLens deploys a monitoring stack into your Kubernetes cluster to collect cost and resource utilization data. The deployment consists of two parts:
 
-1. **OneLens Deployer** (this chart) - A Kubernetes Job that installs and configures the monitoring stack. A daily CronJob keeps it updated.
+1. **OneLens Deployer** (this chart) - A Kubernetes Job that installs and configures the monitoring stack. A CronJob checks it every 5 minutes, repairs it and keeps it updated.
 2. **OneLens Agent** (installed by the deployer) - The monitoring stack: OneLens Agent, Prometheus, OpenCost, and Kube-State-Metrics.
 
 You only install the **deployer** chart. It handles everything else.
@@ -103,6 +103,7 @@ All parameters below are passed via `--set` flags during `helm upgrade --install
 - [Volume Tags](#volume-tags) — apply custom tags to persistent volumes for cost tracking
 - [Node Scheduling](#node-scheduling) — run OneLens pods on dedicated or specific nodes
 - [Labels](#labels) — apply custom labels to all OneLens resources
+- [Agent Overrides](#agent-overrides) — pull images from your own registry, set memory and CPU yourself
 - [Other](#other) — image pull secrets, CronJob schedule, suspend updater
 
 ### Required Parameters
@@ -360,12 +361,44 @@ Apply custom labels to OneLens resources. Useful for organizational policies tha
   --set globals.labels."company\.com/env"=prod
 ```
 
+### Agent Overrides
+
+The updater sizes the agent stack and picks its images on every run. To keep your own settings instead, set them under `agentOverrides`. The updater applies them exactly as given on every run, within about 5 minutes of a change, and leaves every setting you don't set to OneLens.
+
+| Parameter | Description |
+|---|---|
+| `agentOverrides.images.<name>` | Image repository to pull from, without a tag, e.g. `us-docker.pkg.dev/my-project/mirror/prometheus`. OneLens still supplies the tag, so mirror each new tag before an upgrade. `<name>`: `agent`, `prometheus`, `configReloader`, `pushgateway`, `kubeStateMetrics`, `opencost`, `victoriaMetrics` |
+| `agentOverrides.resources.<component>.requests.memory` | Memory request, e.g. `20Gi` |
+| `agentOverrides.resources.<component>.limits.memory` | Memory limit, e.g. `24Gi` |
+| `agentOverrides.resources.<component>.requests.cpu` | CPU request, e.g. `500m` |
+| `agentOverrides.resources.<component>.limits.cpu` | CPU limit, e.g. `2` |
+
+`<component>`: `prometheus` (also applies to VictoriaMetrics when it is the metrics backend), `agent`, `opencost`, `kubeStateMetrics`, `pushgateway`. If you set only a limit, the request is set to the same value, as Kubernetes does. If you set only a request, OneLens keeps managing the limit and raises it to the request when needed. The updater won't raise memory or CPU you set, even after an out-of-memory restart, so raise it here if a pod keeps failing.
+
+```bash
+helm upgrade onelensdeployer onelens/onelensdeployer -n onelens-agent --reuse-values \
+  --set agentOverrides.images.prometheus=us-docker.pkg.dev/my-project/mirror/prometheus \
+  --set agentOverrides.images.configReloader=us-docker.pkg.dev/my-project/mirror/prometheus-config-reloader \
+  --set agentOverrides.images.pushgateway=us-docker.pkg.dev/my-project/mirror/pushgateway \
+  --set agentOverrides.resources.prometheus.requests.memory=20Gi \
+  --set agentOverrides.resources.prometheus.limits.memory=24Gi \
+  --set agentOverrides.resources.opencost.limits.memory=8Gi
+```
+
+`helm show values onelens/onelensdeployer` lists every key. Helm rejects a misspelled key or an invalid value when you run the command. To see what the updater applied or rejected:
+
+```bash
+kubectl -n onelens-agent get configmap onelens-agent-overrides-status -o yaml
+```
+
+To hand a setting back to OneLens, set it to an empty string (for example `--set agentOverrides.resources.prometheus.limits.memory=""`). OneLens takes over from your last value, so memory doesn't drop suddenly: the request is set equal to your last limit, and OneLens resizes it from real usage at its next full evaluation (every 72 hours).
+
 ### Other
 
 | Parameter | Description | Default |
 |---|---|---|
-| `cronjob.schedule` | Updater CronJob schedule | `"0 2 * * *"` |
-| `cronjob.suspend` | Suspend the daily updater | `false` |
+| `cronjob.schedule` | Updater CronJob schedule. The updater resets it to every 5 minutes. | `"*/5 * * * *"` |
+| `cronjob.suspend` | Suspend the updater: no health checks, repairs, upgrades or overrides. The agent keeps sending data. | `false` |
 
 ---
 
