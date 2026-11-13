@@ -178,6 +178,64 @@ assert_eq "$_USAGE_CAP_AGENT_MEM" "8192" \
     "_USAGE_CAP_AGENT_MEM raised to 8192 (from 4096) in v2.1.66"
 
 ###############################################################################
+# Prometheus/VictoriaMetrics memory cap raised to 12288Mi
+# Clusters of ~4,000 pods peaked at the 8192Mi cap and OOM-looped; the updater
+# could not raise them, and cut hand-raised memory back to the cap.
+###############################################################################
+assert_eq "$_USAGE_CAP_PROM_MEM" "12288" \
+    "_USAGE_CAP_PROM_MEM raised to 12288 (from 8192)"
+
+###############################################################################
+# calculate_usage_memory with current memory: the cap stops raises, never cuts
+###############################################################################
+
+# Usage needs 32819Mi (24310Mi × 1.35). Without current: clamped to the cap, as before.
+assert_eq "$(calculate_usage_memory "$((24310*1048576))" 1.35 150 12288)" "12288Mi" \
+    "calculate_usage_memory: need above the cap, no current → cap"
+# Current 20480Mi is above the cap and below the need → kept
+assert_eq "$(calculate_usage_memory "$((24310*1048576))" 1.35 150 12288 "20480Mi")" "20480Mi" \
+    "calculate_usage_memory: need above the cap, current 20480Mi above the cap → current kept"
+# Current 20Gi written in Gi → same
+assert_eq "$(calculate_usage_memory "$((24310*1048576))" 1.35 150 12288 "20Gi")" "20480Mi" \
+    "calculate_usage_memory: current given as 20Gi → kept as 20480Mi"
+# Current below the cap → raise stops at the cap
+assert_eq "$(calculate_usage_memory "$((24310*1048576))" 1.35 150 12288 "8192Mi")" "12288Mi" \
+    "calculate_usage_memory: need above the cap, current 8192Mi → cap 12288Mi"
+# Need 15000Mi (11100Mi × 1.35) is above the cap but below current → the need, not the cap
+assert_eq "$(calculate_usage_memory "$((11100*1048576))" 1.35 150 12288 "20480Mi")" "15000Mi" \
+    "calculate_usage_memory: need 15000Mi between the cap and current 20480Mi → 15000Mi"
+# Need 6800Mi (5000Mi × 1.35) is below the cap → the need, whatever current is
+assert_eq "$(calculate_usage_memory "$((5000*1048576))" 1.35 150 12288 "20480Mi")" "6800Mi" \
+    "calculate_usage_memory: need below the cap → need (6800Mi)"
+
+###############################################################################
+# node_fit_memory_mi / fit_cap_to_node
+###############################################################################
+
+# 15291092Ki = 14932Mi (16GiB node); 85% = 12692Mi. 7116788Ki = 6949Mi (8GiB node); 85% = 5907Mi.
+assert_eq "$(node_fit_memory_mi "$(printf '7116788Ki   <none>\n15291092Ki   <none>')")" "12692" \
+    "node_fit_memory_mi: largest node wins (85% of 15291092Ki = 12692Mi)"
+assert_eq "$(node_fit_memory_mi "$(printf '7116788Ki   <none>\n15291092Ki   true')")" "5907" \
+    "node_fit_memory_mi: cordoned node ignored (85% of 7116788Ki = 5907Mi)"
+assert_eq "$(node_fit_memory_mi "16Gi   <none>")" "13926" \
+    "node_fit_memory_mi: 16Gi → 13926Mi"
+assert_eq "$(node_fit_memory_mi "17179869184   <none>")" "13926" \
+    "node_fit_memory_mi: 17179869184 bytes → 13926Mi"
+assert_eq "$(node_fit_memory_mi "")" "" \
+    "node_fit_memory_mi: no nodes → empty"
+assert_eq "$(node_fit_memory_mi "15291092Ki   true")" "" \
+    "node_fit_memory_mi: every node cordoned → empty"
+assert_eq "$(node_fit_memory_mi "<none>   <none>")" "" \
+    "node_fit_memory_mi: no allocatable memory reported → empty"
+
+assert_eq "$(fit_cap_to_node 12288 12692)" "12288" \
+    "fit_cap_to_node: node fit above the cap → cap"
+assert_eq "$(fit_cap_to_node 12288 5907)" "5907" \
+    "fit_cap_to_node: node fit below the cap → node fit"
+assert_eq "$(fit_cap_to_node 12288 "")" "12288" \
+    "fit_cap_to_node: nodes unreadable → cap"
+
+###############################################################################
 # evaluate_container_sizing — usage-at-limit detection (param 16: mem_now_bytes)
 ###############################################################################
 
