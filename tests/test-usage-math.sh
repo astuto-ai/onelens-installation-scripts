@@ -234,6 +234,10 @@ assert_eq "$(fit_cap_to_node 12288 5907)" "5907" \
     "fit_cap_to_node: node fit below the cap → node fit"
 assert_eq "$(fit_cap_to_node 12288 "")" "12288" \
     "fit_cap_to_node: nodes unreadable → cap"
+assert_eq "$(fit_cap_to_node 12288 0)" "12288" \
+    "fit_cap_to_node: zero node fit → cap, never a 0Mi cap"
+assert_eq "$(node_fit_memory_mi "1Mi   <none>")" "0" \
+    "node_fit_memory_mi: a 1Mi node truncates to 0 (fit_cap_to_node ignores it)"
 
 ###############################################################################
 # evaluate_container_sizing — usage-at-limit detection (param 16: mem_now_bytes)

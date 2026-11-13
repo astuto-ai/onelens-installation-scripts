@@ -186,11 +186,11 @@ node_fit_memory_mi() {
 
 # fit_cap_to_node "$cap_mi" "$node_fit_mi"
 # A component's memory cap (Mi), lowered to the node fit so a raise never asks for more
-# memory than the largest node holds. Empty node fit (nodes unreadable) → cap unchanged.
+# memory than the largest node holds. Empty or zero node fit (nodes unreadable) → cap unchanged.
 # Memory already above the result is kept: the OOM bumps and calculate_usage_memory never cut it.
 fit_cap_to_node() {
     local cap="$1" fit="$2"
-    if [ -n "$fit" ] && [ "$fit" -lt "$cap" ] 2>/dev/null; then echo "$fit"; else echo "$cap"; fi
+    if [ -n "$fit" ] && [ "$fit" -gt 0 ] 2>/dev/null && [ "$fit" -lt "$cap" ] 2>/dev/null; then echo "$fit"; else echo "$cap"; fi
 }
 
 # calculate_usage_cpu "$max_72h_cores" "$buffer" "$floor" "$cap"
