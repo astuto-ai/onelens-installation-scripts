@@ -93,11 +93,12 @@ _USAGE_FLOOR_OPENCOST_MEM=192 # tiny tier OpenCost memory (Mi)
 _USAGE_FLOOR_AGENT_MEM=384  # tiny tier Agent memory (Mi)
 _USAGE_FLOOR_CPU=50          # tiny tier minimum CPU (millicores)
 _USAGE_FLOOR_OPENCOST_CPU=100 # OpenCost needs ≥100m for startup burst (readiness probe)
-_USAGE_CAP_PROM_MEM=8192    # max Prometheus memory for mega clusters (Mi)
+_USAGE_CAP_PROM_MEM=12288   # max Prometheus/VictoriaMetrics memory for mega clusters (Mi); raised 8192→12288 — clusters of ~4,000 pods peaked at the 8192 cap and OOM-looped
 _USAGE_CAP_KSM_MEM=4800     # max KSM memory for mega clusters (Mi)
 _USAGE_CAP_OPENCOST_MEM=4800 # max OpenCost memory for mega clusters (Mi)
 _USAGE_CAP_AGENT_MEM=8192   # max agent memory (raised 4096→8192 in v2.1.66; agent mem scales with metric cardinality/cost data volume, not just pod count — 5 customer clusters hit the 4GB cap)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
+_NODE_FIT_PERCENT=85         # a memory raise stops at this share of the largest node's allocatable memory; the rest is left for DaemonSets
 
 # apply_vm_memory_floor
 # PROMETHEUS_MEMORY_{REQUEST,LIMIT} size the metrics backend, including VictoriaMetrics.
@@ -131,11 +132,14 @@ _clamp_resource() {
     echo "$val"
 }
 
-# calculate_usage_memory "$max_72h_bytes" "$buffer" "$floor" "$cap"
+# calculate_usage_memory "$max_72h_bytes" "$buffer" "$floor" "$cap" ["$current_mem_str"]
 # Convert max bytes from Prometheus to Mi with buffer, clamped to floor/cap.
+# With $current_mem_str: when usage needs more than the cap, the cap stops a raise but never
+# cuts memory already above it (set by hand or by an older cap). The result is then the
+# smaller of current and need, which is never below the cap.
 # Returns Mi string (e.g. "258Mi"). Returns empty if input is empty/zero.
 calculate_usage_memory() {
-    local bytes="$1" buffer="$2" floor="$3" cap="$4"
+    local bytes="$1" buffer="$2" floor="$3" cap="$4" current="${5:-}"
     if [ -z "$bytes" ] || [ "$bytes" = "0" ]; then echo ""; return; fi
     local mi=$(echo "$bytes $buffer" | awk '{
         raw = int($1 / 1048576 * $2 + 0.99)
@@ -143,8 +147,50 @@ calculate_usage_memory() {
         else           { result = int((raw + 99) / 100) * 100 }
         printf "%d", result
     }')
+    local need="$mi"
     mi=$(_clamp_resource "$mi" "$floor" "$cap")
+    if [ -n "$current" ] && [ "$need" -gt "$cap" ] 2>/dev/null; then
+        local c=$(_memory_to_mi "$current")
+        if [ "$c" -gt "$cap" ] 2>/dev/null; then
+            mi=$(( c < need ? c : need ))
+        fi
+    fi
     echo "${mi}Mi"
+}
+
+# node_fit_memory_mi "$nodes"
+# Most memory (Mi) a pod can be raised to and still fit on a node: _NODE_FIT_PERCENT of the
+# largest allocatable memory among nodes that aren't cordoned. $nodes is the output of
+# `kubectl get nodes -o custom-columns=MEM:.status.allocatable.memory,UNSCHED:.spec.unschedulable --no-headers`.
+# Returns integer Mi, or empty when no node reports allocatable memory.
+node_fit_memory_mi() {
+    local nodes="$1"
+    if [ -z "$nodes" ]; then echo ""; return; fi
+    echo "$nodes" | awk -v pct="$_NODE_FIT_PERCENT" '
+        $2 == "true" { next }
+        {
+            n = $1 + 0; s = $1; sub(/^[0-9]+/, "", s)
+            if      (s == "Ki") mi = n / 1024
+            else if (s == "Mi") mi = n
+            else if (s == "Gi") mi = n * 1024
+            else if (s == "Ti") mi = n * 1048576
+            else if (s == "")   mi = n / 1048576
+            else if (s == "k")  mi = n * 1000 / 1048576
+            else if (s == "M")  mi = n * 1000000 / 1048576
+            else if (s == "G")  mi = n * 1000000000 / 1048576
+            else next
+            if (mi > max) max = mi
+        }
+        END { if (max > 0) printf "%d", max * pct / 100 }'
+}
+
+# fit_cap_to_node "$cap_mi" "$node_fit_mi"
+# A component's memory cap (Mi), lowered to the node fit so a raise never asks for more
+# memory than the largest node holds. Empty or zero node fit (nodes unreadable) → cap unchanged.
+# Memory already above the result is kept: the OOM bumps and calculate_usage_memory never cut it.
+fit_cap_to_node() {
+    local cap="$1" fit="$2"
+    if [ -n "$fit" ] && [ "$fit" -gt 0 ] 2>/dev/null && [ "$fit" -lt "$cap" ] 2>/dev/null; then echo "$fit"; else echo "$cap"; fi
 }
 
 # calculate_usage_cpu "$max_72h_cores" "$buffer" "$floor" "$cap"
@@ -387,7 +433,7 @@ evaluate_container_sizing() {
         # Exception: upsize if usage data suggests buffer is thin
         if [ -n "$max_mem_bytes" ] && [ "$max_mem_bytes" != "0" ]; then
             local proposed_mem
-            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap" "$current_mem")
             if [ -n "$proposed_mem" ] && should_upsize "$proposed_mem" "$current_mem" "memory"; then
                 new_mem="$proposed_mem"
             fi
@@ -419,7 +465,7 @@ evaluate_container_sizing() {
     if [ "$has_oom_recent" = "true" ]; then
         if [ -n "$max_mem_bytes" ] && [ "$max_mem_bytes" != "0" ]; then
             local proposed_mem
-            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+            proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap" "$current_mem")
             if [ -n "$proposed_mem" ] && should_upsize "$proposed_mem" "$current_mem" "memory"; then
                 new_mem="$proposed_mem"
             fi
@@ -473,7 +519,7 @@ evaluate_container_sizing() {
 
     # Calculate proposed values from usage
     local proposed_mem proposed_cpu
-    proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap")
+    proposed_mem=$(calculate_usage_memory "$max_mem_bytes" "$mem_buffer" "$mem_floor" "$mem_cap" "$current_mem")
     proposed_cpu=$(calculate_usage_cpu "$max_cpu_cores" "$cpu_buffer" "$cpu_floor" "$cpu_cap")
 
     # Gross over-provisioning override: if current memory is more than 3x what

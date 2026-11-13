@@ -344,6 +344,13 @@ TOTAL_PODS=$(( NUM_PODS * 130 / 100 ))  # 30% buffer
 
 NUM_NODES=$(kubectl get nodes --no-headers --chunk-size=100 2>/dev/null | wc -l | tr -d '[:space:]')
 
+# Node fit: every memory raise below stops at this, so a raise can't leave a pod with no node
+# big enough to schedule it. Empty when nodes can't be read — raises then stop at the caps only.
+NODE_FIT_MEM_MI=$(node_fit_memory_mi "$(kubectl get nodes --chunk-size=100 -o custom-columns='MEM:.status.allocatable.memory,UNSCHED:.spec.unschedulable' --no-headers 2>/dev/null || true)")
+if [ -n "$NODE_FIT_MEM_MI" ]; then
+    echo "Node fit: memory raises stop at ${NODE_FIT_MEM_MI}Mi (${_NODE_FIT_PERCENT}% of the largest node's allocatable memory)"
+fi
+
 if [ "$TOTAL_PODS" -le 0 ]; then
     echo "WARNING: No active pods found. Using minimum tier."
     TOTAL_PODS=1
@@ -989,6 +996,7 @@ if [ -n "$PROM_SVC" ]; then
             local mem_floor="$5" mem_cap="$6" oom_state_var="$7"
             local cpu_floor="${8:-$_USAGE_FLOOR_CPU}"
             local mem_now_bytes="${9:-}"
+            mem_cap=$(fit_cap_to_node "$mem_cap" "$NODE_FIT_MEM_MI")
 
             local mem_bytes cpu_cores oom_now oom_recent
             mem_bytes=$(_get_container_val "$MEM_72H" "$container")
@@ -1026,7 +1034,7 @@ if [ -n "$PROM_SVC" ]; then
                 # Check if safety guard would have blocked a larger downsize
                 if [ "$FULL_EVAL_DUE" = "true" ] && [ -n "$mem_bytes" ] && [ "$mem_bytes" != "0" ]; then
                     local proposed
-                    proposed=$(calculate_usage_memory "$mem_bytes" 1.35 "$mem_floor" "$mem_cap")
+                    proposed=$(calculate_usage_memory "$mem_bytes" 1.35 "$mem_floor" "$mem_cap" "$cur_mem")
                     if [ -n "$proposed" ] && ! is_safe_downsize "$proposed" "$cur_mem"; then
                         echo "  $label: safety guard limited downsize (target was $proposed, >50% reduction)"
                     fi
@@ -1338,10 +1346,11 @@ fi
 # Apply the bump (Strategy 1 only — live-pod OOM detection)
 if [ -n "$_agent_bump_reason" ]; then
     _agent_cur_mi=$(_memory_to_mi "$ONELENS_MEMORY_LIMIT")
-    if [ "$_agent_cur_mi" -ge "$_USAGE_CAP_AGENT_MEM" ] 2>/dev/null; then
+    _agent_cap=$(fit_cap_to_node "$_USAGE_CAP_AGENT_MEM" "$NODE_FIT_MEM_MI")
+    if [ "$_agent_cur_mi" -ge "$_agent_cap" ] 2>/dev/null; then
         echo "Agent failure detected (${_agent_bump_reason}) but already at memory cap (${ONELENS_MEMORY_LIMIT}). Manual investigation needed. Evidence: ${_agent_bump_evidence}"
     else
-        _agent_new=$(calculate_wal_oom_memory "$ONELENS_MEMORY_LIMIT" "$_USAGE_CAP_AGENT_MEM")
+        _agent_new=$(calculate_wal_oom_memory "$ONELENS_MEMORY_LIMIT" "$_agent_cap")
         echo "Agent failure detected (${_agent_bump_reason}) — bumping agent memory via helm: ${ONELENS_MEMORY_LIMIT} -> $_agent_new. Evidence: ${_agent_bump_evidence}"
         ONELENS_MEMORY_LIMIT="$_agent_new"
         ONELENS_MEMORY_REQUEST="$_agent_new"
@@ -2168,7 +2177,7 @@ _bump_component_memory() {
     case "$component" in
         prometheus-server)
             old_mem="$PROMETHEUS_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_PROM_MEM"
+            cap=$(fit_cap_to_node "$_USAGE_CAP_PROM_MEM" "$NODE_FIT_MEM_MI")
             new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
             PROMETHEUS_MEMORY_REQUEST="$new_mem"; PROMETHEUS_MEMORY_LIMIT="$new_mem"
             set_flags="--set prometheus.server.resources.requests.memory=\"$new_mem\" --set prometheus.server.resources.limits.memory=\"$new_mem\""
@@ -2177,21 +2186,21 @@ _bump_component_memory() {
             # Shares PROMETHEUS_MEMORY_* with the Prometheus server (the helm VM branch
             # reads them), so later --set flags in the same upgrade stay consistent.
             old_mem="$PROMETHEUS_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_PROM_MEM"
+            cap=$(fit_cap_to_node "$_USAGE_CAP_PROM_MEM" "$NODE_FIT_MEM_MI")
             new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
             PROMETHEUS_MEMORY_REQUEST="$new_mem"; PROMETHEUS_MEMORY_LIMIT="$new_mem"
             set_flags="--set onelens-agent.victoriaMetrics.resources.requests.memory=\"$new_mem\" --set onelens-agent.victoriaMetrics.resources.limits.memory=\"$new_mem\""
             ;;
         kube-state-metrics)
             old_mem="$KSM_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_KSM_MEM"
+            cap=$(fit_cap_to_node "$_USAGE_CAP_KSM_MEM" "$NODE_FIT_MEM_MI")
             new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
             KSM_MEMORY_REQUEST="$new_mem"; KSM_MEMORY_LIMIT="$new_mem"
             set_flags="--set prometheus.kube-state-metrics.resources.requests.memory=\"$new_mem\" --set prometheus.kube-state-metrics.resources.limits.memory=\"$new_mem\""
             ;;
         prometheus-opencost-exporter)
             old_mem="$OPENCOST_MEMORY_LIMIT"
-            cap="$_USAGE_CAP_OPENCOST_MEM"
+            cap=$(fit_cap_to_node "$_USAGE_CAP_OPENCOST_MEM" "$NODE_FIT_MEM_MI")
             new_mem=$(calculate_wal_oom_memory "$old_mem" "$cap")  # 1.5x
             OPENCOST_MEMORY_REQUEST="$new_mem"; OPENCOST_MEMORY_LIMIT="$new_mem"
             set_flags="--set prometheus-opencost-exporter.opencost.exporter.resources.requests.memory=\"$new_mem\" --set prometheus-opencost-exporter.opencost.exporter.resources.limits.memory=\"$new_mem\""

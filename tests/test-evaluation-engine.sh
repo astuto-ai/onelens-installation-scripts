@@ -227,6 +227,61 @@ assert_eq "$(_eval_mem "prometheus-server" "16384Mi" "2000m" "$((16017*1048576))
 assert_eq "$(_eval_mem "opencost" "6000Mi" "350m" "$((5900*1048576))" "0.3" "true" "false" "false" "false" 1.3 1.3 192 4800 100 1200)" \
     "6000Mi" "OpenCost OOM at 6000Mi above a 4800Mi cap: kept"
 
+# Full evaluation used to propose the cap and cut memory above it: a Prometheus raised to 12Gi
+# went back to 8Gi and OOM-looped again. Usage needing more than the cap now keeps current.
+assert_eq "$(_eval_mem "prometheus-server" "20480Mi" "2000m" "$((24310*1048576))" "1.5" "false" "false" "true" "false" 1.35 1.25 150 12288 50 1200)" \
+    "20480Mi" "full eval, 20480Mi above a 12288Mi cap, usage needs 32819Mi: kept"
+assert_eq "$(_eval_mem "prometheus-server" "20480Mi" "2000m" "$((11100*1048576))" "1.5" "false" "false" "true" "false" 1.35 1.25 150 12288 50 1200)" \
+    "15000Mi" "full eval, 20480Mi above a 12288Mi cap, usage needs 15000Mi: lowered to the need, not the cap"
+
+###############################################################################
+# 12288Mi cap: Prometheus held at 8192Mi can now be raised
+###############################################################################
+echo ""
+echo "--- 12288Mi cap ---"
+
+# 8Gi Prometheus peaking at 8182Mi (7.99GiB): 8182 × 1.35 = 11046 → 11100Mi on a 5-min check
+assert_eq "$(_eval_mem "prometheus-server" "8192Mi" "600m" "$((8182*1048576))" "0.5" "false" "false" "false" "false" 1.35 1.25 150 "$_USAGE_CAP_PROM_MEM" 50 1200)" \
+    "11100Mi" "5-min: 8192Mi peaking at 8182Mi → 11100Mi"
+# OOM now: 2x, capped at 12288Mi
+assert_eq "$(_eval_mem "prometheus-server" "8192Mi" "600m" "" "" "true" "false" "false" "false" 1.35 1.25 150 "$_USAGE_CAP_PROM_MEM" 50 1200)" \
+    "12288Mi" "OOM now: 8192Mi → 12288Mi (2x, capped)"
+# Crash-loop retry after the upgrade: 1.5x, capped at 12288Mi
+assert_eq "$(calculate_wal_oom_memory "8192Mi" "$_USAGE_CAP_PROM_MEM")" "12288Mi" \
+    "WAL OOM retry: 8192Mi → 12288Mi"
+
+###############################################################################
+# Node fit lowers the cap for raises, never cuts current memory
+###############################################################################
+echo ""
+echo "--- node fit ---"
+
+# 8GiB nodes: node fit 5907Mi. An OOM bump from 4096Mi stops there instead of an unschedulable 8192Mi.
+_fit_cap=$(fit_cap_to_node "$_USAGE_CAP_PROM_MEM" 5907)
+assert_eq "$(_eval_mem "prometheus-server" "4096Mi" "600m" "" "" "true" "false" "false" "false" 1.35 1.25 150 "$_fit_cap" 50 1200)" \
+    "5907Mi" "OOM now on 8GiB nodes: 4096Mi → 5907Mi (node fit)"
+# Already above the node fit: an OOM bump keeps it
+assert_eq "$(_eval_mem "prometheus-server" "8192Mi" "600m" "" "" "true" "false" "false" "false" 1.35 1.25 150 "$_fit_cap" 50 1200)" \
+    "8192Mi" "OOM now, 8192Mi above a 5907Mi node fit: kept"
+# Already above the node fit, full eval with usage needing more: kept
+assert_eq "$(_eval_mem "prometheus-server" "8192Mi" "600m" "$((8182*1048576))" "0.5" "false" "false" "true" "false" 1.35 1.25 150 "$_fit_cap" 50 1200)" \
+    "8192Mi" "full eval, 8192Mi above a 5907Mi node fit, usage needs 11046Mi: kept"
+
+# patching.sh: the node fit is read once, before any raise, and every memory raise uses it
+PATCHING="$(repo_root)/src/patching.sh"
+fit_line=$(grep -n '^NODE_FIT_MEM_MI=\$(node_fit_memory_mi' "$PATCHING" | cut -d: -f1)
+first_use=$(grep -n 'fit_cap_to_node .*\$NODE_FIT_MEM_MI' "$PATCHING" | head -1 | cut -d: -f1)
+assert_eq "$([ -n "$fit_line" ] && [ -n "$first_use" ] && [ "$fit_line" -lt "$first_use" ] && echo yes || echo no)" "yes" \
+    "patching.sh reads the node fit before its first use"
+assert_eq "$(grep -c 'mem_cap=\$(fit_cap_to_node "\$mem_cap" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "1" \
+    "usage-based sizing (all components) caps raises at the node fit"
+assert_eq "$(grep -c '_agent_cap=\$(fit_cap_to_node "\$_USAGE_CAP_AGENT_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "1" \
+    "agent OOM bump caps at the node fit"
+assert_eq "$(grep -c 'cap=\$(fit_cap_to_node "\$_USAGE_CAP_\(PROM\|KSM\|OPENCOST\)_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "4" \
+    "post-upgrade retry bumps (Prometheus, VictoriaMetrics, KSM, OpenCost) cap at the node fit"
+assert_eq "$(grep -cE 'cap="\$_USAGE_CAP_[A-Z]+_MEM"' "$PATCHING")" "0" \
+    "no memory bump uses a cap without the node fit"
+
 ###############################################################################
 test_summary
 exit $?
