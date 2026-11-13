@@ -83,7 +83,7 @@ Common causes:
 - **CSI driver not installed** — see [EBS CSI driver not found](#ebs-csi-driver-not-found-aws) above
 - **StorageClass not created** — check if `onelens-sc` exists: `kubectl get storageclass | grep onelens-sc`
 - **Insufficient disk quota** — AWS or Azure account limits on volume creation
-- **Availability zone mismatch** — EBS and Azure Disk volumes are AZ-locked. If the node in the PV's AZ is gone, Prometheus can't start. See [Prometheus node and zone info](#prometheus-node-and-zone-info) to diagnose. **To prevent this:** reinstall with multi-AZ storage (EFS for AWS, Azure Files for Azure) — see [Multi-AZ Storage](../README.md#multi-az-storage).
+- **Availability zone mismatch** — EBS and Azure Disk volumes are AZ-locked. If the node in the PV's AZ is gone, Prometheus can't start. See [Prometheus node and zone info](#prometheus-node-and-zone-info) to diagnose. **To prevent this:** keep at least one node in each AZ your node groups use, or pin OneLens to an on-demand node group with [Node Scheduling](../README.md#node-scheduling). On AKS you can also use Azure Files — see [Multi-AZ Storage](../README.md#multi-az-storage).
 
 ---
 
@@ -172,7 +172,7 @@ Common causes:
 - **Tainted nodes without tolerations** — if your nodes have taints, pass matching tolerations (see [Node Scheduling](../README.md#node-scheduling))
 - **Insufficient CPU/memory** — the node doesn't have enough resources. Check `kubectl describe node <node>` under "Allocated resources"
 - **NodeSelector mismatch** — the label specified in `NODE_SELECTOR_KEY`/`NODE_SELECTOR_VALUE` doesn't exist on any node
-- **PV AZ mismatch** — Prometheus PV is in one AZ but no nodes are available there. Common on clusters with spot instances. Check with the [Prometheus node and zone info](#prometheus-node-and-zone-info) commands. To prevent: use multi-AZ storage — see [Multi-AZ Storage](../README.md#multi-az-storage)
+- **PV AZ mismatch** — Prometheus PV is in one AZ but no nodes are available there. Common on clusters with spot instances. Check with the [Prometheus node and zone info](#prometheus-node-and-zone-info) commands. To prevent: keep at least one node in each AZ your node groups use, or pin OneLens to an on-demand node group — see [Multi-AZ Storage](../README.md#multi-az-storage)
 
 ---
 

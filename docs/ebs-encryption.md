@@ -12,7 +12,7 @@ You can have OneLens encrypt the volume with the AWS-managed key (`aws/ebs`) or 
 - [Encrypt an existing installation](#encrypt-an-existing-installation) — uninstall and reinstall with encryption
 - [Verify](#verify) — confirm the volume is encrypted with your key
 - [Troubleshooting](#troubleshooting)
-- [Notes](#notes) — changing keys, key deletion, EFS
+- [Notes](#notes) — changing keys, key deletion
 
 ---
 
@@ -42,7 +42,7 @@ If you use your own key:
 
 If you leave the key empty and your account's default EBS encryption key has been changed from `aws/ebs`, AWS uses that default key instead.
 
-These settings apply only to EBS volumes. If OneLens is installed with EFS storage (`job.env.EFS_FILESYSTEM_ID`), they are ignored. See [Notes](#notes).
+These settings apply only to EBS volumes.
 
 ---
 
@@ -316,4 +316,3 @@ If `encrypted` is missing, the encryption parameters were not applied when the S
 - **Automatic key rotation** in AWS KMS needs no action on the OneLens side.
 - **Do not disable or schedule deletion of the key** while the OneLens volume uses it. The volume becomes unreadable and the metrics pod can't start.
 - **Account-level EBS encryption by default** is an alternative. With it turned on, every new EBS volume in the region is encrypted, including OneLens volumes installed without these parameters. Volumes that already exist stay unencrypted until they are recreated.
-- **EFS (multi-AZ storage):** the parameters on this page don't apply. EFS encryption is set on the file system when you create it. See [Multi-AZ Storage](../README.md#multi-az-storage).
