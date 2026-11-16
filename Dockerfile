@@ -1,3 +1,35 @@
+# Build kubectl and helm from their upstream release tags instead of downloading
+# the published binaries. Every published kubectl and helm v3 release still bundles
+# golang.org/x/net < v0.62.0, which customer image scanners report as HIGH. The
+# only change from upstream is the module bump below; drop this stage once
+# upstream releases ship it. Runs on the build host and cross-compiles, so the
+# arm64 image does not compile under QEMU.
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine3.24 AS tools
+RUN apk add --no-cache git make bash
+ARG KUBECTL_VERSION=v1.35.10
+ARG HELM_VERSION=v3.22.1
+ARG GO_MOD_BUMPS="golang.org/x/net@v0.62.0"
+ENV GOTOOLCHAIN=local CGO_ENABLED=0
+
+RUN git clone -q --depth 1 --branch ${KUBECTL_VERSION} https://github.com/kubernetes/kubernetes.git /src/kubernetes && \
+    cd /src/kubernetes && GOWORK=off go get ${GO_MOD_BUMPS}
+RUN git clone -q --depth 1 --branch ${HELM_VERSION} https://github.com/helm/helm.git /src/helm && \
+    cd /src/helm && go get ${GO_MOD_BUMPS}
+
+ARG TARGETOS TARGETARCH
+# Same version ldflags as kubernetes' hack/lib/version.sh, so `kubectl version`
+# and image scanners still identify the binary as the upstream release.
+RUN cd /src/kubernetes && \
+    MINOR=$(echo ${KUBECTL_VERSION} | cut -d. -f2) && \
+    LDFLAGS="-s -w" && \
+    for p in k8s.io/client-go/pkg/version k8s.io/component-base/version; do \
+      LDFLAGS="$LDFLAGS -X $p.gitVersion=${KUBECTL_VERSION} -X $p.gitMajor=1 -X $p.gitMinor=${MINOR}"; \
+      LDFLAGS="$LDFLAGS -X $p.gitCommit=$(git rev-parse HEAD) -X $p.gitTreeState=dirty -X $p.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+    done && \
+    GOWORK=off GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=mod -trimpath -ldflags "$LDFLAGS" -o /out/kubectl ./cmd/kubectl
+RUN cd /src/helm && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} make build VERSION=${HELM_VERSION} BINDIR=/out
+
 FROM alpine:3.22
 
 # Install dependencies (this layer is cached across builds)
@@ -15,18 +47,11 @@ RUN apk update && apk add --no-cache \
     aws-cli && \
     echo "Dependencies installed successfully"
 
-# Install kubectl for healthcheck mode (entrypoint.sh needs it before patching.sh runs)
-# Also available at runtime so install.sh skips the download in airgapped environments.
-RUN ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/') && \
-    curl -sL "https://dl.k8s.io/release/v1.33.13/bin/linux/${ARCH}/kubectl" -o /usr/local/bin/kubectl && \
-    chmod +x /usr/local/bin/kubectl
-
-# Install Helm so install.sh skips the download in airgapped environments.
-RUN ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/') && \
-    curl -fsSL "https://get.helm.sh/helm-v3.21.2-linux-${ARCH}.tar.gz" -o /tmp/helm.tar.gz && \
-    tar -xzvf /tmp/helm.tar.gz -C /tmp && \
-    mv /tmp/linux-${ARCH}/helm /usr/local/bin/helm && \
-    rm -rf /tmp/linux-${ARCH} /tmp/helm.tar.gz
+# kubectl for healthcheck mode (entrypoint.sh needs it before patching.sh runs), and
+# Helm. Both are also available at runtime so install.sh skips the download in
+# airgapped environments.
+COPY --from=tools /out/kubectl /out/helm /usr/local/bin/
+RUN kubectl version --client && helm version
 
 # Bundle the onelens-agent Helm chart for airgapped environments.
 # In airgapped mode, install.sh and patching.sh use this local chart
