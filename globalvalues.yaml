@@ -85,9 +85,15 @@ onelens-agent:
     enabled: "false"
     dcgmExporter:
       image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+  # Copied unchanged from Docker Hub by images/busybox; keep the tag in sync with its TAG file.
+  networkCosts:
+    initImage:
+      repository: public.ecr.aws/w7k6q5m9/onelens-busybox
+      tag: "1.36"
   victoriaMetrics:
+    # Copied unchanged from Docker Hub by images/victoria-metrics; keep the tag in sync with its TAG file.
     image:
-      repository: victoriametrics/victoria-metrics
+      repository: public.ecr.aws/w7k6q5m9/onelens-victoria-metrics
       tag: v1.156.0
       pullPolicy: IfNotPresent
     resources:
@@ -231,8 +237,9 @@ prometheus:
     prometheus:
       enabled: true
       name: configmap-reload
+      # Copied unchanged from quay.io by images/prometheus-config-reloader; keep the tag in sync with its TAG file.
       image:
-        repository: quay.io/prometheus-operator/prometheus-config-reloader
+        repository: public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader
         tag: v0.95.2
         digest: ""
         pullPolicy: IfNotPresent

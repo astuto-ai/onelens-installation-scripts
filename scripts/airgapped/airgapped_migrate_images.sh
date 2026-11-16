@@ -132,11 +132,13 @@ helm pull onelens/onelens-agent --version "$VERSION" -d "$TMPDIR" --untar --unta
 IMAGES=""
 _V="$TMPDIR/values.yaml"
 
-# Helper: extract tag from the line immediately following a repository match.
-# Prints nothing (and does not fail under set -e) when the repository is not in the file.
+# Helper: extract tag from the line immediately following a repository match. The whole
+# repository value must match, so onelens-prometheus does not also match
+# onelens-prometheus-config-reloader. Prints nothing (and does not fail under set -e)
+# when the repository is not in the file.
 _get_tag() {
     local file="$1" repo_pattern="$2"
-    grep -A1 "repository: ${repo_pattern}" "$file" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"' || true
+    grep -E -A1 "repository: \"?${repo_pattern}\"?[[:space:]]*(#.*)?$" "$file" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"' || true
 }
 
 # onelens-agent
@@ -153,10 +155,12 @@ IMAGES="${IMAGES}
 public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION} onelens-deployer:v${VERSION}"
 echo "  onelens-deployer: public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION}"
 
-# prometheus, pushgateway, opencost, kube-state-metrics and node-exporter are built by
-# OneLens from upstream source (images/ in this repo) from 2.1.128 on; earlier versions'
-# globalvalues.yaml names the upstream registries. Each block below tries OneLens' image
-# first, then the upstream one. The mirrored name and tag are the same either way.
+# From 2.1.128 on, OneLens publishes the third-party images itself (images/ in this
+# repo): prometheus, pushgateway, opencost, kube-state-metrics and node-exporter are built
+# from upstream source; config-reloader and victoria-metrics are copied unchanged.
+# Earlier versions' globalvalues.yaml names the upstream registries. Each block below
+# tries OneLens' image first, then the upstream one. The mirrored name and tag are the
+# same either way.
 
 # prometheus
 _repo="public.ecr.aws/w7k6q5m9/onelens-prometheus"
@@ -172,8 +176,12 @@ ${_repo}:${_tag} prometheus:${_tag}"
 fi
 
 # prometheus-config-reloader
-_repo="quay.io/prometheus-operator/prometheus-config-reloader"
+_repo="public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader"
 _tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ]; then
+    _repo="quay.io/prometheus-operator/prometheus-config-reloader"
+    _tag=$(_get_tag "$_V" "$_repo")
+fi
 if [ -n "$_tag" ]; then
     IMAGES="${IMAGES}
 ${_repo}:${_tag} prometheus-config-reloader:${_tag}"
@@ -182,12 +190,18 @@ fi
 
 # victoria-metrics (alternate metrics backend — mirrored so METRICS_BACKEND=victoriametrics
 # works air-gapped; install.sh/patching.sh point it at $REGISTRY_URL/victoria-metrics).
-# Pulled from quay.io (already a required registry) rather than the chart's Docker Hub
-# default — same image, but avoids a new registry dependency and Docker Hub rate limits.
-_repo="victoriametrics/victoria-metrics"
+# From 2.1.128 OneLens publishes a copy; before that, pulled from quay.io (already a
+# required registry) rather than the chart's Docker Hub default — same image, but avoids
+# a new registry dependency and Docker Hub rate limits.
+_repo="public.ecr.aws/w7k6q5m9/onelens-victoria-metrics"
 _tag=$(_get_tag "$_V" "$_repo")
-if [ -n "$_tag" ]; then
+_source="${_repo}:${_tag}"
+if [ -z "$_tag" ]; then
+    _repo="victoriametrics/victoria-metrics"
+    _tag=$(_get_tag "$_V" "$_repo")
     _source="quay.io/${_repo}:${_tag}"
+fi
+if [ -n "$_tag" ]; then
     IMAGES="${IMAGES}
 ${_source} victoria-metrics:${_tag}"
     echo "  victoria-metrics: ${_source}"

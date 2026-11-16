@@ -26,8 +26,8 @@ Ask your network team to allow outbound HTTPS (port 443) access to the following
 
 | URL | Purpose |
 |-----|---------|
-| `https://public.ecr.aws` | OneLens Agent and Deployer images; from 2.1.128, also Prometheus, pushgateway, kube-state-metrics, OpenCost and node-exporter (built by OneLens from upstream source) |
-| `https://quay.io` | config-reloader, kube-rbac-proxy images; Prometheus and pushgateway before 2.1.128 |
+| `https://public.ecr.aws` | OneLens Agent and Deployer images; from 2.1.128, also Prometheus, config-reloader, pushgateway, kube-state-metrics, OpenCost, VictoriaMetrics and node-exporter (published by OneLens) |
+| `https://quay.io` | kube-rbac-proxy image; Prometheus, config-reloader and pushgateway before 2.1.128 |
 | `https://registry.k8s.io` | kube-state-metrics image (before 2.1.128 only) |
 | `https://ghcr.io` | OpenCost image (before 2.1.128 only) |
 | `https://nvcr.io` | DCGM Exporter image (only needed for GPU clusters) |
@@ -162,8 +162,8 @@ If your organization requires all container images to be hosted in your own priv
 | URL | Used in | Purpose |
 |-----|---------|---------|
 | `https://astuto-ai.github.io` | Migration | Download Helm charts, migration script, and version config from the OneLens public GitHub repository |
-| `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images; from 2.1.128, also `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` |
-| `https://quay.io` | Migration | Pull `config-reloader`, `victoria-metrics`, `kube-rbac-proxy` images; `prometheus` and `pushgateway` before 2.1.128 |
+| `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images; from 2.1.128, also `prometheus`, `config-reloader`, `pushgateway`, `kube-state-metrics`, `opencost`, `victoria-metrics` and `node-exporter` |
+| `https://quay.io` | Migration | Pull `kube-rbac-proxy` image; `prometheus`, `config-reloader`, `pushgateway` and `victoria-metrics` before 2.1.128 |
 | `https://registry.k8s.io` | Migration | Pull `kube-state-metrics` image (before 2.1.128 only) |
 | `https://ghcr.io` | Migration | Pull `opencost` image (before 2.1.128 only) |
 | `https://nvcr.io` | Migration | Pull `dcgm-exporter` image (GPU monitoring — only needed for GPU clusters) |
@@ -470,16 +470,16 @@ The following images are mirrored by `airgapped_migrate_images.sh`. The list is 
 | `onelens-deployer` | `public.ecr.aws` | Deployer and updater CronJob |
 | `prometheus` | `public.ecr.aws` (`quay.io` before 2.1.128) | Metrics collection |
 | `opencost` | `public.ecr.aws` (`ghcr.io` before 2.1.128) | Cost analysis exporter |
-| `prometheus-config-reloader` | `quay.io` | Prometheus config reload sidecar |
+| `prometheus-config-reloader` | `public.ecr.aws` (`quay.io` before 2.1.128) | Prometheus config reload sidecar |
 | `kube-state-metrics` | `public.ecr.aws` (`registry.k8s.io` before 2.1.128) | Kubernetes state metrics |
 | `pushgateway` | `public.ecr.aws` (`quay.io` before 2.1.128) | Prometheus push gateway |
-| `victoria-metrics` | `quay.io` | Metrics collection (VictoriaMetrics backend) |
+| `victoria-metrics` | `public.ecr.aws` (`quay.io` before 2.1.128) | Metrics collection (VictoriaMetrics backend) |
 | `node-exporter` | `public.ecr.aws` (`quay.io` before 2.1.128) | Node metrics (only if node-exporter is enabled) |
 | `kube-rbac-proxy` | `quay.io` | RBAC proxy for kube-state-metrics |
 | `dcgm-exporter` | `nvcr.io` | NVIDIA GPU metrics (only for GPU clusters) |
 
 > Exact tags depend on the version you deploy. The migration script handles this automatically.
-> From 2.1.128, OneLens builds `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` from their upstream release source with patched dependencies, so they pass HIGH/CRITICAL image scans. Their tags match the upstream releases.
+> From 2.1.128, OneLens publishes these third-party images itself so they pass HIGH/CRITICAL image scans: `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` are built from their upstream release source with patched dependencies, and `prometheus-config-reloader` and `victoria-metrics` are copied unchanged. Their tags match the upstream releases.
 
 ---
 

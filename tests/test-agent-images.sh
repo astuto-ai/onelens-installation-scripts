@@ -1,7 +1,8 @@
 #!/bin/bash
-# Third-party images that OneLens rebuilds from upstream source (images/<name>) so they
-# pass customers' HIGH/CRITICAL image scans. globalvalues.yaml must pull exactly the
-# published tags, and the air-gapped migration script must mirror the same images.
+# Third-party images that OneLens publishes itself (images/<name>) so they pass
+# customers' HIGH/CRITICAL image scans: rebuilt from upstream source (Dockerfile) or
+# copied unchanged (MIRROR). globalvalues.yaml must pull exactly the published tags, and
+# the air-gapped migration script must mirror the same images.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/test-helpers.sh"
@@ -16,7 +17,7 @@ _tag_after() {
 }
 
 ###############################################################################
-# Test 1: globalvalues.yaml pins every OneLens-built image at its published tag
+# Test 1: globalvalues.yaml pins every OneLens-published image at its published tag
 ###############################################################################
 for dir in "$ROOT"/images/*/; do
     name=$(basename "$dir")
@@ -24,13 +25,19 @@ for dir in "$ROOT"/images/*/; do
     assert_ne "$tag" "" "images/$name/TAG is set"
     gv_tag=$(_tag_after "$GV" "\(public.ecr.aws/\)\{0,1\}w7k6q5m9/onelens-$name")
     assert_eq "$gv_tag" "$tag" "globalvalues.yaml pulls onelens-$name:$tag"
-    assert_gt "$(grep -c 'go-mod-bump.sh' "$dir/Dockerfile" || true)" "0" "images/$name/Dockerfile raises flagged Go modules"
+    if [ -f "$dir/MIRROR" ]; then
+        mirror=$(tr -d '[:space:]' < "$dir/MIRROR")
+        assert_eq "${mirror##*:}" "$tag" "images/$name copies upstream $mirror under the same tag"
+    else
+        assert_gt "$(grep -c 'go-mod-bump.sh' "$dir/Dockerfile" || true)" "0" "images/$name/Dockerfile raises flagged Go modules"
+    fi
 done
 
 ###############################################################################
 # Test 2: no image is pulled from the upstream registries these replace
 ###############################################################################
-for upstream in quay.io/prometheus/prometheus quay.io/prometheus/pushgateway opencost/opencost kube-state-metrics/kube-state-metrics; do
+for upstream in quay.io/prometheus/prometheus quay.io/prometheus/pushgateway opencost/opencost kube-state-metrics/kube-state-metrics \
+        victoriametrics/victoria-metrics quay.io/prometheus-operator/prometheus-config-reloader busybox; do
     assert_eq "$(grep -c "repository: $upstream\$" "$GV" || true)" "0" "globalvalues.yaml no longer pulls $upstream"
 done
 
@@ -72,21 +79,19 @@ _migrate_list() {
 }
 
 current=$(_migrate_list "$GV")
-for name in prometheus pushgateway; do
+for name in prometheus pushgateway opencost kube-state-metrics node-exporter victoria-metrics prometheus-config-reloader; do
     tag=$(tr -d '[:space:]' < "$ROOT/images/$name/TAG")
-    assert_contains "$current" "public.ecr.aws/w7k6q5m9/onelens-$name:$tag $name:$tag" "mirrors OneLens-built $name"
-done
-for name in opencost kube-state-metrics node-exporter; do
-    tag=$(tr -d '[:space:]' < "$ROOT/images/$name/TAG")
-    assert_contains "$current" "public.ecr.aws/w7k6q5m9/onelens-$name:$tag $name:$tag" "mirrors OneLens-built $name"
+    assert_contains "$current" "public.ecr.aws/w7k6q5m9/onelens-$name:$tag $name:$tag" "mirrors OneLens-published $name"
 done
 
 # globalvalues.yaml as released before 2.1.128 still names the upstream registries.
 old_gv=$(mktemp)
-sed -e 's#public.ecr.aws/w7k6q5m9/onelens-prometheus#quay.io/prometheus/prometheus#' \
-    -e 's#public.ecr.aws/w7k6q5m9/onelens-pushgateway#quay.io/prometheus/pushgateway#' \
-    -e 's#w7k6q5m9/onelens-opencost#opencost/opencost#' \
-    -e 's#w7k6q5m9/onelens-kube-state-metrics#kube-state-metrics/kube-state-metrics#' \
+sed -e 's#public.ecr.aws/w7k6q5m9/onelens-prometheus$#quay.io/prometheus/prometheus#' \
+    -e 's#public.ecr.aws/w7k6q5m9/onelens-pushgateway$#quay.io/prometheus/pushgateway#' \
+    -e 's#w7k6q5m9/onelens-opencost$#opencost/opencost#' \
+    -e 's#w7k6q5m9/onelens-kube-state-metrics$#kube-state-metrics/kube-state-metrics#' \
+    -e 's#public.ecr.aws/w7k6q5m9/onelens-victoria-metrics$#victoriametrics/victoria-metrics#' \
+    -e 's#public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader$#quay.io/prometheus-operator/prometheus-config-reloader#' \
     "$GV" > "$old_gv"
 old=$(_migrate_list "$old_gv")
 rm -f "$old_gv"
@@ -94,5 +99,7 @@ assert_contains "$old" "quay.io/prometheus/prometheus:" "older version: promethe
 assert_contains "$old" "quay.io/prometheus/pushgateway:" "older version: pushgateway from quay.io"
 assert_contains "$old" "ghcr.io/opencost/opencost:" "older version: opencost from ghcr.io"
 assert_contains "$old" "registry.k8s.io/kube-state-metrics/kube-state-metrics:" "older version: kube-state-metrics from registry.k8s.io"
+assert_contains "$old" "quay.io/victoriametrics/victoria-metrics:" "older version: victoria-metrics from quay.io"
+assert_contains "$old" "quay.io/prometheus-operator/prometheus-config-reloader:" "older version: config-reloader from quay.io"
 
 test_summary

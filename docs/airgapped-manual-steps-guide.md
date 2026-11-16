@@ -281,7 +281,7 @@ The goal of this step is to copy all OneLens container images from public regist
    | onelens-agent              | `globalvalues.yaml` — look for `repository: public.ecr.aws/w7k6q5m9/onelens-agent`, tag is on the next line                                   |
    | onelens-deployer           | Always `v<VERSION>` (e.g. `v2.1.81`)                                                                                                          |
    | prometheus                 | `globalvalues.yaml` — `repository: public.ecr.aws/w7k6q5m9/onelens-prometheus` (before 2.1.128: `quay.io/prometheus/prometheus`)            |
-   | prometheus-config-reloader | `globalvalues.yaml` — `repository: quay.io/prometheus-operator/prometheus-config-reloader`                                                    |
+   | prometheus-config-reloader | `globalvalues.yaml` — `repository: public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader` (before 2.1.128: `quay.io/prometheus-operator/prometheus-config-reloader`) |
    | opencost                   | `globalvalues.yaml` — `repository: w7k6q5m9/onelens-opencost`, registry `public.ecr.aws` (before 2.1.128: `opencost/opencost` on `ghcr.io`)  |
    | kube-state-metrics         | `globalvalues.yaml` — `repository: w7k6q5m9/onelens-kube-state-metrics`, registry `public.ecr.aws` (before 2.1.128: `registry.k8s.io`)       |
    | kube-rbac-proxy            | `globalvalues.yaml` — `repository: brancz/kube-rbac-proxy` (source registry is `quay.io`)                                                     |
@@ -298,7 +298,7 @@ For each image in the table below, create an ECR repository under your prefix (i
 | 1   | `public.ecr.aws/w7k6q5m9/onelens-agent:<tag>`                  | `onelens-agent`                              |
 | 2   | `public.ecr.aws/w7k6q5m9/onelens-deployer:v<VERSION>`          | `onelens-deployer`                           |
 | 3   | `public.ecr.aws/w7k6q5m9/onelens-prometheus:<tag>`             | `prometheus`                                 |
-| 4   | `quay.io/prometheus-operator/prometheus-config-reloader:<tag>` | `prometheus-config-reloader`                 |
+| 4   | `public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader:<tag>` | `prometheus-config-reloader`             |
 | 5   | `public.ecr.aws/w7k6q5m9/onelens-opencost:<tag>`               | `opencost`                                   |
 | 6   | `public.ecr.aws/w7k6q5m9/onelens-kube-state-metrics:<tag>`     | `kube-state-metrics`                         |
 | 7   | `quay.io/brancz/kube-rbac-proxy:<tag>`                         | `kube-rbac-proxy`                            |
