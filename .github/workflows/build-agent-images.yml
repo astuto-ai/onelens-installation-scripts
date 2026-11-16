@@ -1,11 +1,15 @@
 name: Build Agent Stack Images
 
-# Third-party images in the agent stack, rebuilt from their upstream release tags with
-# patched Go modules (images/go-mod-bump.sh) so they pass customers' HIGH/CRITICAL
-# image scans. images/<name>/TAG is the published tag. It matches the upstream tag, so
-# customers who mirror images through a pull-through cache of the upstream registry
-# still find it. Published tags are never overwritten: to rebuild the same upstream
-# version, add or raise an -olN suffix (v3.13.5-ol1), then point globalvalues.yaml at it.
+# Third-party images in the agent stack, published under public.ecr.aws/w7k6q5m9 so
+# clusters pull everything from one registry, and so each passes customers'
+# HIGH/CRITICAL image scans. Two kinds:
+#   - images/<name>/Dockerfile: rebuilt from the upstream release tag with patched Go
+#     modules (images/go-mod-bump.sh), for images with no clean upstream release.
+#   - images/<name>/MIRROR: the upstream image, already clean, copied unchanged.
+# images/<name>/TAG is the published tag. It matches the upstream tag, so customers who
+# mirror images through a pull-through cache of the upstream registry still find it.
+# Published tags are never overwritten: to rebuild the same upstream version, add or
+# raise an -olN suffix (v3.13.5-ol1), then point globalvalues.yaml at it.
 
 on:
   push:
@@ -37,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [prometheus, pushgateway, kube-state-metrics, opencost, node-exporter]
+        image: [prometheus, pushgateway, kube-state-metrics, opencost, node-exporter, victoria-metrics, prometheus-config-reloader, busybox]
 
     steps:
       - name: Checkout code
@@ -55,14 +59,31 @@ jobs:
           TAG=$(tr -d '[:space:]' < images/${{ matrix.image }}/TAG)
           VERSION=${TAG#v}
           VERSION=${VERSION%-ol*}
+          MIRROR=$(tr -d '[:space:]' < images/${{ matrix.image }}/MIRROR 2>/dev/null || true)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "mirror=$MIRROR" >> "$GITHUB_OUTPUT"
           echo "repository=onelens-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
-          echo "Building onelens-${{ matrix.image }}:$TAG from upstream $VERSION"
+          if [ -n "$MIRROR" ]; then
+            echo "Copying $MIRROR to onelens-${{ matrix.image }}:$TAG"
+          else
+            echo "Building onelens-${{ matrix.image }}:$TAG from upstream $VERSION"
+          fi
 
       # Customers gate images on Trivy 0.57.1 (HIGH/CRITICAL, unfixed included), so scan
       # each architecture the same way before anything is pushed.
+      - name: Scan upstream image (amd64 and arm64)
+        if: steps.tag.outputs.mirror != ''
+        env:
+          SOURCE: ${{ steps.tag.outputs.mirror }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
+              --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$SOURCE"
+          done
+
       - name: Build amd64 image for scanning
+        if: steps.tag.outputs.mirror == ''
         uses: docker/build-push-action@v5
         with:
           context: images
@@ -77,11 +98,13 @@ jobs:
             REFRESH=${{ github.run_id }}
 
       - name: Scan amd64 image
+        if: steps.tag.outputs.mirror == ''
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
             image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 scan/${{ matrix.image }}:amd64
 
       - name: Build arm64 image for scanning
+        if: steps.tag.outputs.mirror == ''
         uses: docker/build-push-action@v5
         with:
           context: images
@@ -96,6 +119,7 @@ jobs:
             REFRESH=${{ github.run_id }}
 
       - name: Scan arm64 image
+        if: steps.tag.outputs.mirror == ''
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
             image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 scan/${{ matrix.image }}:arm64
@@ -132,8 +156,16 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Copies the upstream image for every platform; layers and per-platform manifests are unchanged.
+      - name: Copy upstream image
+        if: github.event_name != 'pull_request' && steps.published.outputs.exists == 'false' && steps.tag.outputs.mirror != ''
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ env.DOCKER_REGISTRY }}/${{ steps.tag.outputs.repository }}:${{ steps.tag.outputs.tag }}" \
+            "${{ steps.tag.outputs.mirror }}"
+
       - name: Build and push multi-arch image
-        if: github.event_name != 'pull_request' && steps.published.outputs.exists == 'false'
+        if: github.event_name != 'pull_request' && steps.published.outputs.exists == 'false' && steps.tag.outputs.mirror == ''
         uses: docker/build-push-action@v5
         with:
           context: images
