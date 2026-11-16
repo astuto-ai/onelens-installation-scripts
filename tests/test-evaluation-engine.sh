@@ -283,5 +283,77 @@ assert_eq "$(grep -cE 'cap="\$_USAGE_CAP_[A-Z]+_MEM"' "$PATCHING")" "0" \
     "no memory bump uses a cap without the node fit"
 
 ###############################################################################
+# KSM CPU never goes below its tier
+###############################################################################
+echo ""
+echo "--- KSM CPU floor ---"
+
+# A 5,000-pod cluster: full eval saw KSM peak 28.6m (scrapes timing out, so KSM looked idle).
+# With the 50m floor it was cut 100m→50m and request data stopped; the very-large tier floor keeps 100m.
+assert_eq "$(_eval_cpu "kube-state-metrics" "2600Mi" "100m" "$((408*1048576))" "0.0286" "false" "false" "true" "false" 1.35 1.25 64 4800 50 1200)" \
+    "50m" "full eval, KSM peak 28.6m, 50m floor → 50m (the cut that lost a cluster's request data)"
+assert_eq "$(_eval_cpu "kube-state-metrics" "2600Mi" "100m" "$((408*1048576))" "0.0286" "false" "false" "true" "false" 1.35 1.25 64 4800 100 1200)" \
+    "100m" "full eval, KSM peak 28.6m, very-large tier floor 100m → 100m"
+assert_eq "$(_eval_cpu "kube-state-metrics" "2600Mi" "100m" "$((408*1048576))" "0.0996" "false" "false" "true" "false" 1.35 1.25 64 4800 100 1200)" \
+    "150m" "full eval, KSM peak 99.6m → 150m (usage above the floor still raises)"
+
+select_resource_tier 5000 && assert_eq "$KSM_CPU_LIMIT" "100m" "very-large tier: KSM CPU 100m"
+select_resource_tier 200 && assert_eq "$KSM_CPU_LIMIT" "50m" "medium tier: KSM CPU 50m (floor unchanged for small clusters)"
+
+tier_line=$(grep -n '^select_resource_tier "\$TOTAL_PODS"' "$PATCHING" | cut -d: -f1 || true)
+ksm_tier_line=$(grep -n '^KSM_TIER_CPU="\$KSM_CPU_LIMIT"' "$PATCHING" | cut -d: -f1 || true)
+upguard_line=$(grep -n "_upguard_cpu '.prometheus\[\"kube-state-metrics\"\].resources.limits.cpu' KSM_CPU_LIMIT" "$PATCHING" | cut -d: -f1 || true)
+assert_eq "$([ -n "$tier_line" ] && [ -n "$ksm_tier_line" ] && [ -n "$upguard_line" ] && [ "$tier_line" -lt "$ksm_tier_line" ] && [ "$ksm_tier_line" -lt "$upguard_line" ] && echo yes || echo no)" "yes" \
+    "patching.sh keeps the tier's KSM CPU before helm-current values raise it"
+assert_eq "$(grep -A4 '_evaluate_and_log "kube-state-metrics" "kube-state-metrics"' "$PATCHING" | grep -c '_max_cpu "\${_USAGE_FLOOR_CPU}m" "\$KSM_TIER_CPU"')" "1" \
+    "KSM evaluation uses the tier CPU as its floor"
+
+###############################################################################
+# Thin usage window: raise only, full evaluation postponed
+###############################################################################
+echo ""
+echo "--- thin usage window ---"
+
+# A 4,000-pod cluster: Prometheus back after 3.5 days down; the 72h window held ~10 minutes.
+# KSM 3100Mi/100m at 434Mi and 11m. The engine alone cuts it (full eval: 1600Mi/50m) ...
+_r=$(_eval "kube-state-metrics" "3100Mi" "100m" "$((434*1048576))" "0.011" "false" "false" "true" "false" 1.35 1.25 64 4800 50 1200)
+assert_eq "$(echo "$_r" | grep '^MEM=' | cut -d= -f2)/$(echo "$_r" | grep '^CPU=' | cut -d= -f2)" "1600Mi/50m" \
+    "Prometheus back after an outage, engine alone: KSM 3100Mi/100m → 1600Mi/50m"
+# ... and so does a 5-min check (gross over-provisioning override)
+_r=$(_eval "kube-state-metrics" "3100Mi" "100m" "$((434*1048576))" "0.011" "false" "false" "false" "false" 1.35 1.25 64 4800 50 1200)
+assert_eq "$(echo "$_r" | grep '^MEM=' | cut -d= -f2)" "1600Mi" \
+    "Prometheus back after an outage, 5-min check alone: gross over-provisioning cuts KSM to 1600Mi"
+# With the window thin, _evaluate_and_log keeps the larger of the result and current
+assert_eq "$(_max_memory "$(echo "$_r" | grep '^MEM=' | cut -d= -f2)" "3100Mi")/$(_max_cpu "$(echo "$_r" | grep '^CPU=' | cut -d= -f2)" "100m")" "3100Mi/100m" \
+    "Prometheus back after an outage, with the thin-window guard: KSM stays 3100Mi/100m"
+
+assert_eq "$(grep -c 'WINDOW_STEPS=\$(_prom_query_raw "count_over_time(max(container_memory_working_set_bytes{namespace=\\"onelens-agent\\"' "$PATCHING")" "1" \
+    "patching.sh measures how much of the window has data"
+assert_eq "$(grep -c 'is_window_thin "\$WINDOW_STEPS" "\$FULL_EVAL_INTERVAL_HOURS"' "$PATCHING")" "1" \
+    "patching.sh checks the window before sizing"
+assert_eq "$(awk '/SIZING_WINDOW_THIN=true/{t=1} t && /FULL_EVAL_DUE=false/{print "yes"; exit}' "$PATCHING")" "yes" \
+    "a thin window postpones a due full evaluation"
+assert_eq "$(grep -A3 'if \[ "\$SIZING_WINDOW_THIN" = "true" \]; then' "$PATCHING" | grep -c 'new_mem=$(_max_memory "$new_mem" "$cur_mem")\|new_cpu=$(_max_cpu "$new_cpu" "$cur_cpu")')" "2" \
+    "a thin window never lowers memory or CPU"
+
+###############################################################################
+# helm --wait ends before the Job's deadline
+###############################################################################
+echo ""
+echo "--- helm wait vs Job deadline ---"
+
+assert_eq "$(grep -c -- '--timeout=10m' "$PATCHING")" "0" "no fixed 10m helm wait"
+assert_eq "$(grep -c 'eval "\$HELM_CMD --timeout=\${_HELM_WAIT}s"' "$PATCHING")" "1" \
+    "helm upgrade waits for the time left in the Job"
+assert_eq "$(grep -c 'RETRY_CMD="\$HELM_CMD --timeout=\${_HELM_WAIT}s \$_set_flags"' "$PATCHING")" "1" \
+    "post-upgrade retry waits for the time left in the Job"
+assert_eq "$(grep -c '_HELM_WAIT=$(helm_wait_seconds "\$JOB_DEADLINE" ' "$PATCHING")" "2" \
+    "the wait is recomputed before the upgrade and before each retry"
+deadline_read=$(grep -n '^JOB_DEADLINE="\$CURRENT_DEADLINE"' "$PATCHING" | cut -d: -f1 || true)
+deadline_patch=$(grep -n 'kubectl patch cronjob onelensupdater -n onelens-agent -p "\$PATCH_JSON"' "$PATCHING" | head -1 | cut -d: -f1 || true)
+assert_eq "$([ -n "$deadline_read" ] && [ -n "$deadline_patch" ] && [ "$deadline_read" -lt "$deadline_patch" ] && echo yes || echo no)" "yes" \
+    "the Job's deadline is read before the CronJob is patched"
+
+###############################################################################
 test_summary
 exit $?

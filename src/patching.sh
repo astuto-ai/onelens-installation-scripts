@@ -113,13 +113,24 @@ echo "Tools ready: helm $(helm version --short 2>/dev/null), kubectl $(kubectl v
 _report_milestone  # M2: tools-ready — helm/kubectl installed
 
 # Immediately set 5-min schedule and raise activeDeadlineSeconds — ensures retries
-# even if anything below fails, and prevents pod kill during 10m helm timeout.
+# even if anything below fails, and gives helm --wait room (it is sized to end before the deadline).
 # Without this, a daily-schedule cluster waits 24 hours on any failure, and an old
 # deployer with low activeDeadlineSeconds kills the pod mid-helm-upgrade.
 TARGET_SCHEDULE="*/5 * * * *"
 TARGET_DEADLINE=900
 CURRENT_SCHEDULE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.schedule}' 2>/dev/null || true)
 CURRENT_DEADLINE=$(kubectl get cronjob onelensupdater -n onelens-agent -o jsonpath='{.spec.activeDeadlineSeconds}' 2>/dev/null || true)
+
+# This run's own Job: its start and activeDeadlineSeconds bound how long helm may wait
+# (helm_wait_seconds). Patching the CronJob below doesn't change the Job already running,
+# so without the Job itself, fall back to the CronJob's value read above.
+_SELF_POD_JSON=$(kubectl get pod "${HOSTNAME:-}" -n onelens-agent -o json 2>/dev/null || true)
+JOB_STARTED_AT=$(echo "$_SELF_POD_JSON" | jq -r '.status.startTime // empty' 2>/dev/null || true)
+_SELF_JOB=$(echo "$_SELF_POD_JSON" | jq -r '.metadata.ownerReferences[]? | select(.kind == "Job") | .name' 2>/dev/null | head -1 || true)
+JOB_DEADLINE="$CURRENT_DEADLINE"
+if [ -n "$_SELF_JOB" ] && _self_job_json=$(kubectl get job "$_SELF_JOB" -n onelens-agent -o json 2>/dev/null); then
+    JOB_DEADLINE=$(echo "$_self_job_json" | jq -r '.spec.activeDeadlineSeconds // empty' 2>/dev/null || true)
+fi
 
 PATCH_JSON=""
 if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
@@ -435,6 +446,11 @@ fi
 # --- Resource tier selection ---
 select_resource_tier "$TOTAL_PODS"
 echo "Setting resources for $TIER cluster ($TOTAL_PODS pods)"
+# Usage-based sizing never takes KSM CPU below its tier. Its CPU usage averages low,
+# but each scrape needs a burst: Prometheus gives up after 10s, and at 50m a large
+# cluster's KSM can't answer in time. Every scrape then fails, KSM looks idle, and
+# usage-based sizing keeps it at 50m (a 5,000-pod cluster lost 4 days of request data).
+KSM_TIER_CPU="$KSM_CPU_LIMIT"
 _report_milestone  # M5: pod-counting-done — survived namespace scan, tier selected
 
 # Apply label density multiplier to memory values for KSM, Prometheus, and onelens-agent
@@ -812,6 +828,9 @@ if [ -n "$PROM_SVC" ]; then
     _EVAL_WINDOW="${FULL_EVAL_INTERVAL_HOURS}h"
     MEM_72H_RAW=$(_prom_query_raw "max by (container) (max_over_time(container_memory_working_set_bytes{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"}[${_EVAL_WINDOW}]))")
     CPU_72H_RAW=$(_prom_query_raw "max by (container) (max_over_time(rate(container_cpu_usage_seconds_total{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"}[5m])[${_EVAL_WINDOW}:5m]))")
+    # How much of the window has data: 5-minute steps in which any OneLens container reported memory
+    WINDOW_STEPS=$(_prom_query_raw "count_over_time(max(container_memory_working_set_bytes{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"})[${_EVAL_WINDOW}:5m])" \
+        | jq -r 'if .status == "success" then (.data.result[0].value[1] // empty | tonumber | floor) else empty end' 2>/dev/null || true)
 
     # Query current usage for logging (1h window)
     MEM_NOW_RAW=$(_prom_query_raw 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
@@ -931,6 +950,22 @@ if [ -n "$PROM_SVC" ]; then
         echo "${FULL_EVAL_INTERVAL_HOURS}h full evaluation due (last: $STATE_LAST_FULL_EVAL)"
     fi
 
+    # Too little usage data to lower anything: limits can go up, not down. A due full
+    # evaluation waits (its timestamp is left as is) until the window has enough data.
+    SIZING_WINDOW_THIN=false
+    if [ -n "$MEM_72H" ] && is_window_thin "$WINDOW_STEPS" "$FULL_EVAL_INTERVAL_HOURS"; then
+        SIZING_WINDOW_THIN=true
+        if [[ "$WINDOW_STEPS" =~ ^[0-9]+$ ]]; then
+            echo "Usage data covers $(( WINDOW_STEPS * 100 / (FULL_EVAL_INTERVAL_HOURS * 12) ))% of the ${FULL_EVAL_INTERVAL_HOURS}h window (need ${_SIZING_MIN_COVERAGE_PERCENT}%): limits can be raised, not lowered"
+        else
+            echo "Could not measure how much of the ${FULL_EVAL_INTERVAL_HOURS}h window has usage data: limits can be raised, not lowered"
+        fi
+        if [ "$FULL_EVAL_DUE" = "true" ]; then
+            FULL_EVAL_DUE=false
+            echo "${FULL_EVAL_INTERVAL_HOURS}h full evaluation postponed until the window has enough data"
+        fi
+    fi
+
     # Only proceed with usage-based if we have 72h data
     if [ -n "$MEM_72H" ]; then
         echo "Usage-based sizing: evaluating..."
@@ -1027,6 +1062,10 @@ if [ -n "$PROM_SVC" ]; then
                 "$mem_now_bytes")
             new_mem=$(echo "$result" | grep '^MEM=' | cut -d= -f2)
             new_cpu=$(echo "$result" | grep '^CPU=' | cut -d= -f2)
+            if [ "$SIZING_WINDOW_THIN" = "true" ]; then
+                new_mem=$(_max_memory "$new_mem" "$cur_mem")
+                new_cpu=$(_max_cpu "$new_cpu" "$cur_cpu")
+            fi
 
             if [ "$new_mem" != "$cur_mem" ] || [ "$new_cpu" != "$cur_cpu" ]; then
                 echo "  $label: mem ${cur_mem}→${new_mem} cpu ${cur_cpu}→${new_cpu}"
@@ -1105,7 +1144,8 @@ if [ -n "$PROM_SVC" ]; then
         _evaluate_and_log "kube-state-metrics" "kube-state-metrics" \
             "$KSM_MEMORY_LIMIT" "$KSM_CPU_LIMIT" \
             "$_USAGE_FLOOR_KSM_MEM" "$_USAGE_CAP_KSM_MEM" "NEW_KSM_OOM" \
-            "$_USAGE_FLOOR_CPU" "$(_get_container_val "$MEM_NOW" "kube-state-metrics")"
+            "$(_cpu_to_millicores "$(_max_cpu "${_USAGE_FLOOR_CPU}m" "$KSM_TIER_CPU")")" \
+            "$(_get_container_val "$MEM_NOW" "kube-state-metrics")"
         KSM_MEMORY_REQUEST="$_OUT_MEM"; KSM_MEMORY_LIMIT="$_OUT_MEM"
         KSM_CPU_REQUEST="$_OUT_CPU"; KSM_CPU_LIMIT="$_OUT_CPU"
 
@@ -2842,7 +2882,6 @@ HELM_CMD="helm upgrade onelens-agent $CHART_SOURCE \
   -f /globalvalues.yaml \
   --history-max 5 \
   --wait \
-  --timeout=10m \
   --namespace onelens-agent"
 if [ -n "$CHART_VERSION" ]; then
     HELM_CMD="$HELM_CMD --version $CHART_VERSION"
@@ -3126,9 +3165,22 @@ else
     echo "Helm release secrets: $_HELM_SECRET_COUNT found, no pruning needed"
 fi
 
-echo "Running helm upgrade (latest chart, fresh values + customer overrides)..."
+# Seconds since this run's pod started (script time if the pod couldn't be read)
+_job_elapsed() {
+    local s
+    s=$(seconds_since "$JOB_STARTED_AT")
+    if [[ "$s" =~ ^[0-9]+$ ]]; then echo "$s"; else echo "$SECONDS"; fi
+}
+
+_elapsed=$(_job_elapsed)
+_HELM_WAIT=$(helm_wait_seconds "$JOB_DEADLINE" "$_elapsed")
+if [ -z "$_HELM_WAIT" ]; then
+    echo "Not running helm upgrade: less than ${_HELM_WAIT_MIN}s of this Job's ${JOB_DEADLINE}s deadline is left for it (${_elapsed}s used). The release is unchanged; the next run retries."
+    exit 1
+fi
+echo "Running helm upgrade (latest chart, fresh values + customer overrides; waiting up to ${_HELM_WAIT}s: Job deadline ${JOB_DEADLINE:-none}, ${_elapsed}s used)..."
 _report_milestone  # M7: helm-upgrade-start — all sizing done, about to apply
-eval "$HELM_CMD"
+eval "$HELM_CMD --timeout=${_HELM_WAIT}s"
 UPGRADE_EXIT=$?
 
 # --- GPU Phase 2: deploy/cleanup DCGM exporter via kubectl (decoupled from helm) ---
@@ -3403,11 +3455,19 @@ while true; do
         break
     fi
 
+    _HELM_WAIT=$(helm_wait_seconds "$JOB_DEADLINE" "$(_job_elapsed)")
+    if [ -z "$_HELM_WAIT" ]; then
+        echo "$_FAIL_COMPONENT ${_FAIL_REASON}: no time left in this Job for another upgrade. The next run retries."
+        UPGRADE_FAILED=true
+        break
+    fi
+    [ "$_HELM_WAIT" -gt 180 ] && _HELM_WAIT=180
+
     _UPGRADE_RETRIES=$((_UPGRADE_RETRIES + 1))
     echo "${_FAIL_REASON} recovery (retry $_UPGRADE_RETRIES/$_MAX_UPGRADE_RETRIES): $_FAIL_COMPONENT ${_resource_type} $_old_val -> $_new_val"
     WAL_OOM_APPLIED=true
 
-    RETRY_CMD="$HELM_CMD --timeout=3m $_set_flags"
+    RETRY_CMD="$HELM_CMD --timeout=${_HELM_WAIT}s $_set_flags"
     eval "$RETRY_CMD"
     UPGRADE_EXIT=$?
 done

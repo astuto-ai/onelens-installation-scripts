@@ -240,6 +240,34 @@ assert_eq "$(node_fit_memory_mi "1Mi   <none>")" "0" \
     "node_fit_memory_mi: a 1Mi node truncates to 0 (fit_cap_to_node ignores it)"
 
 ###############################################################################
+# is_window_thin — 72h window = 864 five-minute steps; 67% = 578.88
+###############################################################################
+
+_thin() { is_window_thin "$@" && echo thin || echo enough; }
+assert_eq "$(_thin 864 72)" "enough" "is_window_thin: full 72h window → enough"
+assert_eq "$(_thin 579 72)" "enough" "is_window_thin: 579 of 864 steps (67.0%) → enough"
+assert_eq "$(_thin 578 72)" "thin" "is_window_thin: 578 of 864 steps (66.9%) → thin"
+assert_eq "$(_thin 2 72)" "thin" "is_window_thin: ~10 minutes of data after a days-long outage → thin"
+assert_eq "$(_thin 0 72)" "thin" "is_window_thin: no data → thin"
+assert_eq "$(_thin "" 72)" "thin" "is_window_thin: query failed (empty) → thin"
+assert_eq "$(_thin "abc" 72)" "thin" "is_window_thin: non-numeric → thin"
+assert_eq "$(_thin 200 24)" "enough" "is_window_thin: 24h window, 200 of 288 steps (69%) → enough"
+assert_eq "$(_thin 864 "")" "thin" "is_window_thin: window hours unknown → thin"
+
+###############################################################################
+# helm_wait_seconds — ends helm's wait before the Job's activeDeadlineSeconds
+###############################################################################
+
+assert_eq "$(helm_wait_seconds 900 100)" "600" "helm_wait_seconds: 900s deadline, 100s in → 600 (max)"
+assert_eq "$(helm_wait_seconds 900 300)" "420" "helm_wait_seconds: 900s deadline, 300s in → 420 (900-300-180)"
+assert_eq "$(helm_wait_seconds 900 660)" "60" "helm_wait_seconds: exactly the minimum left → 60"
+assert_eq "$(helm_wait_seconds 900 661)" "" "helm_wait_seconds: under a minute left → empty (skip the upgrade)"
+assert_eq "$(helm_wait_seconds 900 1000)" "" "helm_wait_seconds: past the deadline → empty"
+assert_eq "$(helm_wait_seconds "" 300)" "600" "helm_wait_seconds: no deadline (install Job) → 600, as before"
+assert_eq "$(helm_wait_seconds 3600 100)" "600" "helm_wait_seconds: long deadline → still at most 600"
+assert_eq "$(helm_wait_seconds 900 "")" "600" "helm_wait_seconds: elapsed unknown → counted as 0"
+
+###############################################################################
 # evaluate_container_sizing — usage-at-limit detection (param 16: mem_now_bytes)
 ###############################################################################
 
