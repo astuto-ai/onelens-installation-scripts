@@ -132,10 +132,11 @@ helm pull onelens/onelens-agent --version "$VERSION" -d "$TMPDIR" --untar --unta
 IMAGES=""
 _V="$TMPDIR/values.yaml"
 
-# Helper: extract tag from the line immediately following a repository match
+# Helper: extract tag from the line immediately following a repository match.
+# Prints nothing (and does not fail under set -e) when the repository is not in the file.
 _get_tag() {
     local file="$1" repo_pattern="$2"
-    grep -A1 "repository: ${repo_pattern}" "$file" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"'
+    grep -A1 "repository: ${repo_pattern}" "$file" | grep 'tag:' | head -1 | awk '{print $2}' | tr -d '"' || true
 }
 
 # onelens-agent
@@ -152,9 +153,18 @@ IMAGES="${IMAGES}
 public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION} onelens-deployer:v${VERSION}"
 echo "  onelens-deployer: public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION}"
 
+# prometheus, pushgateway, opencost, kube-state-metrics and node-exporter are built by
+# OneLens from upstream source (images/ in this repo) from 2.1.128 on; earlier versions'
+# globalvalues.yaml names the upstream registries. Each block below tries OneLens' image
+# first, then the upstream one. The mirrored name and tag are the same either way.
+
 # prometheus
-_repo="quay.io/prometheus/prometheus"
+_repo="public.ecr.aws/w7k6q5m9/onelens-prometheus"
 _tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ]; then
+    _repo="quay.io/prometheus/prometheus"
+    _tag=$(_get_tag "$_V" "$_repo")
+fi
 if [ -n "$_tag" ]; then
     IMAGES="${IMAGES}
 ${_repo}:${_tag} prometheus:${_tag}"
@@ -184,23 +194,35 @@ ${_source} victoria-metrics:${_tag}"
 fi
 
 # opencost (has separate registry field)
-_repo="opencost/opencost"
+_repo="w7k6q5m9/onelens-opencost"
+_registry="public.ecr.aws"
 _tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ]; then
+    _repo="opencost/opencost"
+    _registry="ghcr.io"
+    _tag=$(_get_tag "$_V" "$_repo")
+fi
 if [ -n "$_tag" ]; then
-    _source="ghcr.io/${_repo}:${_tag}"
+    _source="${_registry}/${_repo}:${_tag}"
     IMAGES="${IMAGES}
 ${_source} opencost:${_tag}"
     echo "  opencost: ${_source}"
 fi
 
-# kube-state-metrics (tag may be empty — get from sub-chart appVersion)
-_repo="kube-state-metrics/kube-state-metrics"
+# kube-state-metrics (has separate registry field; tag may be empty — get from sub-chart appVersion)
+_repo="w7k6q5m9/onelens-kube-state-metrics"
+_registry="public.ecr.aws"
 _tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ]; then
+    _repo="kube-state-metrics/kube-state-metrics"
+    _registry="registry.k8s.io"
+    _tag=$(_get_tag "$_V" "$_repo")
+fi
 if [ -z "$_tag" ] && [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml" ]; then
     _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/kube-state-metrics/Chart.yaml" | awk '{print $2}')"
 fi
 if [ -n "$_tag" ]; then
-    _source="registry.k8s.io/${_repo}:${_tag}"
+    _source="${_registry}/${_repo}:${_tag}"
     IMAGES="${IMAGES}
 ${_source} kube-state-metrics:${_tag}"
     echo "  kube-state-metrics: ${_source}"
@@ -219,8 +241,12 @@ ${_source} kube-rbac-proxy:${_tag}"
 fi
 
 # pushgateway (tag may be empty — get from sub-chart appVersion)
-_repo="quay.io/prometheus/pushgateway"
+_repo="public.ecr.aws/w7k6q5m9/onelens-pushgateway"
 _tag=$(_get_tag "$_V" "$_repo")
+if [ -z "$_tag" ]; then
+    _repo="quay.io/prometheus/pushgateway"
+    _tag=$(_get_tag "$_V" "$_repo")
+fi
 if [ -z "$_tag" ] && [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml" ]; then
     _tag="$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-pushgateway/Chart.yaml" | awk '{print $2}')"
 fi
@@ -233,10 +259,11 @@ else
 fi
 
 # node-exporter (deployed only on clusters that opt in with NODE_EXPORTER_ENABLED=true;
-# no tag in globalvalues — the sub-chart tags it v<appVersion>)
-_repo="quay.io/prometheus/node-exporter"
-_tag=""
-if [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" ]; then
+# before 2.1.128 globalvalues has no tag for it and the sub-chart tags it v<appVersion>)
+_repo="public.ecr.aws/w7k6q5m9/onelens-node-exporter"
+_tag=$(_get_tag "$_V" "w7k6q5m9/onelens-node-exporter")
+if [ -z "$_tag" ] && [ -f "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" ]; then
+    _repo="quay.io/prometheus/node-exporter"
     _tag="v$(grep '^appVersion:' "$TMPDIR/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml" | awk '{print $2}' | tr -d "\"'")"
 fi
 if [ -n "$_tag" ] && [ "$_tag" != "v" ]; then

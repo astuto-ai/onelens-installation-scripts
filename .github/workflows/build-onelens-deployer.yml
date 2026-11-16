@@ -134,18 +134,18 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: Run Trivy vulnerability scanner (table output - non-blocking)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Non-blocking: report only, do not fail the build
+      # Blocking: the same command customers' image gates run (Trivy 0.57.1, HIGH/CRITICAL,
+      # unfixed included), so an image they would reject is never pushed.
+      - name: Run Trivy vulnerability scanner (blocking)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
+            image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+            '${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ needs.determine-tag.outputs.image_tag }}'
 
   build-and-push:
     name: Build and Push Multi-Arch Docker Image
-    needs: [build-for-scan, determine-tag]
-    if: needs.build-for-scan.result == 'success'
+    needs: [build-for-scan, determine-tag, security-scan]
+    if: needs.build-for-scan.result == 'success' && needs.security-scan.result == 'success'
     runs-on: ubuntu-latest
     
     steps:

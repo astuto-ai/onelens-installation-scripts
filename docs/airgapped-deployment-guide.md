@@ -26,10 +26,10 @@ Ask your network team to allow outbound HTTPS (port 443) access to the following
 
 | URL | Purpose |
 |-----|---------|
-| `https://public.ecr.aws` | OneLens Agent and Deployer images |
-| `https://quay.io` | Prometheus, config-reloader, pushgateway, kube-rbac-proxy images |
-| `https://registry.k8s.io` | kube-state-metrics image |
-| `https://ghcr.io` | OpenCost image |
+| `https://public.ecr.aws` | OneLens Agent and Deployer images; from 2.1.128, also Prometheus, pushgateway, kube-state-metrics, OpenCost and node-exporter (built by OneLens from upstream source) |
+| `https://quay.io` | config-reloader, kube-rbac-proxy images; Prometheus and pushgateway before 2.1.128 |
+| `https://registry.k8s.io` | kube-state-metrics image (before 2.1.128 only) |
+| `https://ghcr.io` | OpenCost image (before 2.1.128 only) |
 | `https://nvcr.io` | DCGM Exporter image (only needed for GPU clusters) |
 
 **Helm charts and scripts** (install, upgrade, and auto-update):
@@ -162,10 +162,10 @@ If your organization requires all container images to be hosted in your own priv
 | URL | Used in | Purpose |
 |-----|---------|---------|
 | `https://astuto-ai.github.io` | Migration | Download Helm charts, migration script, and version config from the OneLens public GitHub repository |
-| `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images |
-| `https://quay.io` | Migration | Pull `prometheus`, `config-reloader`, `pushgateway`, `kube-rbac-proxy` images |
-| `https://registry.k8s.io` | Migration | Pull `kube-state-metrics` image |
-| `https://ghcr.io` | Migration | Pull `opencost` image |
+| `https://public.ecr.aws` | Migration | Pull `onelens-agent` and `onelens-deployer` container images; from 2.1.128, also `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` |
+| `https://quay.io` | Migration | Pull `config-reloader`, `victoria-metrics`, `kube-rbac-proxy` images; `prometheus` and `pushgateway` before 2.1.128 |
+| `https://registry.k8s.io` | Migration | Pull `kube-state-metrics` image (before 2.1.128 only) |
+| `https://ghcr.io` | Migration | Pull `opencost` image (before 2.1.128 only) |
 | `https://nvcr.io` | Migration | Pull `dcgm-exporter` image (GPU monitoring — only needed for GPU clusters) |
 
 **Cluster nodes** (air-gapped — no general internet access):
@@ -468,15 +468,18 @@ The following images are mirrored by `airgapped_migrate_images.sh`. The list is 
 |-------|----------------|---------|
 | `onelens-agent` | `public.ecr.aws` | OneLens data collection agent |
 | `onelens-deployer` | `public.ecr.aws` | Deployer and updater CronJob |
-| `prometheus` | `quay.io` | Metrics collection |
-| `opencost` | `ghcr.io` | Cost analysis exporter |
+| `prometheus` | `public.ecr.aws` (`quay.io` before 2.1.128) | Metrics collection |
+| `opencost` | `public.ecr.aws` (`ghcr.io` before 2.1.128) | Cost analysis exporter |
 | `prometheus-config-reloader` | `quay.io` | Prometheus config reload sidecar |
-| `kube-state-metrics` | `registry.k8s.io` | Kubernetes state metrics |
-| `pushgateway` | `quay.io` | Prometheus push gateway |
+| `kube-state-metrics` | `public.ecr.aws` (`registry.k8s.io` before 2.1.128) | Kubernetes state metrics |
+| `pushgateway` | `public.ecr.aws` (`quay.io` before 2.1.128) | Prometheus push gateway |
+| `victoria-metrics` | `quay.io` | Metrics collection (VictoriaMetrics backend) |
+| `node-exporter` | `public.ecr.aws` (`quay.io` before 2.1.128) | Node metrics (only if node-exporter is enabled) |
 | `kube-rbac-proxy` | `quay.io` | RBAC proxy for kube-state-metrics |
 | `dcgm-exporter` | `nvcr.io` | NVIDIA GPU metrics (only for GPU clusters) |
 
 > Exact tags depend on the version you deploy. The migration script handles this automatically.
+> From 2.1.128, OneLens builds `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` from their upstream release source with patched dependencies, so they pass HIGH/CRITICAL image scans. Their tags match the upstream releases.
 
 ---
 
