@@ -99,6 +99,10 @@ _USAGE_CAP_OPENCOST_MEM=4800 # max OpenCost memory for mega clusters (Mi)
 _USAGE_CAP_AGENT_MEM=8192   # max agent memory (raised 4096→8192 in v2.1.66; agent mem scales with metric cardinality/cost data volume, not just pod count — 5 customer clusters hit the 4GB cap)
 _USAGE_CAP_CPU=1200          # 2x very-large maximum CPU (millicores)
 _NODE_FIT_PERCENT=85         # a memory raise stops at this share of the largest node's allocatable memory; the rest is left for DaemonSets
+_SIZING_MIN_COVERAGE_PERCENT=67 # nothing is lowered until usage data covers this share of the evaluation window; after a days-long Prometheus outage a 72h window held ~10 minutes, and the full evaluation cut KSM, OpenCost and the agent to fit them
+_HELM_WAIT_MAX=600           # longest helm --wait (s), as before
+_HELM_WAIT_MIN=60            # with less wait time than this left in the Job, the upgrade is skipped and the next run retries
+_HELM_RESERVE_SECONDS=180    # Job time kept after helm returns: pod health polling, stabilization, reporting the result
 
 # apply_vm_memory_floor
 # PROMETHEUS_MEMORY_{REQUEST,LIMIT} size the metrics backend, including VictoriaMetrics.
@@ -182,6 +186,33 @@ node_fit_memory_mi() {
             if (mi > max) max = mi
         }
         END { if (max > 0) printf "%d", max * pct / 100 }'
+}
+
+# is_window_thin "$steps" "$window_hours"
+# True (0) when usage data covers less than _SIZING_MIN_COVERAGE_PERCENT of the evaluation
+# window. $steps is the number of 5-minute steps in the window that have data. Empty or
+# non-numeric $steps (query failed) counts as thin: lowering limits needs proof of usage.
+is_window_thin() {
+    local steps="$1" hours="$2"
+    [[ "$steps" =~ ^[0-9]+$ ]] || return 0
+    [[ "$hours" =~ ^[0-9]+$ ]] && [ "$hours" -gt 0 ] || return 0
+    [ $(( steps * 100 )) -lt $(( hours * 12 * _SIZING_MIN_COVERAGE_PERCENT )) ]
+}
+
+# helm_wait_seconds "$deadline" "$elapsed"
+# Seconds a helm --wait may take so this run still ends before the Job's activeDeadlineSeconds,
+# keeping _HELM_RESERVE_SECONDS for what runs after helm. At most _HELM_WAIT_MAX; exactly
+# that when the deadline is unknown. Prints nothing when less than _HELM_WAIT_MIN is left.
+# A Job killed mid-wait leaves the release pending-upgrade, and the next run rolls it back;
+# a wait that times out leaves it failed, and the next run upgrades it again.
+helm_wait_seconds() {
+    local deadline="$1" elapsed="$2"
+    [[ "$deadline" =~ ^[0-9]+$ ]] || { echo "$_HELM_WAIT_MAX"; return 0; }
+    [[ "$elapsed" =~ ^[0-9]+$ ]] || elapsed=0
+    local left=$(( deadline - elapsed - _HELM_RESERVE_SECONDS ))
+    [ "$left" -gt "$_HELM_WAIT_MAX" ] && left=$_HELM_WAIT_MAX
+    [ "$left" -ge "$_HELM_WAIT_MIN" ] || return 0
+    echo "$left"
 }
 
 # fit_cap_to_node "$cap_mi" "$node_fit_mi"
