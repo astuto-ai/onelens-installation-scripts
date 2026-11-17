@@ -156,8 +156,8 @@ public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION} onelens-deployer:v${VERSION
 echo "  onelens-deployer: public.ecr.aws/w7k6q5m9/onelens-deployer:v${VERSION}"
 
 # From 2.1.128 on, OneLens publishes the third-party images itself (images/ in this
-# repo): prometheus, pushgateway, opencost, kube-state-metrics and node-exporter are built
-# from upstream source; config-reloader and victoria-metrics are copied unchanged.
+# repo): prometheus, pushgateway, opencost, kube-state-metrics, node-exporter and
+# victoria-metrics are built from upstream source; config-reloader is copied unchanged.
 # Earlier versions' globalvalues.yaml names the upstream registries. Each block below
 # tries OneLens' image first, then the upstream one. The mirrored name and tag are the
 # same either way.
@@ -190,7 +190,7 @@ fi
 
 # victoria-metrics (alternate metrics backend — mirrored so METRICS_BACKEND=victoriametrics
 # works air-gapped; install.sh/patching.sh point it at $REGISTRY_URL/victoria-metrics).
-# From 2.1.128 OneLens publishes a copy; before that, pulled from quay.io (already a
+# From 2.1.128 OneLens builds it from source; before that, pulled from quay.io (already a
 # required registry) rather than the chart's Docker Hub default — same image, but avoids
 # a new registry dependency and Docker Hub rate limits.
 _repo="public.ecr.aws/w7k6q5m9/onelens-victoria-metrics"

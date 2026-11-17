@@ -91,10 +91,10 @@ onelens-agent:
       repository: public.ecr.aws/w7k6q5m9/onelens-busybox
       tag: "1.36"
   victoriaMetrics:
-    # Copied unchanged from Docker Hub by images/victoria-metrics; keep the tag in sync with its TAG file.
+    # Built from upstream source by images/victoria-metrics; keep the tag in sync with its TAG file.
     image:
       repository: public.ecr.aws/w7k6q5m9/onelens-victoria-metrics
-      tag: v1.156.0
+      tag: v1.117.1
       pullPolicy: IfNotPresent
     resources:
       requests:

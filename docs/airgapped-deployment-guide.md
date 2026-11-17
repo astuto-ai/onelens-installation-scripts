@@ -479,7 +479,7 @@ The following images are mirrored by `airgapped_migrate_images.sh`. The list is 
 | `dcgm-exporter` | `nvcr.io` | NVIDIA GPU metrics (only for GPU clusters) |
 
 > Exact tags depend on the version you deploy. The migration script handles this automatically.
-> From 2.1.128, OneLens publishes these third-party images itself so they pass HIGH/CRITICAL image scans: `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost` and `node-exporter` are built from their upstream release source with patched dependencies, and `prometheus-config-reloader` and `victoria-metrics` are copied unchanged. Their tags match the upstream releases.
+> From 2.1.128, OneLens publishes these third-party images itself so they pass HIGH/CRITICAL image scans: `prometheus`, `pushgateway`, `kube-state-metrics`, `opencost`, `node-exporter` and `victoria-metrics` are built from their upstream release source with patched dependencies, and `prometheus-config-reloader` is copied unchanged. Their tags match the upstream releases.
 
 ---
 
