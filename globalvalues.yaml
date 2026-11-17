@@ -847,7 +847,7 @@ prometheus:
     # Built from upstream source by images/pushgateway; keep the tag in sync with its TAG file.
     image:
       repository: public.ecr.aws/w7k6q5m9/onelens-pushgateway
-      tag: "v1.11.4"
+      tag: "v1.11.3"
       pullPolicy: IfNotPresent
     imagePullSecrets: []
     service:
