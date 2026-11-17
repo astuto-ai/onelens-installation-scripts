@@ -88,25 +88,32 @@ done
 # Test 4: migration script mirrors node-exporter for clusters that opt in
 ###############################################################################
 # install.sh/patching.sh point an opted-in node-exporter at $REGISTRY_URL/node-exporter
-# (sub-chart tag v<appVersion>), so the mirror must produce exactly that target.
+# with the tag globalvalues.yaml pins (before 2.1.128: the sub-chart's v<appVersion>),
+# so the mirror must produce exactly that target.
 MIGRATE="$ROOT/scripts/airgapped/airgapped_migrate_images.sh"
 ne_block=$(awk '/^# node-exporter \(deployed only/{f=1} f{print} f && /Skipping node-exporter/{getline; print; exit}' "$MIGRATE")
+get_tag_fn=$(sed -n '/^_get_tag() {/,/^}/p' "$MIGRATE")
 assert_ne "$ne_block" "" "migration script has the node-exporter block"
+assert_ne "$get_tag_fn" "" "migration script has _get_tag"
 
+# _mirror <sub-chart appVersion> [globalvalues.yaml content]
 _mirror() {
-    local app_version="$1" dir
+    local app_version="$1" values="${2:-}" dir
     dir=$(mktemp -d)
     if [ -n "$app_version" ]; then
         mkdir -p "$dir/onelens-agent/charts/prometheus/charts/prometheus-node-exporter"
         printf 'name: prometheus-node-exporter\nappVersion: %s\n' "$app_version" \
             > "$dir/onelens-agent/charts/prometheus/charts/prometheus-node-exporter/Chart.yaml"
     fi
-    ( TMPDIR="$dir"; IMAGES=""; eval "$ne_block" >/dev/null; echo "$IMAGES" | sed '/^$/d' )
+    printf '%s\n' "$values" > "$dir/values.yaml"
+    ( TMPDIR="$dir"; _V="$dir/values.yaml"; IMAGES=""; eval "$get_tag_fn"; eval "$ne_block" >/dev/null; echo "$IMAGES" | sed '/^$/d' )
     rm -rf "$dir"
 }
 assert_eq "$(_mirror 1.8.2)" "quay.io/prometheus/node-exporter:v1.8.2 node-exporter:v1.8.2" "node-exporter mirrored to <registry>/node-exporter:v<appVersion>"
 assert_eq "$(_mirror '"1.9.0"')" "quay.io/prometheus/node-exporter:v1.9.0 node-exporter:v1.9.0" "double-quoted appVersion handled"
 assert_eq "$(_mirror "'1.9.0'")" "quay.io/prometheus/node-exporter:v1.9.0 node-exporter:v1.9.0" "single-quoted appVersion handled"
 assert_eq "$(_mirror "")" "" "no sub-chart -> skipped with a warning, not a broken entry"
+ne_values=$(sed -n '/^  prometheus-node-exporter:/,/^  [a-z]/p' "$ROOT/globalvalues.yaml")
+assert_eq "$(_mirror 1.8.2 "$ne_values")" "public.ecr.aws/w7k6q5m9/onelens-node-exporter:v1.8.2 node-exporter:v1.8.2" "globalvalues.yaml's OneLens-built image is mirrored, not the sub-chart default"
 
 test_summary

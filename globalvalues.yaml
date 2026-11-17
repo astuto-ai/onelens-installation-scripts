@@ -85,9 +85,15 @@ onelens-agent:
     enabled: "false"
     dcgmExporter:
       image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+  # Copied unchanged from Docker Hub by images/busybox; keep the tag in sync with its TAG file.
+  networkCosts:
+    initImage:
+      repository: public.ecr.aws/w7k6q5m9/onelens-busybox
+      tag: "1.36"
   victoriaMetrics:
+    # Built from upstream source by images/victoria-metrics; keep the tag in sync with its TAG file.
     image:
-      repository: victoriametrics/victoria-metrics
+      repository: public.ecr.aws/w7k6q5m9/onelens-victoria-metrics
       tag: v1.117.1
       pullPolicy: IfNotPresent
     resources:
@@ -231,9 +237,10 @@ prometheus:
     prometheus:
       enabled: true
       name: configmap-reload
+      # Copied unchanged from quay.io by images/prometheus-config-reloader; keep the tag in sync with its TAG file.
       image:
-        repository: quay.io/prometheus-operator/prometheus-config-reloader
-        tag: v0.92.1
+        repository: public.ecr.aws/w7k6q5m9/onelens-prometheus-config-reloader
+        tag: v0.95.2
         digest: ""
         pullPolicy: IfNotPresent
       containerPort: 8080
@@ -276,9 +283,10 @@ prometheus:
     releaseNamespace: false
     sidecarContainers: {}
     sidecarTemplateValues: {}
+    # Built from upstream source by images/prometheus; keep the tag in sync with its TAG file.
     image:
-      repository: quay.io/prometheus/prometheus
-      tag: "v3.5.4"
+      repository: public.ecr.aws/w7k6q5m9/onelens-prometheus
+      tag: "v3.13.5"
       digest: ""
       pullPolicy: IfNotPresent
     command: []
@@ -609,9 +617,10 @@ prometheus:
   kube-state-metrics:
     enabled: true
     prometheusScrape: true
+    # Built from upstream source by images/kube-state-metrics; keep the tag in sync with its TAG file.
     image:
-      registry: registry.k8s.io
-      repository: kube-state-metrics/kube-state-metrics
+      registry: public.ecr.aws
+      repository: w7k6q5m9/onelens-kube-state-metrics
       tag: "v2.19.1"
       sha: ""
       pullPolicy: IfNotPresent
@@ -835,9 +844,10 @@ prometheus:
     nameOverride: ""
     fullnameOverride: ""
     namespaceOverride: ""
+    # Built from upstream source by images/pushgateway; keep the tag in sync with its TAG file.
     image:
-      repository: quay.io/prometheus/pushgateway
-      tag: "v1.11.3"
+      repository: public.ecr.aws/w7k6q5m9/onelens-pushgateway
+      tag: "v1.11.4"
       pullPolicy: IfNotPresent
     imagePullSecrets: []
     service:
@@ -937,6 +947,11 @@ prometheus:
     lifecycle: {}
   prometheus-node-exporter:
     enabled: false
+    # Built from upstream source by images/node-exporter; keep the tag in sync with its TAG file.
+    image:
+      registry: public.ecr.aws
+      repository: w7k6q5m9/onelens-node-exporter
+      tag: "v1.8.2"
     hostPID: false
     nodeSelector:
       kubernetes.io/os: linux
@@ -975,9 +990,10 @@ prometheus-opencost-exporter:
     exporter:
       cloudProviderApiKey: ""
       defaultClusterId: 'default-cluster'
+      # Built from upstream source by images/opencost; keep the tag in sync with its TAG file.
       image:
-        registry: ghcr.io
-        repository: opencost/opencost
+        registry: public.ecr.aws
+        repository: w7k6q5m9/onelens-opencost
         tag: "1.120.4"
         pullPolicy: IfNotPresent
       replicas: 1
