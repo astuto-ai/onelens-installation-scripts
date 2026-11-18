@@ -18,7 +18,8 @@ name: Scan Released Images
 
 on:
   schedule:
-    - cron: '0 4 * * *'
+    # Overnight in India: 03:00 IST.
+    - cron: '30 21 * * *'
   workflow_dispatch:
     inputs:
       test_alert:
