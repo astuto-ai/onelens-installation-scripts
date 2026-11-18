@@ -89,7 +89,9 @@ jobs:
             echo "::group::$IMAGE ($platform)"
             for attempt in 1 2 3; do
               rc=0
-              docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
+              # A hung pull or scan is stopped (exit 124, or 137 if the docker client
+              # ignores SIGTERM) and retried like any other error.
+              timeout -k 30s 10m docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
                 --scanners vuln --severity HIGH,CRITICAL --exit-code 2 "$IMAGE" || rc=$?
               case "$rc" in 0|2) break ;; esac
               [ "$attempt" -lt 3 ] || break
