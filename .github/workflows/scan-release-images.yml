@@ -1,16 +1,26 @@
 name: Scan Released Images
 
-# Weekly check that every image the latest release can deploy still passes customers'
+# Daily check that every image the latest release can deploy still passes customers'
 # image gates (Trivy 0.57.1, HIGH/CRITICAL, unfixed included, exit code 1). New CVEs
 # are published against images that were clean when released; a failure here means a
-# rebuild or version bump is due before a customer's gate finds it.
+# rebuild or version bump is due before a customer's gate finds it. Customer gates pull
+# a fresh vulnerability DB every day, so a weekly check could trail them by six days.
+#
+# A failure posts to Microsoft Teams through the webhook URL in the TEAMS_WEBHOOK_URL
+# secret (a Teams Workflows "Post to a channel when a webhook request is received" flow).
+# Run it by hand with test_alert to check that the alert reaches the channel.
 #
 # Not covered: dcgm-exporter (GPU clusters only) and kube-rbac-proxy (off by default).
 
 on:
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '0 4 * * *'
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: Post a test alert to Teams even if every image passes
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.list.outputs.images }}
+      release: ${{ steps.list.outputs.release }}
     steps:
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -37,6 +48,7 @@ jobs:
           TAG=$(gh release view --repo "${{ github.repository }}" --json tagName -q .tagName)
           VERSION=${TAG#v}
           echo "Latest release: $TAG"
+          echo "release=$TAG" >> "$GITHUB_OUTPUT"
           helm repo add onelens "$CHART_REPO" >/dev/null
           curl -fsSL "$CHART_REPO/globalvalues-v$VERSION.yaml" -o values.yaml
           # Prometheus backend, VictoriaMetrics backend, and the opt-in exporters.
@@ -73,3 +85,71 @@ jobs:
             echo "::endgroup::"
           done
           exit $failed
+
+  notify:
+    needs: [list-images, scan]
+    if: >-
+      always() && (needs.list-images.result == 'failure' || needs.scan.result == 'failure'
+      || inputs.test_alert == true)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Post to Microsoft Teams
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          LIST_RESULT: ${{ needs.list-images.result }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+          RELEASE: ${{ needs.list-images.outputs.release }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TEAMS_WEBHOOK_URL" ]; then
+            echo "::error::TEAMS_WEBHOOK_URL is not set, so nobody was alerted. Add the Teams Workflows webhook URL as a repository secret."
+            exit 1
+          fi
+
+          # Scan jobs are named after their image, so the failed jobs are the failed images.
+          # The alert still goes out if this lookup fails; it just lists no images.
+          failed=""
+          if [ "$SCAN_RESULT" = "failure" ]; then
+            failed=$(gh api --paginate \
+              "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs" \
+              -q '.jobs[] | select(.conclusion == "failure") | .name') || failed=""
+          fi
+          count=$(printf '%s\n' "$failed" | grep -c . || true)
+
+          if [ "$LIST_RESULT" = "failure" ]; then
+            title="Release image scan could not run"
+            text="Listing the images of the latest OneLens release failed, so nothing was scanned today."
+          elif [ "$SCAN_RESULT" = "failure" ]; then
+            title="OneLens $RELEASE images fail the customer image gate"
+            if [ "$count" -gt 0 ]; then
+              text="$count image(s) in the latest release now have HIGH or CRITICAL findings under Trivy 0.57.1."
+            else
+              text="Images in the latest release now have HIGH or CRITICAL findings under Trivy 0.57.1."
+            fi
+            text="$text Rebuild or bump them before a customer's gate finds them."
+          else
+            title="Test alert: release image scan"
+            text="A manual run with test_alert posted this. Release scan alerts reach this channel."
+          fi
+
+          jq -n --arg title "$title" --arg text "$text" --arg images "$failed" --arg url "$RUN_URL" '{
+            type: "message",
+            attachments: [{
+              contentType: "application/vnd.microsoft.card.adaptive",
+              content: {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                type: "AdaptiveCard",
+                version: "1.4",
+                body: ([
+                  {type: "TextBlock", text: $title, weight: "Bolder", size: "Medium", wrap: true},
+                  {type: "TextBlock", text: $text, wrap: true}
+                ] + ($images | split("\n") | map(select(length > 0))
+                     | map({type: "TextBlock", text: ., fontType: "Monospace", spacing: "None", wrap: true}))),
+                actions: [{type: "Action.OpenUrl", title: "Open the run", url: $url}]
+              }
+            }]
+          }' > card.json
+          curl -fsS -X POST -H "Content-Type: application/json" --data @card.json "$TEAMS_WEBHOOK_URL"
