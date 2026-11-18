@@ -1,10 +1,14 @@
 name: Scan Released Images
 
 # Daily check that every image the latest release can deploy still passes customers'
-# image gates (Trivy 0.57.1, HIGH/CRITICAL, unfixed included, exit code 1). New CVEs
-# are published against images that were clean when released; a failure here means a
-# rebuild or version bump is due before a customer's gate finds it. Customer gates pull
-# a fresh vulnerability DB every day, so a weekly check could trail them by six days.
+# image gates (Trivy 0.57.1, HIGH/CRITICAL, unfixed included). New CVEs are published
+# against images that were clean when released; a finding here means a rebuild or
+# version bump is due before a customer's gate finds it. Customer gates pull a fresh
+# vulnerability DB every day, so a weekly check could trail them by six days.
+#
+# Findings exit 2 and Trivy errors exit 1, so a registry or DB error (public.ecr.aws
+# rate-limits anonymous pulls) is retried and, if it persists, reported as "could not
+# scan" rather than as a finding.
 #
 # A failure posts to Microsoft Teams through the webhook URL in the TEAMS_WEBHOOK_URL
 # secret (a Teams Workflows "Post to a channel when a webhook request is received" flow).
@@ -70,9 +74,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # All images at once hit public.ecr.aws's anonymous pull rate limit.
+      max-parallel: 4
       matrix:
         image: ${{ fromJson(needs.list-images.outputs.images) }}
     steps:
+      # The notify job reads the annotation titles to tell findings from scan errors.
       - name: Scan amd64 and arm64
         env:
           IMAGE: ${{ matrix.image }}
@@ -80,9 +87,23 @@ jobs:
           failed=0
           for platform in linux/amd64 linux/arm64; do
             echo "::group::$IMAGE ($platform)"
-            docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
-              --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$IMAGE" || failed=1
+            for attempt in 1 2 3; do
+              rc=0
+              docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
+                --scanners vuln --severity HIGH,CRITICAL --exit-code 2 "$IMAGE" || rc=$?
+              case "$rc" in 0|2) break ;; esac
+              [ "$attempt" -lt 3 ] || break
+              echo "Trivy failed (exit $rc); retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
             echo "::endgroup::"
+            if [ "$rc" -eq 2 ]; then
+              echo "::error title=HIGH/CRITICAL findings::$IMAGE ($platform)"
+              failed=1
+            elif [ "$rc" -ne 0 ]; then
+              echo "::error title=Could not scan::$IMAGE ($platform): Trivy failed 3 times (exit $rc); see the log above"
+              failed=1
+            fi
           done
           exit $failed
 
@@ -94,6 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      checks: read
     steps:
       - name: Post to Microsoft Teams
         env:
@@ -110,46 +132,69 @@ jobs:
           fi
 
           # Scan jobs are named after their image, so the failed jobs are the failed images.
-          # The alert still goes out if this lookup fails; it just lists no images.
-          failed=""
+          # A job counts as "could not scan" only if its annotations say so and report no
+          # findings; anything else, including a failed lookup, counts as findings.
+          # The alert still goes out if the job lookup fails; it just lists no images.
+          findings=""
+          errors=""
           if [ "$SCAN_RESULT" = "failure" ]; then
-            failed=$(gh api --paginate \
+            jobs=$(gh api --paginate \
               "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs" \
-              -q '.jobs[] | select(.conclusion == "failure") | .name') || failed=""
+              -q '.jobs[] | select(.conclusion == "failure") | "\(.id)\t\(.name)"') || jobs=""
+            while IFS=$'\t' read -r id name; do
+              [ -n "$id" ] || continue
+              titles=$(gh api "repos/${{ github.repository }}/check-runs/$id/annotations" -q '.[].title') || titles=""
+              if grep -qx 'Could not scan' <<<"$titles" && ! grep -qx 'HIGH/CRITICAL findings' <<<"$titles"; then
+                errors+="$name"$'\n'
+              else
+                findings+="$name"$'\n'
+              fi
+            done <<<"$jobs"
           fi
-          count=$(printf '%s\n' "$failed" | grep -c . || true)
+          nfind=$(printf '%s' "$findings" | grep -c . || true)
+          nerr=$(printf '%s' "$errors" | grep -c . || true)
 
+          errors_header=""
           if [ "$LIST_RESULT" = "failure" ]; then
-            title="Release image scan could not run"
+            title="OneLens security check could not run"
             text="Listing the images of the latest OneLens release failed, so nothing was scanned today."
+          elif [ "$SCAN_RESULT" = "failure" ] && [ "$nfind" -eq 0 ] && [ "$nerr" -gt 0 ]; then
+            title="OneLens $RELEASE security check could not scan $nerr image(s)"
+            text="Trivy failed 3 times on each of these (registry or vulnerability DB errors), so they were not checked today. This is not a finding. If it repeats, check that the image still exists."
           elif [ "$SCAN_RESULT" = "failure" ]; then
-            title="OneLens $RELEASE images fail the customer image gate"
-            if [ "$count" -gt 0 ]; then
-              text="$count image(s) in the latest release now have HIGH or CRITICAL findings under Trivy 0.57.1."
+            title="OneLens $RELEASE security check failed"
+            if [ "$nfind" -gt 0 ]; then
+              text="$nfind image(s) in the latest release now have HIGH or CRITICAL findings under Trivy 0.57.1."
             else
               text="Images in the latest release now have HIGH or CRITICAL findings under Trivy 0.57.1."
             fi
-            text="$text Rebuild or bump them before a customer's gate finds them."
+            text="$text Rebuild or bump them."
+            [ "$nerr" -eq 0 ] || errors_header="Also could not be scanned today (not a finding):"
           else
-            title="Test alert: release image scan"
-            text="A manual run with test_alert posted this. Release scan alerts reach this channel."
+            title="Test alert: OneLens security check"
+            text="A manual run with test_alert posted this. Security check alerts reach this channel."
           fi
 
-          jq -n --arg title "$title" --arg text "$text" --arg images "$failed" --arg url "$RUN_URL" '{
-            type: "message",
-            attachments: [{
-              contentType: "application/vnd.microsoft.card.adaptive",
-              content: {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                type: "AdaptiveCard",
-                version: "1.4",
-                body: ([
-                  {type: "TextBlock", text: $title, weight: "Bolder", size: "Medium", wrap: true},
-                  {type: "TextBlock", text: $text, wrap: true}
-                ] + ($images | split("\n") | map(select(length > 0))
-                     | map({type: "TextBlock", text: ., fontType: "Monospace", spacing: "None", wrap: true}))),
-                actions: [{type: "Action.OpenUrl", title: "Open the run", url: $url}]
-              }
-            }]
-          }' > card.json
+          jq -n --arg title "$title" --arg text "$text" --arg findings "$findings" --arg errors "$errors" \
+            --arg errors_header "$errors_header" --arg url "$RUN_URL" '
+            def mono: split("\n") | map(select(length > 0))
+              | map({type: "TextBlock", text: ., fontType: "Monospace", spacing: "None", wrap: true});
+            {
+              type: "message",
+              attachments: [{
+                contentType: "application/vnd.microsoft.card.adaptive",
+                content: {
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  type: "AdaptiveCard",
+                  version: "1.4",
+                  body: ([
+                    {type: "TextBlock", text: $title, weight: "Bolder", size: "Medium", wrap: true},
+                    {type: "TextBlock", text: $text, wrap: true}
+                  ] + ($findings | mono)
+                    + (if $errors_header == "" then [] else [{type: "TextBlock", text: $errors_header, wrap: true}] end)
+                    + ($errors | mono)),
+                  actions: [{type: "Action.OpenUrl", title: "Open the run", url: $url}]
+                }
+              }]
+            }' > card.json
           curl -fsS -X POST -H "Content-Type: application/json" --data @card.json "$TEAMS_WEBHOOK_URL"
