@@ -1740,6 +1740,14 @@ if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
     keep_vm_volume_size "$(kubectl get pvc onelens-agent-victoriametrics -n onelens-agent \
         -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)"
 fi
+# A retentionSize change restarts Prometheus: keep the current one unless the tier is larger,
+# and size it to the live PVC (reused as is) when there is one, else to the PVC helm creates.
+# Not EXISTING_PVC_SIZE: without a PVC it is the old helm value, smaller than the new PVC
+# when the tier grew, and the next run would raise retentionSize again (one more restart)
+_prom_pvc_size=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+    -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+keep_retention_size "$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.retentionSize // empty' 2>/dev/null || true)" \
+    "${_prom_pvc_size:-$PROMETHEUS_VOLUME_SIZE}"
 
 # Memory guard: usage-based sizing (above) replaces the old "never downsize" guard.
 # If usage-based was applied, limits are already set from actual Prometheus data.

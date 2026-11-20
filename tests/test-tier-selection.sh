@@ -225,6 +225,77 @@ assert_eq "$PROMETHEUS_RETENTION_SIZE" "35GB" "5000 pods: retention size"
 assert_eq "$PROMETHEUS_VOLUME_SIZE"    "50Gi" "5000 pods: volume size"
 
 ###############################################################################
+# retention_size_for_volume / keep_retention_size
+###############################################################################
+echo ""
+echo "--- retention_size_for_volume: same pairs as select_retention_tier ---"
+for pods in 1 49 50 99 100 499 500 999 1000 1499 1500 5000; do
+    select_retention_tier "$pods"
+    assert_eq "$(retention_size_for_volume "$PROMETHEUS_VOLUME_SIZE")" "$PROMETHEUS_RETENTION_SIZE" \
+        "retention_size_for_volume $PROMETHEUS_VOLUME_SIZE = tier retentionSize at $pods pods"
+done
+assert_eq "$(retention_size_for_volume 15Gi)" "6GB" "retention_size_for_volume: 15Gi (between tiers) → 6GB"
+assert_eq "$(retention_size_for_volume 100Gi)" "35GB" "retention_size_for_volume: 100Gi → 35GB"
+assert_eq "$(retention_size_for_volume 5Gi)" "" "retention_size_for_volume: below 8Gi → empty"
+assert_eq "$(retention_size_for_volume 21474836480)" "" "retention_size_for_volume: non-Gi → empty"
+assert_eq "$(retention_size_for_volume "")" "" "retention_size_for_volume: empty → empty"
+
+echo ""
+echo "--- keep_retention_size ---"
+# _ret <pods> <current retentionSize> <volume> — retentionSize patching.sh would set
+_ret() {
+    ( select_retention_tier "$1"; keep_retention_size "$2" "$3" >/dev/null; echo "$PROMETHEUS_RETENTION_SIZE" )
+}
+# Reported case: 38-39 active pods (49-50 with the buffer) flipped 4GB/6GB every run
+assert_eq "$(_ret 49 6GB 10Gi)" "6GB" "below a boundary on a 10Gi PVC: 6GB kept (was lowered to 4GB)"
+assert_eq "$(_ret 50 6GB 10Gi)" "6GB" "above it: 6GB unchanged"
+assert_eq "$(_ret 50 4GB 8Gi)" "4GB" "8Gi PVC: not raised to 6GB, which the tiers pair with 10Gi (was raised)"
+assert_eq "$(_ret 49 4GB 8Gi)" "4GB" "8Gi PVC below the boundary: 4GB unchanged"
+assert_eq "$(_ret 50 4GB 10Gi)" "6GB" "10Gi PVC, pods cross the boundary upward: raised to 6GB, as before"
+assert_eq "$(_ret 100 6GB 10Gi)" "6GB" "100 pods on a reused 10Gi PVC: 12GB doesn't fit, 6GB kept (was 12GB)"
+assert_eq "$(_ret 500 4GB 20Gi)" "12GB" "500 pods on a 20Gi PVC: raised only to 12GB, what 20Gi holds (was 20GB)"
+assert_eq "$(_ret 120 35GB 50Gi)" "35GB" "cluster shrank: 35GB kept, never lowered"
+assert_eq "$(_ret 30 9GB 20Gi)" "9GB" "custom 9GB above the tier: kept"
+assert_eq "$(_ret 30 4GB 20Gi)" "4GB" "current equals tier: unchanged"
+assert_eq "$(_ret 600 12GB "")" "20GB" "volume unknown: raised to the tier, as before"
+assert_eq "$(_ret 30 12GB "")" "12GB" "volume unknown: still never lowered"
+assert_eq "$(_ret 600 "" 20Gi)" "20GB" "no current retentionSize: tier value, as before"
+assert_eq "$(_ret 30 500MB 20Gi)" "4GB" "non-GB current retentionSize: tier value, as before"
+assert_eq "$(_ret 30 6GB 21474836480)" "6GB" "non-Gi volume: never lowered"
+# Every tier x current size x volume: never lowered, and changed only where the old code (which
+# always set the tier value) changed it too, so it adds no Prometheus restart
+bad=""
+for pods in 30 60 200 700 1200 2000; do
+    select_retention_tier "$pods"; tier="$PROMETHEUS_RETENTION_SIZE"
+    for cur in 4GB 6GB 12GB 20GB 30GB 35GB; do
+        for vol in 8Gi 10Gi 20Gi 30Gi 40Gi 50Gi; do
+            got=$(_ret "$pods" "$cur" "$vol")
+            [ "${got%GB}" -ge "${cur%GB}" ] || bad="$bad lowered:$pods/$cur/$vol=$got"
+            [ "$got" = "$cur" ] || [ "$tier" != "$cur" ] || bad="$bad extra-restart:$pods/$cur/$vol=$got"
+        done
+    done
+done
+assert_eq "$bad" "" "216 combinations: never lowered, changed only where the old code changed it too"
+
+# patching.sh: applied after the PVC size is settled, before the helm command is built
+PATCHING="$(repo_root)/src/patching.sh"
+keep_line=$(grep -n '^keep_retention_size ' "$PATCHING" | cut -d: -f1)
+pvc_line=$(grep -n 'Keeping existing size."' "$PATCHING" | head -1 | cut -d: -f1)
+helm_line=$(grep -n 'prometheus.server.retentionSize=' "$PATCHING" | cut -d: -f1)
+assert_eq "$([ -n "$keep_line" ] && [ -n "$pvc_line" ] && [ -n "$helm_line" ] && [ "$pvc_line" -lt "$keep_line" ] && [ "$keep_line" -lt "$helm_line" ] && echo yes || echo no)" "yes" \
+    "patching.sh keeps retentionSize after the PVC size step and before helm"
+assert_eq "$(grep -A1 '^keep_retention_size ' "$PATCHING" | grep -c '_prom_pvc_size:-\$PROMETHEUS_VOLUME_SIZE')" "1" \
+    "patching.sh sizes retention to the live PVC, else the volume helm creates"
+assert_eq "$(grep -B2 '^keep_retention_size ' "$PATCHING" | grep -c '^_prom_pvc_size=\$(kubectl get pvc onelens-agent-prometheus-server ')" "1" \
+    "patching.sh reads the live PVC, not EXISTING_PVC_SIZE (the helm value when there is no PVC)"
+# No PVC yet: helm creates it at PROMETHEUS_VOLUME_SIZE, at least the tier volume, so the tier
+# value fits and the next run (reading the new PVC) has nothing to raise
+for pods in 30 60 200 700 1200 2000; do
+    select_retention_tier "$pods"; tier="$PROMETHEUS_RETENTION_SIZE"; vol="$PROMETHEUS_VOLUME_SIZE"
+    assert_eq "$(_ret "$pods" 4GB "$vol")" "$tier" "no PVC at $pods pods: 4GB raised to the tier ($tier) in one run"
+done
+
+###############################################################################
 # Summary
 ###############################################################################
 
