@@ -226,15 +226,23 @@ elif [ "$deployment_type" = "cronjob" ]; then
                     -o jsonpath='{.data.last_full_evaluation}' 2>/dev/null || true)
             fi
             if [ -n "$_sizing_last_run" ]; then
+                # GNU date, then BSD date, then busybox date (the image is Alpine: busybox
+                # -d rejects the trailing Z and has no -j, only -D)
                 _sizing_epoch=$(date -u -d "$_sizing_last_run" +%s 2>/dev/null || \
                     date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$_sizing_last_run" +%s 2>/dev/null || \
-                    echo 0)
-                _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
-                _SIX_HOURS_IN_SEC=21600
-                _GRACE_PERIOD_IN_SEC=1800  # 30 minutes
-                if [ "$_sizing_age_secs" -ge $((_SIX_HOURS_IN_SEC + _GRACE_PERIOD_IN_SEC)) ]; then
-                    echo "Sizing evaluation overdue (last run: $_sizing_last_run, ${_sizing_age_secs}s ago)"
-                    UNHEALTHY_REASONS="Sizing evaluation overdue\n"
+                    date -u -D "%Y-%m-%dT%H:%M:%SZ" -d "$_sizing_last_run" +%s 2>/dev/null || true)
+                if ! [[ "$_sizing_epoch" =~ ^[0-9]+$ ]]; then
+                    # Unparseable: skip the check. Treating it as epoch 0 made every run
+                    # overdue and ran patching.sh (and a helm upgrade) every 5 minutes.
+                    echo "WARNING: could not parse last sizing run '$_sizing_last_run', skipping the overdue check"
+                else
+                    _sizing_age_secs=$(( $(date -u +%s) - _sizing_epoch ))
+                    _SIX_HOURS_IN_SEC=21600
+                    _GRACE_PERIOD_IN_SEC=1800  # 30 minutes
+                    if [ "$_sizing_age_secs" -ge $((_SIX_HOURS_IN_SEC + _GRACE_PERIOD_IN_SEC)) ]; then
+                        echo "Sizing evaluation overdue (last run: $_sizing_last_run, ${_sizing_age_secs}s ago)"
+                        UNHEALTHY_REASONS="Sizing evaluation overdue\n"
+                    fi
                 fi
             fi
         fi
