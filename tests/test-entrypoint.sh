@@ -236,6 +236,62 @@ assert_eq "$(_not_ready "$(_job 0/1 Completed 50m)")" "" "completed agent job po
 assert_contains "$(_not_ready "$(_dep 0/1 ContainerCreating 0 8s)")" "ContainerCreating" "Deployment pod ContainerCreating is reported (unchanged)"
 assert_contains "$(_not_ready "$(_dep 0/1 Running "3 (2m ago)" 1h)")" "(Running)" "Deployment pod Running 0/1 is reported (unchanged)"
 
+###############################################################################
+# Periodic sizing: the overdue check must parse last_sizing_run
+###############################################################################
+# The deployer image is Alpine. Busybox date rejected the timestamp, the epoch fell
+# back to 0, and every 5-minute run was "overdue": patching.sh and a helm upgrade
+# ran every 5 minutes.
+ps_block=$(sed -n '/ENABLE_PERIODIC_SIZING:-}" = "true"/,/^        fi$/p' "$ENTRYPOINT")
+assert_ne "$ps_block" "" "periodic sizing block found"
+
+# _overdue <last_sizing_run> — the block's output, then REASONS=<UNHEALTHY_REASONS>
+_overdue() {
+    local ts="$1"
+    (
+        kubectl() { printf '%s' "$ts"; }
+        ENABLE_PERIODIC_SIZING=true
+        UNHEALTHY_REASONS=""
+        eval "$ps_block"
+        echo "REASONS=$UNHEALTHY_REASONS"
+    )
+}
+# _iso_ago <seconds> — UTC timestamp that many seconds ago, as patching.sh writes it
+_iso_ago() {
+    local t=$(( $(date -u +%s) - $1 ))
+    date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$t" +%Y-%m-%dT%H:%M:%SZ
+}
+TS_7H=$(_iso_ago 25200)
+TS_1H=$(_iso_ago 3600)
+
+assert_contains "$(_overdue "$TS_7H")" 'REASONS=Sizing evaluation overdue' "last sizing run 7h ago is overdue"
+assert_contains "$(_overdue "$TS_1H")" 'REASONS=' "last sizing run 1h ago runs the check"
+assert_eq "$(_overdue "$TS_1H" | grep -c 'overdue' || true)" "0" "last sizing run 1h ago is not overdue"
+garbage_out=$(_overdue "not-a-date")
+assert_contains "$garbage_out" "WARNING: could not parse last sizing run" "unparseable last sizing run logs a warning"
+assert_eq "$(echo "$garbage_out" | grep -c 'Sizing evaluation overdue' || true)" "0" "unparseable last sizing run is not treated as overdue"
+assert_eq "$(_overdue "")" "REASONS=" "no sizing state: no check, no warning"
+
+# Same block in the image's base, with busybox date (the platform that had the bug)
+DEPLOYER_BASE=$(awk '/^FROM alpine/ {print $2; exit}' "$ROOT/Dockerfile")
+if [ -n "$DEPLOYER_BASE" ] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    # _overdue_busybox <last_sizing_run> — _overdue inside the base image (TZ set
+    # off UTC so a local-time parse would show up)
+    _overdue_busybox() {
+        printf '%s\n' \
+            "kubectl() { printf '%s' '$1'; }" \
+            "ENABLE_PERIODIC_SIZING=true; UNHEALTHY_REASONS=''" \
+            "$ps_block" \
+            'echo "REASONS=$UNHEALTHY_REASONS"' \
+            | docker run --rm -i -e TZ=IST-5:30 "$DEPLOYER_BASE" \
+                sh -c 'apk add -q --no-cache bash >/dev/null 2>&1 && bash -s' 2>&1 || true
+    }
+    assert_contains "$(_overdue_busybox "$TS_7H")" 'REASONS=Sizing evaluation overdue' "busybox ($DEPLOYER_BASE): last sizing run 7h ago is overdue"
+    assert_eq "$(_overdue_busybox "$TS_1H")" "REASONS=" "busybox ($DEPLOYER_BASE): last sizing run 1h ago is not overdue, no warning"
+else
+    echo "  NOTE: Docker unavailable, busybox overdue check not run"
+fi
+
 # DCGM detection uses same GPU capacity check as patching.sh
 dcgm_gpu_detect=$(grep -c 'status.capacity.nvidia' "$ENTRYPOINT" || true)
 assert_gt "$dcgm_gpu_detect" "0" "entrypoint.sh detects GPU nodes via capacity"

@@ -961,3 +961,44 @@ keep_vm_volume_size() {
         PROMETHEUS_VOLUME_SIZE="$existing"
     fi
 }
+
+# retention_size_for_volume "$volume_size"
+# The retentionSize select_retention_tier pairs with the largest tier volume that fits in
+# $volume_size. Empty for a non-Gi size or one below the smallest tier volume (8Gi).
+retention_size_for_volume() {
+    local gi
+    gi=$(echo "$1" | sed -n 's/^\([0-9][0-9]*\)Gi$/\1/p')
+    [ -n "$gi" ] || return 0
+    if [ "$gi" -ge 50 ]; then echo "35GB"
+    elif [ "$gi" -ge 40 ]; then echo "30GB"
+    elif [ "$gi" -ge 30 ]; then echo "20GB"
+    elif [ "$gi" -ge 20 ]; then echo "12GB"
+    elif [ "$gi" -ge 10 ]; then echo "6GB"
+    elif [ "$gi" -ge 8 ]; then echo "4GB"
+    fi
+}
+
+# keep_retention_size "$current_retention_size" "$volume_size"
+# retentionSize is a Prometheus argument, so every change restarts Prometheus. Taken from the
+# live pod count, it flipped near a tier boundary (38 pods → 4GB, 39 → 6GB) and restarted
+# Prometheus on every run. Never lower it, and raise it only as far as the tier table goes for
+# $volume_size (an existing Prometheus PVC is reused as is, never resized). GB sizes only;
+# with no current size, the tier value stands.
+keep_retention_size() {
+    local current="$1" volume="$2" cur_gb tier_gb fit_gb target_gb
+    cur_gb=$(echo "$current" | sed -n 's/^\([0-9][0-9]*\)GB$/\1/p')
+    tier_gb=$(echo "$PROMETHEUS_RETENTION_SIZE" | sed -n 's/^\([0-9][0-9]*\)GB$/\1/p')
+    [ -n "$cur_gb" ] && [ -n "$tier_gb" ] || return 0
+    target_gb="$tier_gb"
+    fit_gb=$(retention_size_for_volume "$volume" | sed 's/GB$//')
+    if [ -n "$fit_gb" ] && [ "$target_gb" -gt "$fit_gb" ]; then
+        target_gb="$fit_gb"
+    fi
+    if [ "$cur_gb" -ge "$target_gb" ]; then
+        target_gb="$cur_gb"
+    fi
+    if [ "${target_gb}GB" != "$PROMETHEUS_RETENTION_SIZE" ]; then
+        echo "retentionSize: ${target_gb}GB, not tier default $PROMETHEUS_RETENTION_SIZE (current $current, volume ${volume:-unknown}; never lowered, raised only as far as the volume holds)"
+        PROMETHEUS_RETENTION_SIZE="${target_gb}GB"
+    fi
+}

@@ -832,10 +832,13 @@ if [ -n "$PROM_SVC" ]; then
     WINDOW_STEPS=$(_prom_query_raw "count_over_time(max(container_memory_working_set_bytes{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"})[${_EVAL_WINDOW}:5m])" \
         | jq -r 'if .status == "success" then (.data.result[0].value[1] // empty | tonumber | floor) else empty end' 2>/dev/null || true)
 
-    # Query current usage for logging (1h window)
-    MEM_NOW_RAW=$(_prom_query_raw 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
+    # Query current usage (logged; MEM_NOW also feeds the usage-at-limit check).
+    # Per pod (max), not summed: each pod has its own limit. After the metrics backend
+    # restarts, a pod that went away meanwhile still returns its last sample for a few
+    # minutes; summed with its replacement, it doubled a Prometheus at half its limit.
+    MEM_NOW_RAW=$(_prom_query_raw 'max by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
     MEM_1H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[1h]))')
-    CPU_NOW_RAW=$(_prom_query_raw 'sum by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
+    CPU_NOW_RAW=$(_prom_query_raw 'max by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
 
     # Parse results
     MEM_72H=$(parse_prom_result "$MEM_72H_RAW")
@@ -1737,6 +1740,14 @@ if [ "$METRICS_BACKEND" = "victoriametrics" ]; then
     keep_vm_volume_size "$(kubectl get pvc onelens-agent-victoriametrics -n onelens-agent \
         -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)"
 fi
+# A retentionSize change restarts Prometheus: keep the current one unless the tier is larger,
+# and size it to the live PVC (reused as is) when there is one, else to the PVC helm creates.
+# Not EXISTING_PVC_SIZE: without a PVC it is the old helm value, smaller than the new PVC
+# when the tier grew, and the next run would raise retentionSize again (one more restart)
+_prom_pvc_size=$(kubectl get pvc onelens-agent-prometheus-server -n onelens-agent \
+    -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+keep_retention_size "$(echo "$CURRENT_VALUES" | jq -r '.prometheus.server.retentionSize // empty' 2>/dev/null || true)" \
+    "${_prom_pvc_size:-$PROMETHEUS_VOLUME_SIZE}"
 
 # Memory guard: usage-based sizing (above) replaces the old "never downsize" guard.
 # If usage-based was applied, limits are already set from actual Prometheus data.
