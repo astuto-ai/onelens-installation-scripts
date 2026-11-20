@@ -832,10 +832,13 @@ if [ -n "$PROM_SVC" ]; then
     WINDOW_STEPS=$(_prom_query_raw "count_over_time(max(container_memory_working_set_bytes{namespace=\"onelens-agent\",container!=\"\",container!=\"POD\"})[${_EVAL_WINDOW}:5m])" \
         | jq -r 'if .status == "success" then (.data.result[0].value[1] // empty | tonumber | floor) else empty end' 2>/dev/null || true)
 
-    # Query current usage for logging (1h window)
-    MEM_NOW_RAW=$(_prom_query_raw 'sum by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
+    # Query current usage (logged; MEM_NOW also feeds the usage-at-limit check).
+    # Per pod (max), not summed: each pod has its own limit. After the metrics backend
+    # restarts, a pod that went away meanwhile still returns its last sample for a few
+    # minutes; summed with its replacement, it doubled a Prometheus at half its limit.
+    MEM_NOW_RAW=$(_prom_query_raw 'max by (container) (container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"})')
     MEM_1H_RAW=$(_prom_query_raw 'max by (container) (max_over_time(container_memory_working_set_bytes{namespace="onelens-agent",container!="",container!="POD"}[1h]))')
-    CPU_NOW_RAW=$(_prom_query_raw 'sum by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
+    CPU_NOW_RAW=$(_prom_query_raw 'max by (container) (rate(container_cpu_usage_seconds_total{namespace="onelens-agent",container!="",container!="POD"}[5m]))')
 
     # Parse results
     MEM_72H=$(parse_prom_result "$MEM_72H_RAW")

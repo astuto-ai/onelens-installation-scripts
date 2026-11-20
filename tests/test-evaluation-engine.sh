@@ -355,5 +355,27 @@ assert_eq "$([ -n "$deadline_read" ] && [ -n "$deadline_patch" ] && [ "$deadline
     "the Job's deadline is read before the CronJob is patched"
 
 ###############################################################################
+# Usage-at-limit compares each pod with its own limit
+###############################################################################
+echo ""
+echo "--- usage-at-limit: per pod ---"
+
+# Reported case: Prometheus at a 300Mi limit, peak 150Mi, and three
+# pods of ~111Mi in the query after restarts. Summed (333Mi, over 90%) it was doubled.
+assert_eq "$(_eval_mem "prometheus-server" "300Mi" "200m" "$((150*1048576))" "0.05" "false" "false" "false" "false" 1.35 1.25 150 12288 100 1200 "$((333*1048576))")" \
+    "600Mi" "usage-at-limit: 333Mi (three pods summed) against 300Mi → 600Mi"
+assert_eq "$(_eval_mem "prometheus-server" "300Mi" "200m" "$((150*1048576))" "0.05" "false" "false" "false" "false" 1.35 1.25 150 12288 100 1200 "$((130*1048576))")" \
+    "300Mi" "usage-at-limit: largest pod 130Mi against 300Mi → no change"
+assert_eq "$(_eval_mem "prometheus-server" "300Mi" "200m" "$((150*1048576))" "0.05" "false" "false" "false" "false" 1.35 1.25 150 12288 100 1200 "$((280*1048576))")" \
+    "600Mi" "usage-at-limit: one pod at 280Mi (93%) against 300Mi → still 600Mi"
+
+# patching.sh: current usage is queried per pod
+assert_eq "$(grep -c "MEM_NOW_RAW=\$(_prom_query_raw 'max by (container) (container_memory_working_set_bytes" "$PATCHING" || true)" "1" \
+    "current memory usage is queried per pod (max by container)"
+assert_eq "$(grep -c "CPU_NOW_RAW=\$(_prom_query_raw 'max by (container) (rate(container_cpu_usage_seconds_total" "$PATCHING" || true)" "1" \
+    "current CPU usage is queried per pod (max by container)"
+assert_eq "$(grep -c 'sum by (container)' "$PATCHING" || true)" "0" "no usage query sums pods"
+
+###############################################################################
 test_summary
 exit $?
