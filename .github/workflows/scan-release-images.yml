@@ -6,9 +6,13 @@ name: Scan Released Images
 # version bump is due before a customer's gate finds it. Customer gates pull a fresh
 # vulnerability DB every day, so a weekly check could trail them by six days.
 #
-# Findings exit 2 and Trivy errors exit 1, so a registry or DB error (public.ecr.aws
-# rate-limits anonymous pulls) is retried and, if it persists, reported as "could not
-# scan" rather than as a finding.
+# Findings exit 2 and Trivy errors exit 1, so a registry or DB error is retried and, if
+# it persists, reported as "could not scan" rather than as a finding.
+#
+# Scans log in to ECR Public with the role the image builds use. Anonymous public.ecr.aws
+# pulls are limited per IP, and GitHub runners share IPs with other users who often use
+# up that quota ("TOOMANYREQUESTS: Data limit exceeded"). Logged-in pulls count against
+# our AWS account instead. If the login fails, the scan runs anonymously.
 #
 # A failure posts to Microsoft Teams through the webhook URL in the TEAMS_WEBHOOK_URL
 # secret (a Teams Workflows "Post to a channel when a webhook request is received" flow).
@@ -32,6 +36,8 @@ permissions:
 
 env:
   CHART_REPO: "https://astuto-ai.github.io/onelens-installation-scripts"
+  AWS_ECR_ROLE_ARN: "arn:aws:iam::609916866699:role/onelens-agent-github-actions-ecr-role"
+  AWS_ECR_REGION: "us-east-1"
 
 jobs:
   list-images:
@@ -73,6 +79,8 @@ jobs:
     needs: list-images
     name: ${{ matrix.image }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     strategy:
       fail-fast: false
       # All images at once hit public.ecr.aws's anonymous pull rate limit.
@@ -80,11 +88,37 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.list-images.outputs.images) }}
     steps:
+      - name: Configure AWS credentials
+        id: aws
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ECR_ROLE_ARN }}
+          aws-region: ${{ env.AWS_ECR_REGION }}
+          role-session-name: GitHubActionsSession
+
+      - name: Login to Amazon ECR Public
+        id: ecr
+        if: steps.aws.outcome == 'success'
+        continue-on-error: true
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
       # The notify job reads the annotation titles to tell findings from scan errors.
       - name: Scan amd64 and arm64
         env:
           IMAGE: ${{ matrix.image }}
+          LOGGED_IN: ${{ steps.ecr.outcome == 'success' }}
         run: |
+          # Trivy runs in a container, so it is given the runner's Docker config, where
+          # amazon-ecr-login saved the login.
+          auth=()
+          if [ "$LOGGED_IN" = true ]; then
+            auth=(-e DOCKER_CONFIG=/docker-config -v "$HOME/.docker:/docker-config:ro")
+          else
+            echo "::warning title=Not logged in::Scanning $IMAGE anonymously, so public.ecr.aws may rate-limit it"
+          fi
           failed=0
           for platform in linux/amd64 linux/arm64; do
             echo "::group::$IMAGE ($platform)"
@@ -92,7 +126,7 @@ jobs:
               rc=0
               # A hung pull or scan is stopped (exit 124, or 137 if the docker client
               # ignores SIGTERM) and retried like any other error.
-              timeout -k 30s 10m docker run --rm aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
+              timeout -k 30s 10m docker run --rm "${auth[@]}" aquasec/trivy:0.57.1 image --image-src remote --platform "$platform" \
                 --scanners vuln --severity HIGH,CRITICAL --exit-code 2 "$IMAGE" || rc=$?
               case "$rc" in 0|2) break ;; esac
               [ "$attempt" -lt 3 ] || break
