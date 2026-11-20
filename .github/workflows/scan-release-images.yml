@@ -1,10 +1,11 @@
 name: Scan Released Images
 
-# Daily check that every image the latest release can deploy still passes customers'
+# Weekly check that every image the latest release can deploy still passes customers'
 # image gates (Trivy 0.57.1, HIGH/CRITICAL, unfixed included). New CVEs are published
 # against images that were clean when released; a finding here means a rebuild or
 # version bump is due before a customer's gate finds it. Customer gates pull a fresh
-# vulnerability DB every day, so a weekly check could trail them by six days.
+# vulnerability DB every day, so this can trail them by up to six days. It runs weekly
+# so that a week's findings are fixed in one release, not one release a day.
 #
 # Findings exit 2 and Trivy errors exit 1, so a registry or DB error is retried and, if
 # it persists, reported as "could not scan" rather than as a finding.
@@ -22,8 +23,8 @@ name: Scan Released Images
 
 on:
   schedule:
-    # Overnight in India: 03:00 IST.
-    - cron: '30 21 * * *'
+    # Mondays, overnight in India: 03:00 IST (Sunday 21:30 UTC).
+    - cron: '30 21 * * 0'
   workflow_dispatch:
     inputs:
       test_alert:
