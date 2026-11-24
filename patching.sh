@@ -2224,12 +2224,15 @@ if [ -n "$PROM_SVC" ]; then
         # The metrics backend may have no data *because* it is OOM-looping. Still record
         # kubectl-detected OOMs so the 7-day no-downsize hold starts — otherwise the next
         # full evaluation can shrink the component straight back into the OOM.
-        # VictoriaMetrics clusters only — Prometheus clusters keep their existing behavior.
-        if [ "$METRICS_BACKEND" = "victoriametrics" ] && [ -n "$OOM_KUBECTL" ]; then
+        # Both backends: the memory raised for an OOM-looping backend (after the memory
+        # guard below) must survive the next full evaluation, which on Prometheus can
+        # fall on a quiet weekend window.
+        if [ -n "${OOM_KUBECTL:-}" ]; then
             _oom_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             _oom_prom="$STATE_LAST_OOM_prometheus_server"; _oom_ksm="$STATE_LAST_OOM_kube_state_metrics"
             _oom_oc="$STATE_LAST_OOM_opencost"; _oom_pgw="$STATE_LAST_OOM_pushgateway"
-            echo "$OOM_KUBECTL" | grep -qF "$METRICS_COMPONENT" && _oom_prom="$_oom_ts"
+            # Exact name: the Prometheus pod's prometheus-server-configmap-reload sidecar contains it
+            echo "$OOM_KUBECTL" | grep -qxF "$METRICS_COMPONENT" && _oom_prom="$_oom_ts"
             echo "$OOM_KUBECTL" | grep -qF "kube-state-metrics" && _oom_ksm="$_oom_ts"
             echo "$OOM_KUBECTL" | grep -qF "opencost" && _oom_oc="$_oom_ts"
             echo "$OOM_KUBECTL" | grep -qF "pushgateway" && _oom_pgw="$_oom_ts"
@@ -2782,6 +2785,24 @@ if [ "$USAGE_BASED_APPLIED" != "true" ] && [[ -n "$CURRENT_VALUES" ]] && command
     _guard_memory "OpenCost limit" '.["prometheus-opencost-exporter"].opencost.exporter.resources.limits.memory' OPENCOST_MEMORY_LIMIT
     _guard_memory "Agent request" '.["onelens-agent"].resources.requests.memory' ONELENS_MEMORY_REQUEST
     _guard_memory "Agent limit" '.["onelens-agent"].resources.limits.memory' ONELENS_MEMORY_LIMIT
+fi
+
+# OOM-looping metrics backend: it serves no usage data, so usage-based sizing can't raise
+# it and the guard above only keeps its memory. The OOM retry after helm can't either:
+# helm's --wait on the crash loop runs until the Job deadline is nearly reached, which
+# leaves no time for a second upgrade, so every run upgraded at the same memory and the
+# backend never came back. Raise it in this run's upgrade instead: 1.5x, capped at the
+# memory cap and the node fit. The replacement pod starts with no OOM in its status, so
+# this raises once per OOM. A customer override (applied below) still wins.
+if [ "$USAGE_BASED_APPLIED" != "true" ] && printf '%s\n' "${OOM_KUBECTL:-}" | grep -qxF "$METRICS_COMPONENT"; then
+    _oom_loop_cap=$(fit_cap_to_node "$_USAGE_CAP_PROM_MEM" "$NODE_FIT_MEM_MI")
+    _oom_loop_mem=$(calculate_wal_oom_memory "$PROMETHEUS_MEMORY_LIMIT" "$_oom_loop_cap")
+    if [ "$(_memory_to_mi "$_oom_loop_mem")" -gt "$(_memory_to_mi "$PROMETHEUS_MEMORY_LIMIT")" ] 2>/dev/null; then
+        echo "$METRICS_LABEL OOM-killed with no usage data: raising memory $PROMETHEUS_MEMORY_LIMIT -> $_oom_loop_mem in this upgrade"
+        PROMETHEUS_MEMORY_REQUEST="$_oom_loop_mem"; PROMETHEUS_MEMORY_LIMIT="$_oom_loop_mem"
+    else
+        echo "$METRICS_LABEL OOM-killed with no usage data: already at its memory cap ($PROMETHEUS_MEMORY_LIMIT, cap ${_oom_loop_cap}Mi)"
+    fi
 fi
 
 # --- Customer overrides (deployer chart value agentOverrides) ---
@@ -4137,17 +4158,15 @@ fi
 TERMINATING_PODS=$(kubectl get pods -n onelens-agent --no-headers 2>/dev/null \
     | awk '$3 == "Terminating" {print $1}' || true)
 if [ -n "$TERMINATING_PODS" ]; then
-    NOW=$(date +%s)
     for pod in $TERMINATING_PODS; do
-        DEL_TS=$(kubectl get pod "$pod" -n onelens-agent \
-            -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
-        if [ -n "$DEL_TS" ]; then
-            DEL_EPOCH=$(date -d "$DEL_TS" +%s 2>/dev/null || echo "0")
-            STUCK_SECS=$(( NOW - DEL_EPOCH ))
-            if [ "$STUCK_SECS" -gt 600 ]; then
-                echo "Force-deleting pod stuck Terminating for $((STUCK_SECS / 60))m: $pod"
-                kubectl delete pod "$pod" -n onelens-agent --force --grace-period=0 2>/dev/null || true
-            fi
+        # Age from jq: the deployer's busybox `date -d` can't parse the RFC 3339 timestamp,
+        # and its fallback of 0 made every Terminating pod look stuck for decades, so each
+        # one (Prometheus included) was force-deleted at once. Unparseable → not deleted.
+        STUCK_SECS=$(kubectl get pod "$pod" -n onelens-agent -o json 2>/dev/null \
+            | jq -r '.metadata.deletionTimestamp // empty | now - fromdateiso8601 | floor' 2>/dev/null || true)
+        if [[ "$STUCK_SECS" =~ ^[0-9]+$ ]] && [ "$STUCK_SECS" -gt 600 ]; then
+            echo "Force-deleting pod stuck Terminating for $((STUCK_SECS / 60))m: $pod"
+            kubectl delete pod "$pod" -n onelens-agent --force --grace-period=0 2>/dev/null || true
         fi
     done
 fi
