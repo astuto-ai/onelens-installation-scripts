@@ -227,7 +227,10 @@ pgw_rec=$(_record "pushgateway" victoriametrics)
 assert_ne "$(echo "$pgw_rec" | jq -r '.data["pushgateway.last_oom_at"]')" "" "pushgateway OOM recorded (container is named 'pushgateway')"
 assert_eq "$(echo "$pgw_rec" | jq -r '.data["prometheus-server.last_oom_at"]')" "" "pushgateway OOM does not mark the metrics backend"
 assert_eq "$(_record "" victoriametrics)" "" "nothing written when no OOMs detected"
-assert_eq "$(_record "prometheus-server" prometheus-server prometheus)" "" "Prometheus: no-data OOM recording not applied (behavior unchanged)"
+prom_rec=$(_record "prometheus-server" prometheus-server prometheus)
+assert_ne "$(echo "$prom_rec" | jq -r '.data["prometheus-server.last_oom_at"]')" "" "Prometheus: no-data OOM recorded too (holds the raised memory through a full evaluation)"
+sidecar_rec=$(_record "prometheus-server-configmap-reload" prometheus-server prometheus)
+assert_eq "$(echo "$sidecar_rec" | jq -r '.data["prometheus-server.last_oom_at"]')" "" "Prometheus: a config-reloader sidecar OOM does not mark the server"
 
 ###############################################################################
 # Test 10: re-install keeps a larger existing VictoriaMetrics volume
