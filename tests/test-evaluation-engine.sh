@@ -277,8 +277,10 @@ assert_eq "$(grep -c 'mem_cap=\$(fit_cap_to_node "\$mem_cap" "\$NODE_FIT_MEM_MI"
     "usage-based sizing (all components) caps raises at the node fit"
 assert_eq "$(grep -c '_agent_cap=\$(fit_cap_to_node "\$_USAGE_CAP_AGENT_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "1" \
     "agent OOM bump caps at the node fit"
-assert_eq "$(grep -c 'cap=\$(fit_cap_to_node "\$_USAGE_CAP_\(PROM\|KSM\|OPENCOST\)_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "4" \
+assert_eq "$(grep -c '^[[:space:]]*cap=\$(fit_cap_to_node "\$_USAGE_CAP_\(PROM\|KSM\|OPENCOST\)_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "4" \
     "post-upgrade retry bumps (Prometheus, VictoriaMetrics, KSM, OpenCost) cap at the node fit"
+assert_eq "$(grep -c '_oom_loop_cap=\$(fit_cap_to_node "\$_USAGE_CAP_PROM_MEM" "\$NODE_FIT_MEM_MI")' "$PATCHING")" "1" \
+    "pre-upgrade raise of an OOM-looping metrics backend caps at the node fit"
 assert_eq "$(grep -cE 'cap="\$_USAGE_CAP_[A-Z]+_MEM"' "$PATCHING")" "0" \
     "no memory bump uses a cap without the node fit"
 
