@@ -32,8 +32,10 @@ RUN cd /src/helm && \
 
 FROM alpine:3.22
 
-# Install dependencies (this layer is cached across builds)
-RUN apk update && apk add --no-cache \
+# Install dependencies (this layer is cached across builds).
+# apk upgrade pulls security fixes for packages the base image
+# already ships (e.g. OpenSSL); apk add alone leaves them as-is.
+RUN apk update && apk upgrade --no-cache && apk add --no-cache \
     curl \
     tar \
     gzip \
