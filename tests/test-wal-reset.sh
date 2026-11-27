@@ -104,14 +104,15 @@ assert_eq "$(echo "$out" | grep -c WAL_RESET_DONE || true)" "0" "missing TSDB pa
 ###############################################################################
 # Test 4: reset_prometheus_wal against a fake kubectl
 ###############################################################################
-# _reset <server-pod polls before gone (99 = never)> <reset pod phase> <reset pod logs> [create rc]
+# _reset <server-pod polls before gone (99 = never)> <reset pod phase> <reset pod logs> [create rc] [budget_end] [elapsed]
 # (names start with _t_: the fake kubectl runs inside reset_prometheus_wal, whose locals
 # phase/logs would shadow ours)
 _reset() {
-    local _t_polls="$1" _t_phase="$2" _t_logs="$3" _t_create_rc="${4:-0}"
+    local _t_polls="$1" _t_phase="$2" _t_logs="$3" _t_create_rc="${4:-0}" _t_budget="${5:-}" _t_elapsed="${6:-100}"
     (
         cd "$TMP"; : > calls; echo "$_t_polls" > polls; rm -f created.json
         sleep() { :; }
+        _job_elapsed() { echo "$_t_elapsed"; }
         kubectl() {
             case "$*" in
                 "get deployment onelens-agent-prometheus-server -n onelens-agent -o json") cat "$DEPLOY_FIXTURE" ;;
@@ -120,6 +121,8 @@ _reset() {
                     local n; n=$(cat polls)
                     if [ "$n" -gt 0 ]; then echo "pod/onelens-agent-prometheus-server-x"; [ "$n" -lt 99 ] && echo $((n - 1)) > polls; fi ;;
                 "delete pods -n onelens-agent -l "*" --grace-period=5 --wait=false") echo "delete server pods" >> calls ;;
+                "get pods -n onelens-agent -l "*" -o json")
+                    echo '{"items":[{"metadata":{"name":"onelens-agent-prometheus-server-x","deletionTimestamp":"2026-11-27T12:36:50Z","deletionGracePeriodSeconds":300},"spec":{"nodeName":"node-a"},"status":{"containerStatuses":[{"name":"prometheus-server","state":{"running":{}}},{"name":"prometheus-server-configmap-reload","state":{"terminated":{}}}]}}]}' ;;
                 "delete pod onelens-agent-prometheus-wal-reset"*) echo "delete reset pod" >> calls ;;
                 "create -n onelens-agent -f -") cat > created.json; echo "create" >> calls; return "$_t_create_rc" ;;
                 "get pod onelens-agent-prometheus-wal-reset -n onelens-agent -o jsonpath={.status.phase}") echo "$_t_phase" ;;
@@ -127,21 +130,22 @@ _reset() {
                 *) echo "unexpected: $*" >> calls ;;
             esac
         }
-        if reset_prometheus_wal > out; then echo "rc=0"; else echo "rc=1"; fi
+        if reset_prometheus_wal "$_t_budget" > out; then echo "rc=0"; else echo "rc=1"; fi
         tr '\n' ',' < calls; echo
         cat out
     )
 }
 r=$(_reset 2 Succeeded "$(printf '4821304\twal\n91233\tchunks_head\nWAL_RESET_DONE')")
 assert_contains "$r" "rc=0" "reset succeeds"
-assert_contains "$r" "scale 0,delete server pods,delete reset pod,create,delete reset pod,scale 1," "scales to 0, cuts the 300s grace period, waits, runs the pod, removes it, scales back"
+assert_contains "$r" "delete server pods,scale 0,delete server pods,delete reset pod,create,delete reset pod,scale 1," "cuts the grace period, then scales to 0 (and cuts any replacement's), waits, runs the pod, removes it, scales back"
 assert_contains "$r" "removed (KiB): 4821304	wal" "logs what it removed"
 assert_eq "$(jq -r '.spec.volumes[0].persistentVolumeClaim.claimName' "$TMP/created.json")" "onelens-agent-prometheus-server" "created pod mounts the PVC"
 
 r=$(_reset 99 "" "")
 assert_contains "$r" "rc=1" "server pod never goes away -> no reset"
-assert_contains "$r" "scale 0,delete server pods,scale 1," "...and the replicas are restored, the reset pod never created"
-assert_contains "$r" "still present after 120s" "...and says why"
+assert_contains "$r" "delete server pods,scale 0,delete server pods,scale 1," "...and the replicas are restored, the reset pod never created"
+assert_contains "$r" "still present after 180s:" "...and says why"
+assert_contains "$r" "onelens-agent-prometheus-server-x node=node-a deleting=2026-11-27T12:36:50Z grace=300s containers=prometheus-server:running,prometheus-server-configmap-reload:terminated" "...with the stuck pod's node, deletion grace and container states"
 
 r=$(_reset 0 Failed "sh: can't cd")
 assert_contains "$r" "rc=1" "reset pod failed -> reported as failed"
@@ -157,7 +161,17 @@ assert_contains "$r" "rc=1" "pod succeeded without the marker -> not counted as 
 
 r=$(_reset 0 "" "" 1)
 assert_contains "$r" "rc=1" "pod create refused -> failed"
-assert_contains "$r" "scale 0,delete server pods,delete reset pod,create,scale 1," "...replicas restored"
+assert_contains "$r" "delete server pods,scale 0,delete server pods,delete reset pod,create,scale 1," "...replicas restored"
+
+# Time budget: the waits end when the Job reaches budget_end
+r=$(_reset 99 "" "" 0 660 700)
+assert_contains "$r" "still present after 0s:" "server pod still there, Job past its budget -> gives up at once"
+assert_contains "$r" "delete server pods,scale 0,delete server pods,scale 1," "...replicas restored"
+r=$(_reset 0 Pending "" 0 660 700)
+assert_contains "$r" "rc=1" "reset pod still pending, Job past its budget -> failed"
+assert_contains "$r" "delete reset pod,create,delete reset pod,scale 1," "...pod removed and replicas restored"
+r=$(_reset 2 Succeeded "$(printf '10\twal\nWAL_RESET_DONE')" 0 660 300)
+assert_contains "$r" "rc=0" "within the budget -> reset as usual"
 
 ###############################################################################
 # Test 5: when the reset runs
@@ -175,7 +189,7 @@ _decide() {
         cd "$TMP"; : > dcalls
         _OOM_LOOP_AT_CAP="$at_cap"; METRICS_BACKEND="$backend"; JOB_DEADLINE="$deadline"
         _job_elapsed() { echo "$elapsed"; }
-        reset_prometheus_wal() { echo "RESET" >> dcalls; return 0; }
+        reset_prometheus_wal() { echo "RESET $1" >> dcalls; return 0; }
         kubectl() {
             case "$*" in
                 "get configmap onelens-agent-sizing-state -n onelens-agent -o json")
@@ -211,13 +225,14 @@ assert_eq "$(echo "$r" | grep -c RESET || true)" "0" "...reset not called"
 r=$(_decide true prometheus "" "")
 assert_contains "$r" "not needed" "no previous log -> no reset"
 
-r=$(_decide true prometheus "" "$REPLAY_LOG" 300 900)
-assert_contains "$r" "no time left in this Job" "300s used of 900 -> next run"
+r=$(_decide true prometheus "" "$REPLAY_LOG" 361 900)
+assert_contains "$r" "no time left in this Job" "361s used of 900 (under 300s for the reset) -> next run"
 assert_eq "$(echo "$r" | grep -c RESET || true)" "0" "...reset not called"
-r=$(_decide true prometheus "" "$REPLAY_LOG" 280 900)
-assert_contains "$r" "RESET" "280s used of 900 -> still in time"
+r=$(_decide true prometheus "" "$REPLAY_LOG" 360 900)
+assert_contains "$r" "RESET 660" "360s used of 900 -> reset, with the budget ending 240s before the deadline"
 r=$(_decide true prometheus "" "$REPLAY_LOG" 500 "")
-assert_contains "$r" "RESET" "unknown Job deadline -> not blocked"
+assert_contains "$r" "RESET " "unknown Job deadline -> not blocked"
+assert_eq "$(echo "$r" | grep -c 'RESET [0-9]' || true)" "0" "...and no budget passed"
 
 r=$(_decide false prometheus "" "$REPLAY_LOG")
 assert_eq "$r" "--" "memory could still be raised -> nothing (the raise goes first)"
