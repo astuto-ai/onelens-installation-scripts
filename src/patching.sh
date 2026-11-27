@@ -132,6 +132,14 @@ if [ -n "$_SELF_JOB" ] && _self_job_json=$(kubectl get job "$_SELF_JOB" -n onele
     JOB_DEADLINE=$(echo "$_self_job_json" | jq -r '.spec.activeDeadlineSeconds // empty' 2>/dev/null || true)
 fi
 
+# Seconds since this run's pod started (script time if the pod couldn't be read).
+# seconds_since comes from the embedded sizing library, so call this only after it.
+_job_elapsed() {
+    local s
+    s=$(seconds_since "$JOB_STARTED_AT")
+    if [[ "$s" =~ ^[0-9]+$ ]]; then echo "$s"; else echo "$SECONDS"; fi
+}
+
 PATCH_JSON=""
 if [ -n "$CURRENT_SCHEDULE" ] && [ "$CURRENT_SCHEDULE" != "$TARGET_SCHEDULE" ]; then
     PATCH_JSON="{\"spec\":{\"schedule\":\"$TARGET_SCHEDULE\""
@@ -1772,9 +1780,29 @@ if [ "$USAGE_BASED_APPLIED" != "true" ] && [[ -n "$CURRENT_VALUES" ]] && command
         fi
     }
 
+    # The metrics backend's CPU too: usage-based sizing sets it when there is data, and
+    # without data the tier value would replace it. Every change restarts the backend
+    # (and on Prometheus replays its WAL), so a backend that came and went flipped
+    # between the two and restarted on each flip.
+    _guard_cpu() {
+        local component="$1" path="$2" current_var="$3"
+        local existing
+        existing=$(_existing "$path")
+        if [ -n "$existing" ]; then
+            local kept
+            kept=$(_max_cpu "$existing" "${!current_var}")
+            if [ "$kept" != "${!current_var}" ]; then
+                echo "  $component: keeping existing $existing (tier calculated ${!current_var})"
+                eval "$current_var=\"$kept\""
+            fi
+        fi
+    }
+
     echo "Fallback: usage-based unavailable, applying legacy memory guard..."
     _guard_memory "$METRICS_LABEL request" "${METRICS_RESOURCES_PATH}.requests.memory" PROMETHEUS_MEMORY_REQUEST
     _guard_memory "$METRICS_LABEL limit" "${METRICS_RESOURCES_PATH}.limits.memory" PROMETHEUS_MEMORY_LIMIT
+    _guard_cpu "$METRICS_LABEL CPU request" "${METRICS_RESOURCES_PATH}.requests.cpu" PROMETHEUS_CPU_REQUEST
+    _guard_cpu "$METRICS_LABEL CPU limit" "${METRICS_RESOURCES_PATH}.limits.cpu" PROMETHEUS_CPU_LIMIT
     _guard_memory "KSM request" '.prometheus["kube-state-metrics"].resources.requests.memory' KSM_MEMORY_REQUEST
     _guard_memory "KSM limit" '.prometheus["kube-state-metrics"].resources.limits.memory' KSM_MEMORY_LIMIT
     _guard_memory "OpenCost request" '.["prometheus-opencost-exporter"].opencost.exporter.resources.requests.memory' OPENCOST_MEMORY_REQUEST
@@ -1798,6 +1826,135 @@ if [ "$USAGE_BASED_APPLIED" != "true" ] && printf '%s\n' "${OOM_KUBECTL:-}" | gr
         PROMETHEUS_MEMORY_REQUEST="$_oom_loop_mem"; PROMETHEUS_MEMORY_LIMIT="$_oom_loop_mem"
     else
         echo "$METRICS_LABEL OOM-killed with no usage data: already at its memory cap ($PROMETHEUS_MEMORY_LIMIT, cap ${_oom_loop_cap}Mi)"
+        _OOM_LOOP_AT_CAP=true
+    fi
+fi
+
+# --- Prometheus WAL reset ---
+# A Prometheus OOM-killed at its memory cap while replaying its write-ahead log can't
+# start again: every start replays the same WAL and dies at the same point, and nothing
+# above can give it more memory. Delete the WAL and the head chunks, i.e. the data not yet
+# written to blocks (a few hours, which the dead server wasn't serving anyway). The
+# blocks, its history, stay. Only when the previous container's log shows it died
+# replaying, and at most once a day, so a server that also OOMs after starting can't
+# loop through resets. VictoriaMetrics has no WAL replay, so this is Prometheus only.
+
+# prometheus_died_in_wal_replay "$log" — true when a container log shows head-chunk or
+# WAL replay and ends before the replay completed
+prometheus_died_in_wal_replay() {
+    grep -qE 'Replaying WAL|WAL segment loaded|WAL checkpoint loaded|memory mappable chunks' <<< "$1" || return 1
+    ! grep -qE 'WAL replay completed|TSDB started|Server is ready to receive web requests' <<< "$1"
+}
+
+# prometheus_wal_reset_pod "$deployment_json" — the one-off pod that deletes wal/ and
+# chunks_head/: the server's image, data volume (mount and subPath), placement and user
+# (no pull secrets: OneLens images are pulled with the node's own access).
+# Prints nothing when the data path isn't on a PersistentVolumeClaim.
+prometheus_wal_reset_pod() {
+    echo "$1" | jq -c '
+        .spec.template.spec as $s
+        | ([$s.containers[] | select(.name == "prometheus-server")][0]) as $c
+        | ([$c.args[]? | select(startswith("--storage.tsdb.path=")) | ltrimstr("--storage.tsdb.path=")][0] // "/data") as $tsdb
+        | ([$c.volumeMounts[]? | select((.mountPath | rtrimstr("/")) == ($tsdb | rtrimstr("/")))][0] // {}) as $m
+        | ([$s.volumes[]? | select(.name == $m.name and .persistentVolumeClaim != null)][0]) as $v
+        | if $c == null or $v == null then empty else
+          {apiVersion: "v1", kind: "Pod",
+           metadata: {name: "onelens-agent-prometheus-wal-reset",
+                      labels: {"app.kubernetes.io/name": "onelens-agent-prometheus-wal-reset"}},
+           spec: ({restartPolicy: "Never",
+                   containers: [({name: "wal-reset", image: $c.image,
+                                  command: ["sh", "-c", "cd \"$TSDB\" || exit 1; du -sk wal chunks_head 2>/dev/null; rm -rf wal chunks_head && echo WAL_RESET_DONE"],
+                                  env: [{name: "TSDB", value: $tsdb}],
+                                  volumeMounts: [$m],
+                                  resources: {requests: {cpu: "10m", memory: "32Mi"}, limits: {cpu: "200m", memory: "128Mi"}}}
+                                 + (if $c.securityContext then {securityContext: $c.securityContext} else {} end))],
+                   volumes: [$v]}
+                  + ($s | {nodeSelector, tolerations, affinity, securityContext}
+                     | with_entries(select(.value != null))))}
+          end' 2>/dev/null || true
+}
+
+# reset_prometheus_wal — scale the server to 0, run the reset pod, scale the server back.
+# Returns 1 when the WAL wasn't deleted; the replica count is restored either way.
+reset_prometheus_wal() {
+    local ns=onelens-agent deploy=onelens-agent-prometheus-server pod=onelens-agent-prometheus-wal-reset
+    local dep spec replicas selector phase="" logs i
+    dep=$(kubectl get deployment "$deploy" -n "$ns" -o json 2>/dev/null) || { echo "  can't read deployment $deploy"; return 1; }
+    replicas=$(echo "$dep" | jq -r '.spec.replicas // 1')
+    selector=$(echo "$dep" | jq -r '.spec.selector.matchLabels // {} | to_entries | map("\(.key)=\(.value)") | join(",")')
+    spec=$(prometheus_wal_reset_pod "$dep")
+    if [ -z "$spec" ]; then echo "  the server's data path is not on a persistent volume"; return 1; fi
+    if [ -z "$selector" ] || [ "$replicas" = "0" ]; then echo "  server has no pod selector or 0 replicas"; return 1; fi
+
+    kubectl scale deployment "$deploy" -n "$ns" --replicas=0 >/dev/null 2>&1 || { echo "  scale to 0 failed"; return 1; }
+    # The server's grace period is 300s and a replaying Prometheus may not stop on SIGTERM;
+    # shorten it (a normal kill, not --force, so the volume is unmounted before it moves)
+    kubectl delete pods -n "$ns" -l "$selector" --grace-period=5 --wait=false >/dev/null 2>&1 || true
+    i=0
+    while [ -n "$(kubectl get pods -n "$ns" -l "$selector" -o name 2>/dev/null)" ] && [ "$i" -lt 24 ]; do
+        sleep 5; i=$((i + 1))
+    done
+    if [ -n "$(kubectl get pods -n "$ns" -l "$selector" -o name 2>/dev/null)" ]; then
+        echo "  server pod still present after 120s"
+        kubectl scale deployment "$deploy" -n "$ns" --replicas="$replicas" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    kubectl delete pod "$pod" -n "$ns" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
+    if echo "$spec" | kubectl create -n "$ns" -f - >/dev/null 2>&1; then
+        i=0
+        while [ "$i" -lt 48 ]; do
+            phase=$(kubectl get pod "$pod" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            case "$phase" in Succeeded|Failed) break ;; esac
+            sleep 5; i=$((i + 1))
+        done
+        logs=$(kubectl logs "$pod" -n "$ns" 2>/dev/null || true)
+        kubectl delete pod "$pod" -n "$ns" --ignore-not-found --wait=true --timeout=30s >/dev/null 2>&1 || true
+    else
+        logs="could not create pod $pod"
+    fi
+    kubectl scale deployment "$deploy" -n "$ns" --replicas="$replicas" >/dev/null 2>&1 || true
+
+    if [ "$phase" = "Succeeded" ] && printf '%s\n' "$logs" | grep -q '^WAL_RESET_DONE$'; then
+        printf '%s\n' "$logs" | grep -v '^WAL_RESET_DONE$' | sed 's/^/  removed (KiB): /'
+        return 0
+    fi
+    echo "  reset pod ended '${phase:-not started}': $(printf '%s' "$logs" | tail -2 | tr '\n' ' ')"
+    return 1
+}
+
+if [ "${_OOM_LOOP_AT_CAP:-false}" = "true" ] && [ "$METRICS_BACKEND" = "prometheus" ]; then
+    _wal_reset_age=$(kubectl get configmap onelens-agent-sizing-state -n onelens-agent -o json 2>/dev/null \
+        | jq -r '.data["prometheus-server.last_wal_reset_at"] // empty | now - fromdateiso8601 | floor' 2>/dev/null || true)
+    _wal_pod=$(kubectl get pods -n onelens-agent -o json 2>/dev/null | jq -r '
+        [.items[] | select(any(.status.containerStatuses[]?; .name == "prometheus-server"
+            and (.lastState.terminated.reason == "OOMKilled" or .lastState.terminated.exitCode == 137)))
+         | .metadata.name][0] // empty' 2>/dev/null || true)
+    _wal_log=""
+    if [ -n "$_wal_pod" ]; then
+        _wal_log=$(kubectl logs "$_wal_pod" -n onelens-agent -c prometheus-server --previous --tail=200 2>/dev/null || true)
+    fi
+    if [[ "$_wal_reset_age" =~ ^[0-9]+$ ]] && [ "$_wal_reset_age" -lt 86400 ]; then
+        echo "Prometheus WAL reset: skipped, the last one was $((_wal_reset_age / 3600))h ago (at most one a day)"
+    elif ! prometheus_died_in_wal_replay "$_wal_log"; then
+        echo "Prometheus WAL reset: not needed (its last log doesn't show it died replaying the WAL)"
+        if [ -n "$_wal_log" ]; then
+            echo "  last log lines of ${_wal_pod}:"
+            printf '%s\n' "$_wal_log" | tail -3 | cut -c1-250 | sed 's/^/    /'
+        fi
+    elif [ -n "$JOB_DEADLINE" ] && [ "$(_job_elapsed)" -gt $((JOB_DEADLINE - 620)) ] 2>/dev/null; then
+        echo "Prometheus WAL reset: no time left in this Job; the next run does it"
+    else
+        _wal_where=$(printf '%s\n' "$_wal_log" | grep 'WAL segment loaded' | tail -1 | grep -oE 'segment=[0-9]+ maxSegment=[0-9]+' || true)
+        echo "Prometheus OOM-killed at its memory cap while replaying its WAL${_wal_where:+ (died after $_wal_where)}"
+        echo "Prometheus WAL reset: deleting the WAL not yet written to blocks; the blocks (history) stay"
+        if reset_prometheus_wal; then
+            kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge \
+                -p "{\"data\":{\"prometheus-server.last_wal_reset_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" >/dev/null 2>&1 || true
+            echo "Prometheus WAL reset: done"
+        else
+            echo "Prometheus WAL reset: failed; the next run retries"
+        fi
     fi
 fi
 
@@ -3194,13 +3351,6 @@ if [ "$_HELM_SECRET_COUNT" -gt 5 ]; then
 else
     echo "Helm release secrets: $_HELM_SECRET_COUNT found, no pruning needed"
 fi
-
-# Seconds since this run's pod started (script time if the pod couldn't be read)
-_job_elapsed() {
-    local s
-    s=$(seconds_since "$JOB_STARTED_AT")
-    if [[ "$s" =~ ^[0-9]+$ ]]; then echo "$s"; else echo "$SECONDS"; fi
-}
 
 _elapsed=$(_job_elapsed)
 _HELM_WAIT=$(helm_wait_seconds "$JOB_DEADLINE" "$_elapsed")
