@@ -1874,9 +1874,18 @@ prometheus_wal_reset_pod() {
           end' 2>/dev/null || true
 }
 
-# reset_prometheus_wal — scale the server to 0, run the reset pod, scale the server back.
-# Returns 1 when the WAL wasn't deleted; the replica count is restored either way.
+# _wal_time_left "$budget_end" — true while the Job is short of budget_end seconds elapsed
+# (always true without a budget)
+_wal_time_left() {
+    [ -z "$1" ] || [ "$(_job_elapsed)" -lt "$1" ] 2>/dev/null
+}
+
+# reset_prometheus_wal ["$budget_end"] — scale the server to 0, run the reset pod, scale the
+# server back. Every wait also stops when the Job has run budget_end seconds, so the helm
+# upgrade after it keeps its time. Returns 1 when the WAL wasn't deleted; the replica count
+# is restored either way.
 reset_prometheus_wal() {
+    local budget_end="${1:-}"
     local ns=onelens-agent deploy=onelens-agent-prometheus-server pod=onelens-agent-prometheus-wal-reset
     local dep spec replicas selector phase="" logs i
     dep=$(kubectl get deployment "$deploy" -n "$ns" -o json 2>/dev/null) || { echo "  can't read deployment $deploy"; return 1; }
@@ -1886,16 +1895,22 @@ reset_prometheus_wal() {
     if [ -z "$spec" ]; then echo "  the server's data path is not on a persistent volume"; return 1; fi
     if [ -z "$selector" ] || [ "$replicas" = "0" ]; then echo "  server has no pod selector or 0 replicas"; return 1; fi
 
+    # Prometheus doesn't stop on SIGTERM while it replays its WAL, so a kill waits out the
+    # server's 300s grace period. Shorten it BEFORE the scale-down: once the kubelet has
+    # started the scale-down's 300s kill, a shorter grace period sent after it doesn't cut
+    # it (a cluster's pod took ~5 min to go). A normal kill, not --force, so the volume is
+    # unmounted before it moves. The delete after the scale-down covers a replacement the
+    # deployment may have started in between.
+    kubectl delete pods -n "$ns" -l "$selector" --grace-period=5 --wait=false >/dev/null 2>&1 || true
     kubectl scale deployment "$deploy" -n "$ns" --replicas=0 >/dev/null 2>&1 || { echo "  scale to 0 failed"; return 1; }
-    # The server's grace period is 300s and a replaying Prometheus may not stop on SIGTERM;
-    # shorten it (a normal kill, not --force, so the volume is unmounted before it moves)
     kubectl delete pods -n "$ns" -l "$selector" --grace-period=5 --wait=false >/dev/null 2>&1 || true
     i=0
-    while [ -n "$(kubectl get pods -n "$ns" -l "$selector" -o name 2>/dev/null)" ] && [ "$i" -lt 24 ]; do
+    while [ -n "$(kubectl get pods -n "$ns" -l "$selector" -o name 2>/dev/null)" ] && [ "$i" -lt 36 ] && _wal_time_left "$budget_end"; do
         sleep 5; i=$((i + 1))
     done
     if [ -n "$(kubectl get pods -n "$ns" -l "$selector" -o name 2>/dev/null)" ]; then
-        echo "  server pod still present after 120s"
+        echo "  server pod still present after $((i * 5))s:"
+        kubectl get pods -n "$ns" -l "$selector" -o json 2>/dev/null | jq -r '.items[] | "    \(.metadata.name) node=\(.spec.nodeName // "-") deleting=\(.metadata.deletionTimestamp // "no") grace=\(.metadata.deletionGracePeriodSeconds // "-")s containers=\([.status.containerStatuses[]? | "\(.name):\(.state | keys[0])"] | join(","))"' 2>/dev/null || true
         kubectl scale deployment "$deploy" -n "$ns" --replicas="$replicas" >/dev/null 2>&1 || true
         return 1
     fi
@@ -1903,7 +1918,7 @@ reset_prometheus_wal() {
     kubectl delete pod "$pod" -n "$ns" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
     if echo "$spec" | kubectl create -n "$ns" -f - >/dev/null 2>&1; then
         i=0
-        while [ "$i" -lt 48 ]; do
+        while [ "$i" -lt 48 ] && _wal_time_left "$budget_end"; do
             phase=$(kubectl get pod "$pod" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)
             case "$phase" in Succeeded|Failed) break ;; esac
             sleep 5; i=$((i + 1))
@@ -1942,13 +1957,17 @@ if [ "${_OOM_LOOP_AT_CAP:-false}" = "true" ] && [ "$METRICS_BACKEND" = "promethe
             echo "  last log lines of ${_wal_pod}:"
             printf '%s\n' "$_wal_log" | tail -3 | cut -c1-250 | sed 's/^/    /'
         fi
-    elif [ -n "$JOB_DEADLINE" ] && [ "$(_job_elapsed)" -gt $((JOB_DEADLINE - 620)) ] 2>/dev/null; then
+    elif [[ "${JOB_DEADLINE:-}" =~ ^[0-9]+$ ]] && [ "$(_job_elapsed)" -gt $((JOB_DEADLINE - 540)) ] 2>/dev/null; then
         echo "Prometheus WAL reset: no time left in this Job; the next run does it"
     else
         _wal_where=$(printf '%s\n' "$_wal_log" | grep 'WAL segment loaded' | tail -1 | grep -oE 'segment=[0-9]+ maxSegment=[0-9]+' || true)
         echo "Prometheus OOM-killed at its memory cap while replaying its WAL${_wal_where:+ (died after $_wal_where)}"
         echo "Prometheus WAL reset: deleting the WAL not yet written to blocks; the blocks (history) stay"
-        if reset_prometheus_wal; then
+        # The reset may use the Job's time up to 240s before its deadline (helm's minimum
+        # wait plus its reserve); it needs at least 300s, checked above
+        _wal_budget_end=""
+        [[ "${JOB_DEADLINE:-}" =~ ^[0-9]+$ ]] && _wal_budget_end=$((JOB_DEADLINE - 240))
+        if reset_prometheus_wal "$_wal_budget_end"; then
             kubectl patch configmap onelens-agent-sizing-state -n onelens-agent --type merge \
                 -p "{\"data\":{\"prometheus-server.last_wal_reset_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" >/dev/null 2>&1 || true
             echo "Prometheus WAL reset: done"
