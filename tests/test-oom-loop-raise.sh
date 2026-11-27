@@ -26,7 +26,7 @@ done
 ###############################################################################
 # Test 2: the raise block
 ###############################################################################
-raise_block=$(sed -n '/^# OOM-looping metrics backend:/,/^# --- Customer overrides/p' "$PATCHING" | sed '$d')
+raise_block=$(sed -n '/^# OOM-looping metrics backend:/,/^# --- Prometheus WAL reset ---/p' "$PATCHING" | sed '$d')
 assert_ne "$(echo "$raise_block" | grep -c 'calculate_wal_oom_memory')" "0" "patching.sh has the OOM-loop raise block"
 
 raise_line=$(grep -n '^# OOM-looping metrics backend:' "$PATCHING" | cut -d: -f1)
